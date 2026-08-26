@@ -8,8 +8,8 @@
  * the state/update functions already exist.
  */
 
-import React from 'react';
-import { Edit3, Plus, Save, Trash2, X } from 'lucide-react';
+import React, { useState } from 'react';
+import { Check, ClipboardPaste, Copy, Edit3, Plus, Save, Trash2, X } from 'lucide-react';
 
 interface QuestionDef {
   title: string;
@@ -262,10 +262,117 @@ type Props = {
 };
 
 export default function QpCqiEditorPopup(props: Props) {
+  const [schemaCopied, setSchemaCopied] = useState(false);
+  const [schemaInputOpen, setSchemaInputOpen] = useState(false);
+  const [schemaInputText, setSchemaInputText] = useState('');
+  const [schemaInputError, setSchemaInputError] = useState<string | null>(null);
+
   if (!props.open) return null;
   const exam = props.selectedExamAssignmentItem?.exam;
   const cqi = exam?.cqi;
   const coNumbers = Array.from(new Set((props.courseOutcomeNumbers || []).map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0))).sort((a, b) => a - b);
+
+  const handleCopySchema = () => {
+    // When copying the CQI schema, include all fields, but leave code empty so it doesn't overwrite with identical code on import
+    const schema = {
+      name: cqi?.name || '',
+      code: '', // Left empty as requested so target CQI code is distinct/chosen separately
+      cycle_id: cqi?.cycle_id || '',
+      cos: cqi?.cos || [],
+      exams: cqi?.exams || [],
+      co_value_expr: cqi?.co_value_expr || '',
+      formula: cqi?.formula || '',
+      conditions: (cqi?.conditions || []).map((c: any) => ({
+        title: c.title || '',
+        if: c.if || '',
+        then: c.then || '',
+        color: c.color || '#FEE2E2',
+        cap_enabled: Boolean(c.cap_enabled),
+        cap_percent: c.cap_percent != null ? c.cap_percent : undefined,
+        if_clauses: Array.isArray(c.if_clauses)
+          ? c.if_clauses.map((cl: any) => ({
+              token: cl.token || '',
+              operator: cl.operator || '<',
+              rhs: cl.rhs || '',
+            }))
+          : undefined,
+      })),
+      else_formula: cqi?.else_formula || '',
+      derived_variables: (cqi?.derived_variables || []).map((dv) => ({
+        name: dv.name || '',
+        formula: dv.formula || '',
+      })),
+    };
+
+    const text = JSON.stringify(schema, null, 2);
+    navigator.clipboard.writeText(text).then(() => {
+      setSchemaCopied(true);
+      setTimeout(() => setSchemaCopied(false), 2500);
+    }).catch(() => {
+      setSchemaInputText(text);
+      setSchemaInputOpen(true);
+    });
+  };
+
+  const handleApplySchema = () => {
+    try {
+      const parsed = JSON.parse(schemaInputText);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('CQI Schema must be a valid JSON object');
+      }
+
+      props.updateCqi((prev) => {
+        return {
+          ...prev,
+          name: parsed.name != null && String(parsed.name).trim() ? String(parsed.name).trim() : prev.name,
+          // If parsed code is provided and non-empty, use it; otherwise preserve target's unique code
+          code: parsed.code != null && String(parsed.code).trim() ? String(parsed.code).trim() : prev.code,
+          cycle_id: parsed.cycle_id != null ? String(parsed.cycle_id) : prev.cycle_id,
+          cos: Array.isArray(parsed.cos) ? parsed.cos.map(Number).filter((n: number) => !Number.isNaN(n)) : prev.cos,
+          exams: Array.isArray(parsed.exams) ? parsed.exams.map((x: any) => String(x || '')).filter(Boolean) : prev.exams,
+          co_value_expr: parsed.co_value_expr != null ? String(parsed.co_value_expr) : prev.co_value_expr,
+          formula: parsed.formula != null ? String(parsed.formula) : prev.formula,
+          conditions: Array.isArray(parsed.conditions)
+            ? parsed.conditions.map((c: any) => {
+                const rawClauses = Array.isArray(c.if_clauses)
+                  ? c.if_clauses.map((cl: any) => ({
+                      token: String(cl.token || '').trim(),
+                      operator: String(cl.operator || '<').trim(),
+                      rhs: String(cl.rhs || '').trim(),
+                    }))
+                  : props.parseIfClauses(String(c.if || ''));
+                return {
+                  title: String(c.title || ''),
+                  if: String(c.if || ''),
+                  then: String(c.then || ''),
+                  color: c.color || '#FEE2E2',
+                  cap_enabled: Boolean(c.cap_enabled),
+                  cap_percent: c.cap_percent != null ? Number(c.cap_percent) : undefined,
+                  if_clauses: rawClauses,
+                };
+              })
+            : prev.conditions,
+          else_formula: parsed.else_formula != null ? String(parsed.else_formula) : prev.else_formula,
+          derived_variables: Array.isArray(parsed.derived_variables)
+            ? parsed.derived_variables.map((dv: any) => ({
+                name: String(dv.name || ''),
+                formula: String(dv.formula || ''),
+              }))
+            : prev.derived_variables,
+        };
+      });
+
+      if (!props.isEditing && props.onEnableEditing) {
+        props.onEnableEditing();
+      }
+
+      setSchemaInputOpen(false);
+      setSchemaInputText('');
+      setSchemaInputError(null);
+    } catch (e: any) {
+      setSchemaInputError(`Invalid CQI schema: ${e.message}`);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/30 p-4 flex items-start justify-center overflow-auto">
@@ -279,6 +386,30 @@ export default function QpCqiEditorPopup(props: Props) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Copy Schema Button */}
+            <button
+              type="button"
+              onClick={handleCopySchema}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                schemaCopied ? 'bg-green-50 border-green-400 text-green-700' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}
+              title="Copy all CQI fields, formulas, and conditions to clipboard"
+            >
+              {schemaCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              {schemaCopied ? 'Copied!' : 'Copy Schema'}
+            </button>
+
+            {/* Input Schema Button */}
+            <button
+              type="button"
+              onClick={() => { setSchemaInputText(''); setSchemaInputError(null); setSchemaInputOpen(true); }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-medium"
+              title="Paste a copied CQI schema to apply to this CQI"
+            >
+              <ClipboardPaste className="w-3.5 h-3.5" />
+              Input Schema
+            </button>
+
             {!props.isEditing && props.onEnableEditing && (
               <button
                 type="button"
@@ -313,6 +444,57 @@ export default function QpCqiEditorPopup(props: Props) {
             </button>
           </div>
         </div>
+
+        {/* Input Schema Modal for CQI */}
+        {schemaInputOpen && (
+          <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl shadow-2xl border w-full max-w-lg overflow-hidden">
+              <div className="px-5 py-4 border-b bg-gray-50 flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-gray-900">Input CQI Schema</div>
+                  <div className="text-xs text-gray-500">Paste JSON schema copied from another CQI configuration</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSchemaInputOpen(false)}
+                  className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="p-5 space-y-3">
+                <textarea
+                  value={schemaInputText}
+                  onChange={(e) => { setSchemaInputText(e.target.value); setSchemaInputError(null); }}
+                  placeholder={`Paste CQI JSON here, e.g.:\n{\n  "name": "CQI 1",\n  "cos": [1, 2, 3],\n  "conditions": [\n    {\n      "title": "Condition 1",\n      "if": "[BEFORE_CQI_COX] < 50",\n      "then": "([CQI]/10) * 0.6"\n    }\n  ]\n}`}
+                  className="w-full h-56 px-3 py-2 border rounded-lg text-xs font-mono resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                {schemaInputError && (
+                  <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg p-2.5">
+                    {schemaInputError}
+                  </div>
+                )}
+              </div>
+              <div className="px-5 py-3 border-t bg-gray-50 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSchemaInputOpen(false)}
+                  className="px-3 py-1.5 text-xs rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100 font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleApplySchema}
+                  disabled={!schemaInputText.trim()}
+                  className="px-3 py-1.5 text-xs rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 font-medium disabled:opacity-50"
+                >
+                  Apply CQI Schema
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Body - Horizontal layout */}
         <div className="p-4">

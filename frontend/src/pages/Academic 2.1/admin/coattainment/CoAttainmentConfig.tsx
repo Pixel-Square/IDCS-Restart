@@ -47,9 +47,12 @@ function TokenPickerModal({
       title: 'CO Aggregates & Sub-Column Totals',
       tokens: [
         { token: '[COx-SUBCOL-TOTAL]', label: 'Sum / Total of sub-columns inside COx (Amber column value)', isHighlighted: true },
+        { token: '[COx-OBT-WEIGHT]', label: 'Total weight marks obtained by student in this CO across exams' },
+        { token: '[COx-MAX-WEIGHT]', label: 'Total max weight assigned to this CO across exams' },
         { token: '[COx-TOTAL-RAW]', label: 'Total Raw Marks for COx across all exams' },
         { token: '[COx-TOTAL-WEIGHT]', label: 'Total Weighted Attainment for COx' },
         { token: '[COx-WEIGHTED]', label: 'Weighted Attainment for COx' },
+        { token: '[COX-EXAMS-MAX-WEIGHT]', label: 'CO(x) total max weight from checked exam assignments in CQI config' },
       ],
     },
     {

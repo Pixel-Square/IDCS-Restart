@@ -606,7 +606,7 @@ export default function QpPatternEditorPage() {
       const tokenData = tokenRes.ok ? await tokenRes.json() : { results: [] };
       const operatorData = operatorRes.ok ? await operatorRes.json() : { results: [] };
       const coData = coRes && coRes.ok ? await coRes.json() : { results: [] };
-      
+
       const classTypeList = Array.isArray(classTypeData) ? classTypeData : (classTypeData.results || []);
       const qpTypeList = Array.isArray(qpTypeData) ? qpTypeData : (qpTypeData.results || []);
       const patternList = Array.isArray(patternData) ? patternData : (patternData.results || []);
@@ -617,7 +617,7 @@ export default function QpPatternEditorPage() {
 
       // Exam templates are patterns with class_type = null (created in Exam Assignment Admin)
       const examTemplates = patternList.filter((p: any) => p.class_type === null || p.class_type === undefined);
-      
+
       setClassTypes(classTypeList);
       setQpTypes(qpTypeList);
       setPatterns(patternList);
@@ -630,7 +630,7 @@ export default function QpPatternEditorPage() {
       if (!selectedClassTypeId && classTypeList.length > 0) {
         setSelectedClassTypeId(classTypeList[0].id);
       }
-      
+
       console.log('✅ Loaded data:', {
         classTypes: classTypeList.length,
         qpTypes: qpTypeList.length,
@@ -753,7 +753,7 @@ export default function QpPatternEditorPage() {
 
       // Capture before setPendingDelete clears the ref
       const deletedType = pendingDelete.object_type;
-      const deletedLabel = pendingDelete.label;
+      const deletedLabel = penngDelete.label;
       setPendingDelete(null);
 
       // For qp_pattern: FIRST remove exam assignment from ClassType JSON,
@@ -860,71 +860,71 @@ export default function QpPatternEditorPage() {
       const rawCqi = ex.cqi && typeof ex.cqi === 'object' ? ex.cqi : null;
       const cqi = rawCqi
         ? {
-            name: String(rawCqi.name || ''),
-            code: String(rawCqi.code || ''),
-            cycle_id: String(rawCqi.cycle_id || ''),
-            cos: Array.isArray(rawCqi.cos) ? rawCqi.cos.map((n: any) => Number(n)).filter((n: number) => !Number.isNaN(n)) : [],
-            exams: Array.isArray(rawCqi.exams) ? rawCqi.exams.map((x: any) => String(x || '')).filter(Boolean) : [],
-            custom_vars: Array.isArray(rawCqi.custom_vars)
-              ? rawCqi.custom_vars
-                  .filter((v: any) => v && typeof v === 'object')
-                  .map((v: any) => ({
-                    code: String(v.code || ''),
-                    label: v.label == null ? '' : String(v.label || ''),
-                    expr: String(v.expr || ''),
-                  }))
-              : [],
-            co_value_expr: String(rawCqi.co_value_expr || ''),
-            formula: String(rawCqi.formula || ''),
-            conditions: Array.isArray(rawCqi.conditions)
-              ? rawCqi.conditions
-                  .filter((c: any) => c && typeof c === 'object')
-                  .map((c: any) => {
-                    const parsedClauses = Array.isArray(c.if_clauses)
-                      ? c.if_clauses
-                          .filter((cl: any) => cl && typeof cl === 'object')
-                          .map((cl: any) => {
-                            const token = String(cl.token || '').toUpperCase() as CqiIfClause['token'];
-                            const rawOperator = String((cl.operator ?? '') || '').trim();
-                            let operator = rawOperator === '=' ? '==' : rawOperator;
-                            let rhs = String(cl.rhs || '');
-                            if (!operator) {
-                              const rhsTrimmed = rhs.trim();
-                              const opMatch = rhsTrimmed.match(/^(<=|>=|==|!=|=|<|>)\s*(.*)/);
-                              if (opMatch) {
-                                operator = opMatch[1] === '=' ? '==' : opMatch[1];
-                                rhs = opMatch[2] || '';
-                              }
-                            }
-                            return {
-                              token: token === 'BEFORE_CQI' ? 'BEFORE_CQI_COX' : token,
-                              operator,
-                              rhs,
-                            };
-                          })
-                          .filter((cl: any) => String(cl.token || '').trim().length > 0 || String(cl.rhs || '').trim().length > 0)
-                      : parseIfClauses(String(c.if || ''));
-                    return {
-                      title: String(c.title || ''),
-                      if: String(c.if || ''),
-                      then: String(c.then || ''),
-                      color: c.color == null ? undefined : String(c.color || ''),
-                      cap_enabled: Boolean(c.cap_enabled),
-                      cap_percent: c.cap_percent == null || c.cap_percent === '' ? undefined : Number(c.cap_percent),
-                      if_clauses: parsedClauses,
-                    };
-                  })
-              : [],
-            derived_variables: Array.isArray(rawCqi.derived_variables)
-              ? rawCqi.derived_variables
-                  .filter((dv: any) => dv && typeof dv === 'object')
-                  .map((dv: any) => ({
-                    name: String(dv.name || ''),
-                    formula: String(dv.formula || ''),
-                  }))
-              : [],
-            else_formula: String(rawCqi.else_formula || ''),
-          }
+          name: String(rawCqi.name || ''),
+          code: String(rawCqi.code || ''),
+          cycle_id: String(rawCqi.cycle_id || ''),
+          cos: Array.isArray(rawCqi.cos) ? rawCqi.cos.map((n: any) => Number(n)).filter((n: number) => !Number.isNaN(n)) : [],
+          exams: Array.isArray(rawCqi.exams) ? rawCqi.exams.map((x: any) => String(x || '')).filter(Boolean) : [],
+          custom_vars: Array.isArray(rawCqi.custom_vars)
+            ? rawCqi.custom_vars
+              .filter((v: any) => v && typeof v === 'object')
+              .map((v: any) => ({
+                code: String(v.code || ''),
+                label: v.label == null ? '' : String(v.label || ''),
+                expr: String(v.expr || ''),
+              }))
+            : [],
+          co_value_expr: String(rawCqi.co_value_expr || ''),
+          formula: String(rawCqi.formula || ''),
+          conditions: Array.isArray(rawCqi.conditions)
+            ? rawCqi.conditions
+              .filter((c: any) => c && typeof c === 'object')
+              .map((c: any) => {
+                const parsedClauses = Array.isArray(c.if_clauses)
+                  ? c.if_clauses
+                    .filter((cl: any) => cl && typeof cl === 'object')
+                    .map((cl: any) => {
+                      const token = String(cl.token || '').toUpperCase() as CqiIfClause['token'];
+                      const rawOperator = String((cl.operator ?? '') || '').trim();
+                      let operator = rawOperator === '=' ? '==' : rawOperator;
+                      let rhs = String(cl.rhs || '');
+                      if (!operator) {
+                        const rhsTrimmed = rhs.trim();
+                        const opMatch = rhsTrimmed.match(/^(<=|>=|==|!=|=|<|>)\s*(.*)/);
+                        if (opMatch) {
+                          operator = opMatch[1] === '=' ? '==' : opMatch[1];
+                          rhs = opMatch[2] || '';
+                        }
+                      }
+                      return {
+                        token: token === 'BEFORE_CQI' ? 'BEFORE_CQI_COX' : token,
+                        operator,
+                        rhs,
+                      };
+                    })
+                    .filter((cl: any) => String(cl.token || '').trim().length > 0 || String(cl.rhs || '').trim().length > 0)
+                  : parseIfClauses(String(c.if || ''));
+                return {
+                  title: String(c.title || ''),
+                  if: String(c.if || ''),
+                  then: String(c.then || ''),
+                  color: c.color == null ? undefined : String(c.color || ''),
+                  cap_enabled: Boolean(c.cap_enabled),
+                  cap_percent: c.cap_percent == null || c.cap_percent === '' ? undefined : Number(c.cap_percent),
+                  if_clauses: parsedClauses,
+                };
+              })
+            : [],
+          derived_variables: Array.isArray(rawCqi.derived_variables)
+            ? rawCqi.derived_variables
+              .filter((dv: any) => dv && typeof dv === 'object')
+              .map((dv: any) => ({
+                name: String(dv.name || ''),
+                formula: String(dv.formula || ''),
+              }))
+            : [],
+          else_formula: String(rawCqi.else_formula || ''),
+        }
         : undefined;
       return {
         exam,
@@ -1044,7 +1044,17 @@ export default function QpPatternEditorPage() {
 
     const defaultCos = [...courseOutcomeNumbers];
 
-    const nextNumber = (visibleExamAssignmentItems || []).filter((x) => isCqiAssignment(x.exam)).length + 1;
+    const existingCqiKeys = new Set(
+      (localExamAssignments || [])
+        .filter((x) => isCqiAssignment(x) && String(x.qp_type || '').trim() === targetQpType)
+        .map((x) => normalizeExamDisplayKey(x.exam_display_name || x.exam || ''))
+    );
+
+    let nextNumber = 1;
+    while (existingCqiKeys.has(`cqi ${nextNumber}`) || existingCqiKeys.has(`cqi${nextNumber}`)) {
+      nextNumber++;
+    }
+
     const examCode = `CQI${nextNumber}`;
     const examDisplayName = `CQI ${nextNumber}`;
 
@@ -1066,8 +1076,8 @@ export default function QpPatternEditorPage() {
           customize_questions: false,
           enabled: true,
           cqi: {
-            name: '',
-            code: '',
+            name: examDisplayName,
+            code: examCode,
             cycle_id: '',
             cos: defaultCos,
             formula: '',
@@ -1084,6 +1094,7 @@ export default function QpPatternEditorPage() {
 
     setSelectedPatternId(null);
     setSelectedExamRef({ exam: examCode, exam_display_name: examDisplayName, qp_type: targetQpType, id: null });
+    setExamEditorModalOpen(true);
   };
 
   const removeExamAssignmentByIndex = async (globalIndex: number) => {
@@ -1164,7 +1175,7 @@ export default function QpPatternEditorPage() {
           code,
           token: `[${code}]`,
           label,
-        kind: 'base' as const,
+          kind: 'base' as const,
         };
       });
 
@@ -1186,8 +1197,8 @@ export default function QpPatternEditorPage() {
       const next = [...prev];
       const cur = next[originalIndex];
       const baseCqi: NonNullable<ExamAssignment['cqi']> = cur.cqi || {
-        name: '',
-        code: '',
+        name: cur.exam_display_name || cur.exam || '',
+        code: cur.exam || '',
         cycle_id: '',
         cos: [],
         formula: '',
@@ -1195,12 +1206,29 @@ export default function QpPatternEditorPage() {
         else_formula: '',
       };
       const updated = updater(baseCqi);
+      const nextName = String(updated.name || cur.exam_display_name || cur.exam || '').trim();
+      const nextCode = String(updated.code || cur.exam || '').trim();
       next[originalIndex] = {
         ...cur,
+        exam: nextCode || cur.exam,
+        exam_display_name: nextName || cur.exam_display_name,
         kind: 'cqi',
         cqi: updated,
         default_cos: updated.cos,
       };
+
+      // Keep selectedExamRef in sync if name/code changed
+      if (nextName || nextCode) {
+        setSelectedExamRef((currentRef) => {
+          if (!currentRef) return currentRef;
+          return {
+            ...currentRef,
+            exam: nextCode || nextName || currentRef.exam,
+            exam_display_name: nextName || nextCode || currentRef.exam_display_name,
+          };
+        });
+      }
+
       return next;
     });
     markExamDirty();
@@ -1541,14 +1569,14 @@ export default function QpPatternEditorPage() {
       if (!isCqiAssignment(exam) || !exam.cqi) return exam;
       const nextConditions = Array.isArray(exam.cqi.conditions)
         ? exam.cqi.conditions.map((cond) => {
-            const clauses = Array.isArray(cond.if_clauses) ? cond.if_clauses : parseIfClauses(String(cond.if || ''));
-            const stableClauses = normalizeIfClausesStable(clauses as any);
-            return {
-              ...cond,
-              if_clauses: stableClauses,
-              if: buildIfFromClauses(stableClauses as any),
-            };
-          })
+          const clauses = Array.isArray(cond.if_clauses) ? cond.if_clauses : parseIfClauses(String(cond.if || ''));
+          const stableClauses = normalizeIfClausesStable(clauses as any);
+          return {
+            ...cond,
+            if_clauses: stableClauses,
+            if: buildIfFromClauses(stableClauses as any),
+          };
+        })
         : [];
       return {
         ...exam,
@@ -2068,7 +2096,7 @@ export default function QpPatternEditorPage() {
       if (!response.ok) {
         const contentType = response.headers.get('content-type') || '';
         let errorMsg = 'Failed to create QP type';
-        
+
         if (contentType.includes('application/json')) {
           try {
             const error = await response.json();
@@ -2231,7 +2259,7 @@ export default function QpPatternEditorPage() {
         }
       }
 
-      if (examAssignmentsDirty) {
+      if (examAssignmentsDirty || selectedIsCqi) {
         await handleExamAssignmentsSave();
       }
 
@@ -2310,9 +2338,8 @@ export default function QpPatternEditorPage() {
                     setSelectedExamRef(null);
                     setIsEditing(false);
                   }}
-                  className={`p-3 cursor-pointer border-b last:border-b-0 hover:bg-gray-50 ${
-                    selectedClassTypeId === ct.id ? 'bg-blue-50 border-l-2 border-l-blue-600' : ''
-                  }`}
+                  className={`p-3 cursor-pointer border-b last:border-b-0 hover:bg-gray-50 ${selectedClassTypeId === ct.id ? 'bg-blue-50 border-l-2 border-l-blue-600' : ''
+                    }`}
                 >
                   <div className="font-medium">{ct.display_name || ct.name}</div>
                   <div className="text-xs text-gray-500">{ct.short_code || ct.name}</div>
@@ -2347,9 +2374,8 @@ export default function QpPatternEditorPage() {
                     setSelectedExamRef(null);
                     setIsEditing(false);
                   }}
-                  className={`p-3 cursor-pointer border-b last:border-b-0 hover:bg-gray-50 flex items-start justify-between gap-2 ${
-                    selectedQpType === t.code ? 'bg-blue-50 border-l-2 border-l-blue-600' : ''
-                  }`}
+                  className={`p-3 cursor-pointer border-b last:border-b-0 hover:bg-gray-50 flex items-start justify-between gap-2 ${selectedQpType === t.code ? 'bg-blue-50 border-l-2 border-l-blue-600' : ''
+                    }`}
                 >
                   <div>
                     <div className="font-medium">{t.label}</div>
@@ -2458,15 +2484,14 @@ export default function QpPatternEditorPage() {
                     setIsEditing(false);
                     setExamEditorModalOpen(true);
                   }}
-                  className={`p-3 cursor-pointer border-b last:border-b-0 hover:bg-gray-50 ${
-                    (() => {
+                  className={`p-3 cursor-pointer border-b last:border-b-0 hover:bg-gray-50 ${(() => {
                       const selectedKey = normalizeExamDisplayKey(String(selectedExamRef?.exam_display_name || selectedExamRef?.exam || ''));
                       const examKey = normalizeExamDisplayKey(String(exam.exam_display_name || exam.exam || ''));
                       const isSelected = !!selectedKey && selectedKey === examKey;
                       const isPatternSelected = !!pattern && selectedPatternId === pattern.id;
                       return (isSelected || isPatternSelected) ? 'bg-blue-50 border-l-2 border-l-blue-600' : '';
                     })()
-                  }`}
+                    }`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
@@ -2516,28 +2541,28 @@ export default function QpPatternEditorPage() {
                       </button>
                       {editExamOrderMode && (
                         <>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            moveExamAssignmentWithinSelectedType(visibleIndex, visibleIndex - 1);
-                          }}
-                          disabled={visibleIndex === 0}
-                          className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30 rounded"
-                          title="Move up"
-                        >
-                          ▲
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            moveExamAssignmentWithinSelectedType(visibleIndex, visibleIndex + 1);
-                          }}
-                          disabled={visibleIndex === orderedExamSidebarItems.length - 1}
-                          className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30 rounded"
-                          title="Move down"
-                        >
-                          ▼
-                        </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              moveExamAssignmentWithinSelectedType(visibleIndex, visibleIndex - 1);
+                            }}
+                            disabled={visibleIndex === 0}
+                            className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30 rounded"
+                            title="Move up"
+                          >
+                            ▲
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              moveExamAssignmentWithinSelectedType(visibleIndex, visibleIndex + 1);
+                            }}
+                            disabled={visibleIndex === orderedExamSidebarItems.length - 1}
+                            className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30 rounded"
+                            title="Move down"
+                          >
+                            ▼
+                          </button>
                         </>
                       )}
                     </div>
@@ -2790,11 +2815,10 @@ export default function QpPatternEditorPage() {
               <button
                 onClick={handleCreateType}
                 disabled={!newTypeName.trim() || saving || !selectedClassTypeId}
-                className={`px-4 py-2 rounded-lg ${
-                  newTypeName.trim() && !saving && !!selectedClassTypeId
+                className={`px-4 py-2 rounded-lg ${newTypeName.trim() && !saving && !!selectedClassTypeId
                     ? 'bg-blue-600 text-white hover:bg-blue-700'
                     : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                }`}
+                  }`}
               >
                 Create
               </button>
@@ -2813,7 +2837,7 @@ export default function QpPatternEditorPage() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            
+
             {!selectedClassTypeId || !selectedQpType ? (
               <div className="flex-1 flex items-center justify-center">
                 <div className="text-center text-gray-500">
@@ -2918,6 +2942,7 @@ export default function QpPatternEditorPage() {
                                   });
                                   setIsEditing(false);
                                   setShowAddExamModal(false);
+                                  setExamEditorModalOpen(true);
                                 }}
                                 className="p-3 cursor-pointer hover:bg-purple-50 transition"
                               >
@@ -2951,7 +2976,7 @@ export default function QpPatternEditorPage() {
                 </div>
               </div>
             )}
-            
+
             <div className="flex justify-end">
               <button
                 onClick={() => setShowAddExamModal(false)}

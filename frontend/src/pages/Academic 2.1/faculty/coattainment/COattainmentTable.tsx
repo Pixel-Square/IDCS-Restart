@@ -16,14 +16,35 @@ export type ColumnDef = {
 export function evaluateFormulaExpr(expr: string, context: Record<string, number>): number | null {
   if (!expr || typeof expr !== 'string') return null;
 
-  // Replace bracketed tokens like [COx-TOTAL-RAW] or [CO1-TOTAL-RAW] with numeric values
-  const replaced = expr.replace(/\[([^\]]+)\]/g, (_, token) => {
+  // Build normalized lookup map for tokens
+  const upperContext: Record<string, number> = {};
+  for (const [k, v] of Object.entries(context || {})) {
+    const uk = String(k).toUpperCase().trim();
+    upperContext[uk] = typeof v === 'number' && !isNaN(v) ? v : 0;
+    const normK = uk.replace(/[^A-Z0-9]+/g, '_');
+    upperContext[normK] = upperContext[uk];
+    const dashK = uk.replace(/[^A-Z0-9]+/g, '-');
+    upperContext[dashK] = upperContext[uk];
+  }
+
+  // Replace bracketed tokens like [COx-OBT-WEIGHT] or [CO1-MAX-WEIGHT] with numeric values
+  let replaced = expr.replace(/\[([^\]]+)\]/g, (_, token) => {
     const rawKey = String(token).toUpperCase().trim();
-    if (rawKey in context) return String(context[rawKey]);
+    if (rawKey in upperContext) return String(upperContext[rawKey]);
     const normKey = rawKey.replace(/[^A-Z0-9]+/g, '_');
-    if (normKey in context) return String(context[normKey]);
+    if (normKey in upperContext) return String(upperContext[normKey]);
+    const dashKey = rawKey.replace(/[^A-Z0-9]+/g, '-');
+    if (dashKey in upperContext) return String(upperContext[dashKey]);
     return '0';
   });
+
+  // Also replace any unbracketed COX-OBT-WEIGHT or COX-MAX-WEIGHT tokens if typed without brackets
+  for (const [k, v] of Object.entries(upperContext)) {
+    if (k.length >= 3 && !/^[0-9]+$/.test(k)) {
+      const escaped = k.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      replaced = replaced.replace(new RegExp(`\\b${escaped}\\b`, 'gi'), String(v));
+    }
+  }
 
   const tokens = replaced.match(/([0-9]+\.?[0-9]*|\+|\-|\*|\/|\%|\(|\))/g);
   if (!tokens || tokens.length === 0) return null;
@@ -246,7 +267,7 @@ export default function COattainmentTable({
         }
       });
     }
-    if (found) return sum;
+    if (found) return Number(sum.toFixed(2));
     if (Array.isArray(student?.co_totals)) {
       return Number(student.co_totals[coNum - 1] ?? 0);
     }
@@ -254,8 +275,36 @@ export default function COattainmentTable({
   };
 
   const getWeightedTotal = (student: any, coNum: number) => {
+    // 1. If weighted_marks dictionary is present on student, compute exact sum across regular + CQI exams
+    if (student?.weighted_marks && typeof student.weighted_marks === 'object') {
+      let sum = 0;
+      let found = false;
+      if (Array.isArray(data.exams)) {
+        data.exams.forEach((ex: any) => {
+          const exId = String(ex?.id || '');
+          const wmKey = `${exId}_CO${coNum}`;
+          const wmExamKey = `${exId}_exam_CO${coNum}`;
+          if (student.weighted_marks[wmKey] !== undefined) {
+            const v = Number(student.weighted_marks[wmKey]);
+            if (!Number.isNaN(v)) {
+              sum += v;
+              found = true;
+            }
+          } else if (student.weighted_marks[wmExamKey] !== undefined) {
+            const v = Number(student.weighted_marks[wmExamKey]);
+            if (!Number.isNaN(v)) {
+              sum += v;
+              found = true;
+            }
+          }
+        });
+      }
+      if (found) return Number(sum.toFixed(2));
+    }
+
+    // 2. Fallback to student.co_totals array
     if (Array.isArray(student?.co_totals)) {
-      return Number(student.co_totals[coNum - 1] ?? 0);
+      return Number(Number(student.co_totals[coNum - 1] ?? 0).toFixed(2));
     }
     return 0;
   };
@@ -339,6 +388,49 @@ export default function COattainmentTable({
     const coTotalVal = getCoTotalValue(student, coNum, visitedColIds);
     const numericCoTotal = typeof coTotalVal === 'number' ? coTotalVal : 0;
 
+    // 1. Calculate COX-MAX-WEIGHT & COX-EXAMS-MAX-WEIGHT: aggregate max weight for this CO across exams (excluding CQI)
+    let coExamsMaxWeight = 0;
+    const examList = Array.isArray(data.exams) && data.exams.length > 0 
+      ? data.exams 
+      : Array.isArray(data.class_type?.exam_assignments) 
+        ? data.class_type.exam_assignments 
+        : [];
+
+    if (Array.isArray(examList)) {
+      examList.forEach((ex: any) => {
+        if (String(ex?.kind || '').toLowerCase() === 'cqi') return;
+        const coWeights = ex?.co_weights;
+        const covered = Array.isArray(ex?.covered_cos) ? ex.covered_cos : [];
+        if (coWeights && typeof coWeights === 'object' && (coWeights[coNum] != null || coWeights[String(coNum)] != null)) {
+          const w = Number(coWeights[coNum] ?? coWeights[String(coNum)] ?? 0);
+          if (!Number.isNaN(w)) coExamsMaxWeight += w;
+        } else if (covered.includes(coNum)) {
+          const pw = Number(ex?.weight_per_co ?? 0);
+          if (!Number.isNaN(pw) && pw > 0) {
+            coExamsMaxWeight += pw;
+          } else if (Number(ex?.weight ?? 0) > 0 && covered.length > 0) {
+            coExamsMaxWeight += Number(ex.weight) / covered.length;
+          }
+        }
+        // If Mark Manager has Exam split component enabled
+        if (ex?.cia_enabled && covered.includes(coNum)) {
+          const ciaW = Number(ex?.cia_weight ?? 0);
+          if (ciaW > 0) {
+            coExamsMaxWeight += ex?.cia_weight_per_co ? ciaW : (ciaW / Math.max(covered.length, 1));
+          }
+        }
+      });
+    }
+
+    let finalCoMaxWeight = Number(coExamsMaxWeight.toFixed(4));
+    if (finalCoMaxWeight <= 0) {
+      // Fallback to proportional share of internal total marks if exam weights not explicitly listed
+      const totalInternal = Number(data.total_internal_marks || data.class_type?.total_internal_marks || 40);
+      finalCoMaxWeight = Number((totalInternal / (data.co_count || 5)).toFixed(2));
+    }
+
+    const coObtWeight = weightedTotal;
+
     const context: Record<string, number> = {
       'COX-SUBCOL-TOTAL': numericCoTotal,
       'COX_SUBCOL_TOTAL': numericCoTotal,
@@ -362,19 +454,47 @@ export default function COattainmentTable({
       'COX_TOTAL_RAW': rawTotal,
       [`CO${coNum}-TOTAL-RAW`]: rawTotal,
       [`CO${coNum}_TOTAL_RAW`]: rawTotal,
+      'CO-RAW': rawTotal,
+      'CO_RAW': rawTotal,
+      'COX-RAW': rawTotal,
+      'COX_RAW': rawTotal,
+      [`CO${coNum}-RAW`]: rawTotal,
+      [`CO${coNum}_RAW`]: rawTotal,
 
-      'COX-TOTAL-WEIGHT': weightedTotal,
-      'COX_TOTAL_WEIGHT': weightedTotal,
-      'COX-WEIGHTED': weightedTotal,
-      'COX_WEIGHTED': weightedTotal,
-      [`CO${coNum}-TOTAL-WEIGHT`]: weightedTotal,
-      [`CO${coNum}_TOTAL_WEIGHT`]: weightedTotal,
-      [`CO${coNum}-WEIGHTED`]: weightedTotal,
-      [`CO${coNum}_WEIGHTED`]: weightedTotal,
+      'COX-TOTAL-WEIGHT': coObtWeight,
+      'COX_TOTAL_WEIGHT': coObtWeight,
+      'COX-WEIGHTED': coObtWeight,
+      'COX_WEIGHTED': coObtWeight,
+      [`CO${coNum}-TOTAL-WEIGHT`]: coObtWeight,
+      [`CO${coNum}_TOTAL_WEIGHT`]: coObtWeight,
+      [`CO${coNum}-WEIGHTED`]: coObtWeight,
+      [`CO${coNum}_WEIGHTED`]: coObtWeight,
+
+      'COX-OBT-WEIGHT': coObtWeight,
+      'COX_OBT_WEIGHT': coObtWeight,
+      'COX-OBT': coObtWeight,
+      'COX_OBT': coObtWeight,
+      [`CO${coNum}-OBT-WEIGHT`]: coObtWeight,
+      [`CO${coNum}_OBT_WEIGHT`]: coObtWeight,
+      [`CO${coNum}-OBT`]: coObtWeight,
+      [`CO${coNum}_OBT`]: coObtWeight,
+
+      'COX-MAX-WEIGHT': finalCoMaxWeight,
+      'COX_MAX_WEIGHT': finalCoMaxWeight,
+      'COX-EXAMS-MAX-WEIGHT': finalCoMaxWeight,
+      'COX_EXAMS_MAX_WEIGHT': finalCoMaxWeight,
+      'CO-MAX': finalCoMaxWeight,
+      'CO_MAX': finalCoMaxWeight,
+      [`CO${coNum}-MAX-WEIGHT`]: finalCoMaxWeight,
+      [`CO${coNum}_MAX_WEIGHT`]: finalCoMaxWeight,
+      [`CO${coNum}-EXAMS-MAX-WEIGHT`]: finalCoMaxWeight,
+      [`CO${coNum}_EXAMS_MAX_WEIGHT`]: finalCoMaxWeight,
+      [`CO${coNum}-MAX`]: finalCoMaxWeight,
+      [`CO${coNum}_MAX`]: finalCoMaxWeight,
     };
 
-    if (Array.isArray(data.exams)) {
-      data.exams.forEach((ex: any) => {
+    if (Array.isArray(examList)) {
+      examList.forEach((ex: any) => {
         const code = getExamCode(ex);
         const examVal = getExamScore(student, ex, coNum);
         const numericVal = typeof examVal === 'number' ? examVal : 0;

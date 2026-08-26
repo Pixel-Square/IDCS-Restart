@@ -212,9 +212,41 @@ def _resolve_section_name(ta: TeachingAssignment) -> str:
 def _get_students_for_ta(ta: TeachingAssignment) -> List[Dict[str, Any]]:
     students = []
     existing_ids: Set[int] = set()
-    sec_id = getattr(ta, 'section_id', None)
 
-    # 1. Section-based students
+    # 1. ElectiveChoice-based students (for Elective Courses)
+    es = getattr(ta, 'elective_subject', None)
+    if es:
+        try:
+            ec_qs = ElectiveChoice.objects.filter(elective_subject=es).select_related('student__user')
+            for ec in ec_qs:
+                sp = ec.student
+                if not sp or sp.id in existing_ids:
+                    continue
+                u = getattr(sp, 'user', None)
+                name = ' '.join([
+                    _safe_text(getattr(u, 'first_name', '')),
+                    _safe_text(getattr(u, 'last_name', '')),
+                ]).strip() if u else ''
+                if not name:
+                    name = _safe_text(getattr(u, 'username', '')) if u else ''
+                sid = int(sp.id)
+                existing_ids.add(sid)
+                students.append({
+                    'id': sid,
+                    'reg_no': _safe_text(getattr(sp, 'reg_no', '')),
+                    'name': name,
+                })
+        except Exception:
+            pass
+
+        if students:
+            # If elective choices exist, return exactly those students.
+            # This prevents loading unrelated students from a generic section attached to the TA.
+            students.sort(key=lambda s: s.get('reg_no', ''))
+            return students
+
+    # 2. Section-based students
+    sec_id = getattr(ta, 'section_id', None)
     if sec_id:
         s_qs = (
             StudentSectionAssignment.objects.filter(section_id=sec_id, end_date__isnull=True)
@@ -267,31 +299,6 @@ def _get_students_for_ta(ta: TeachingAssignment) -> List[Dict[str, Any]]:
                 'name': name,
             })
 
-    # 2. ElectiveChoice-based students (for Elective Courses)
-    es = getattr(ta, 'elective_subject', None)
-    if es:
-        try:
-            ec_qs = ElectiveChoice.objects.filter(elective_subject=es).select_related('student__user')
-            for ec in ec_qs:
-                sp = ec.student
-                if not sp or sp.id in existing_ids:
-                    continue
-                u = getattr(sp, 'user', None)
-                name = ' '.join([
-                    _safe_text(getattr(u, 'first_name', '')),
-                    _safe_text(getattr(u, 'last_name', '')),
-                ]).strip() if u else ''
-                if not name:
-                    name = _safe_text(getattr(u, 'username', '')) if u else ''
-                sid = int(sp.id)
-                existing_ids.add(sid)
-                students.append({
-                    'id': sid,
-                    'reg_no': _safe_text(getattr(sp, 'reg_no', '')),
-                    'name': name,
-                })
-        except Exception:
-            pass
 
     # 3. Fallback: Only if students list is empty, extract from AssessmentDraft by teaching_assignment_id
     if not students:

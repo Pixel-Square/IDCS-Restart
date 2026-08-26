@@ -3846,25 +3846,37 @@ def faculty_course_info(request, ta_id):
     }
 
     # Count students in this section / teaching assignment
-    student_count = len(_get_active_students_for_teaching_assignment(ta))
+    active_student_profiles = _get_active_students_for_teaching_assignment(ta)
+    student_count = len(active_student_profiles)
 
     # Build exam list from AcV2ExamAssignment records linked to this TA via AcV2Section
     exams = []
     acv2_sections = AcV2Section.objects.filter(teaching_assignment=ta)
-    # Filter by qp_type if set
-    ea_qs = AcV2ExamAssignment.objects.filter(section__in=acv2_sections).select_related('section')
-    if qp_type_code:
-        ea_qs = ea_qs.filter(qp_type__iexact=qp_type_code)
-    exam_assignments = list(ea_qs)
+    all_ea_list = list(AcV2ExamAssignment.objects.filter(section__in=acv2_sections).select_related('section'))
 
     # If curriculum does not have qp_type, infer it from existing exam assignments.
     # This allows faculty pages to show exam components even when curriculum setup is incomplete.
     if not qp_type_code:
-        for _ea in exam_assignments:
+        for _ea in all_ea_list:
             _t = (getattr(_ea, 'qp_type', '') or '').strip()
             if _t:
                 qp_type_code = _t
                 break
+
+    if qp_type_code:
+        # Keep exam assignments that match this qp_type, or have marks entered, or have no qp_type specified
+        qp_type_lower = qp_type_code.strip().lower()
+        exam_assignments = [
+            _ea for _ea in all_ea_list
+            if not getattr(_ea, 'qp_type', None)
+            or str(_ea.qp_type).strip().lower() == qp_type_lower
+            or AcV2StudentMark.objects.filter(exam_assignment=_ea).exists()
+            or AcV2DraftMark.objects.filter(exam_assignment=_ea).exists()
+            or bool((_ea.draft_data or {}).get('marks'))
+            or bool((_ea.published_data or {}).get('marks'))
+        ]
+    else:
+        exam_assignments = all_ea_list
 
     # ClassType exam_assignments filtered to this qp_type (normalized)
     # These configs are the single source of truth for what faculty should see.
@@ -3946,12 +3958,18 @@ def faculty_course_info(request, ta_id):
             seen_ea_config_keys.add(cfg_key)
         effective_ea_configs.append(ea_conf)
 
+    def _ea_data_score(ea_item):
+        d_cnt = len((ea_item.draft_data or {}).get('marks', {})) if isinstance(ea_item.draft_data, dict) else 0
+        p_cnt = len((ea_item.published_data or {}).get('marks', {})) if isinstance(ea_item.published_data, dict) else 0
+        sm_cnt = AcV2StudentMark.objects.filter(exam_assignment=ea_item).count()
+        dm_cnt = AcV2DraftMark.objects.filter(exam_assignment=ea_item).count()
+        return max(d_cnt, p_cnt, sm_cnt, dm_cnt)
+
     # Build weight + order lookup from ClassType config (single source of truth)
     norm_exam_key = lambda s: re.sub(r'[^a-z0-9]+', '', str(s or '').strip().lower())
 
     # Filter out stale AcV2ExamAssignment records that are no longer part of the
-    # effective qp_type exam configuration (i.e. deleted/removed in QP pattern).
-    # Keep legacy behaviour when we have no effective configs to compare against.
+    # effective qp_type exam configuration, UNLESS they contain existing student marks.
     if effective_ea_configs:
         allowed_keys = set()
         for ea_conf in effective_ea_configs:
@@ -3964,6 +3982,7 @@ def faculty_course_info(request, ta_id):
         exam_assignments = [
             ea for ea in exam_assignments
             if norm_exam_key(getattr(ea, 'exam_display_name', '') or getattr(ea, 'exam', '') or '') in allowed_keys
+            or _ea_data_score(ea) > 0
         ]
 
     # DB-backed CQI config lookup (authoritative for CQI CO selections)
@@ -4049,12 +4068,13 @@ def faculty_course_info(request, ta_id):
 
     # Deduplicate: keep only the first exam assignment per normalised display name.
     # Stale records can exist with slightly different exam codes (e.g. "CQI2" vs "CQI 2")
-    # due to earlier sync runs that used different code normalisation.  Prefer records
+    # due to earlier sync runs that used different code normalisation. Prefer records
     # that have marks entered so progress is not lost.
+
     exam_assignments.sort(key=lambda ea: (
         ct_index.get(norm_exam_key(getattr(ea, 'exam_display_name', '') or getattr(ea, 'exam', '') or ''), 10**9),
         # Put records with marks first so we keep the one with data when deduping
-        -len((ea.draft_data or {}).get('marks', {})) if isinstance(ea.draft_data, dict) else 0,
+        -_ea_data_score(ea),
         getattr(ea, 'created_at', None) or timezone.now(),
     ))
     _seen_ea_display = set()
@@ -4174,8 +4194,67 @@ def faculty_course_info(request, ta_id):
             ea.weight = ea_weight
             ea.save(update_fields=['weight'])
 
+        # Calculate progress / entered count based on filled cells
+        # Check active student profiles for this TA
+        active_student_ids = {str(sp.id) for sp in active_student_profiles} if active_student_profiles else set()
+        
+        # Check if questions exist in pattern p
+        q_count = 0
+        if isinstance(p, dict):
+            titles = p.get('titles') or []
+            enabled = p.get('enabled') or []
+            if titles:
+                q_count = sum(1 for i in range(len(titles)) if (i >= len(enabled) or enabled[i]))
+            elif p.get('marks'):
+                q_count = len(p.get('marks'))
+
         marks = draft.get('marks', {})
-        entered_count = sum(1 for v in marks.values() if v is not None and v != '')
+        pub_marks = (ea.published_data if isinstance(ea.published_data, dict) else {}).get('marks', {})
+        db_marks_qs = AcV2StudentMark.objects.filter(exam_assignment=ea)
+        db_marks_dict = {str(m.student_id): m for m in db_marks_qs}
+        draft_rows_qs = AcV2DraftMark.objects.filter(exam_assignment=ea)
+        draft_rows_dict = {str(m.student_id): m for m in draft_rows_qs}
+        
+        # Count students who have marks entered across draft_data, published_data, and DB marks
+        entered_students_count = 0
+        all_candidate_sids = active_student_ids or set(marks.keys()) | set(pub_marks.keys()) | set(db_marks_dict.keys()) | set(draft_rows_dict.keys())
+
+        for sid in all_candidate_sids:
+            # 1. Check draft snapshot
+            m_info = marks.get(sid) or pub_marks.get(sid)
+            if m_info:
+                if isinstance(m_info, dict):
+                    if m_info.get('is_absent'):
+                        entered_students_count += 1
+                        continue
+                    co_m = m_info.get('co_marks') or m_info.get('question_marks') or {}
+                    if q_count > 0:
+                        if any(v is not None and v != '' for v in co_m.values()) or (m_info.get('mark') is not None and m_info.get('mark') != ''):
+                            entered_students_count += 1
+                            continue
+                    else:
+                        if m_info.get('mark') is not None and m_info.get('mark') != '':
+                            entered_students_count += 1
+                            continue
+                elif m_info is not None and m_info != '':
+                    entered_students_count += 1
+                    continue
+
+            # 2. Check draft rows in DB (AcV2DraftMark)
+            dm_row = draft_rows_dict.get(sid)
+            if dm_row:
+                if dm_row.is_absent or dm_row.total_mark is not None or (isinstance(dm_row.question_marks, dict) and any(v is not None and v != '' for v in dm_row.question_marks.values())):
+                    entered_students_count += 1
+                    continue
+
+            # 3. Check published DB rows (AcV2StudentMark)
+            sm_row = db_marks_dict.get(sid)
+            if sm_row:
+                if sm_row.is_absent or sm_row.total_mark is not None or any(getattr(sm_row, f'co{i}_mark', None) is not None for i in range(1, 6)):
+                    entered_students_count += 1
+                    continue
+
+        entered_count = entered_students_count
         is_strictly_locked = ea.status in PUBLISHED_EXAM_STATUSES  # PUBLISHED, APPROVED, LOCKED
         has_been_published = bool(is_strictly_locked or ea.published_at)
         cycle_state = _get_exam_cycle_state(
@@ -4186,8 +4265,8 @@ def faculty_course_info(request, ta_id):
         is_locked = bool(is_strictly_locked or cycle_state['cycle_locked'])
 
         if has_been_published:
-            sm_status = 'COMPLETED'
-        elif marks:
+            sm_status = 'PUBLISHED'
+        elif entered_count > 0:
             sm_status = 'IN_PROGRESS'
         else:
             sm_status = 'NOT_STARTED'
@@ -4249,17 +4328,24 @@ def faculty_course_info(request, ta_id):
                 acv2_course.class_type = acv2_ct
                 acv2_course.class_type_name = acv2_ct.display_name
                 acv2_course.save(update_fields=['class_type', 'class_type_name'])
-                # Delete stale exam assignments that have no marks entered
+                # Delete stale exam assignments ONLY if they have zero marks anywhere (DB rows, draft rows, snapshots)
                 for acv2_sec_obj in acv2_course.sections.all():
                     stale_eas = AcV2ExamAssignment.objects.filter(section=acv2_sec_obj)
                     for stale_ea in stale_eas:
                         draft = stale_ea.draft_data if isinstance(stale_ea.draft_data, dict) else {}
                         marks = draft.get('marks', {})
-                        has_marks = any(v is not None and v != '' for v in marks.values())
+                        pub = stale_ea.published_data if isinstance(stale_ea.published_data, dict) else {}
+                        pub_marks = pub.get('marks', {})
+                        sm_cnt = AcV2StudentMark.objects.filter(exam_assignment=stale_ea).count()
+                        dm_cnt = AcV2DraftMark.objects.filter(exam_assignment=stale_ea).count()
+                        has_marks = (
+                            any(v is not None and v != '' for v in marks.values())
+                            or any(v is not None and v != '' for v in pub_marks.values())
+                            or sm_cnt > 0
+                            or dm_cnt > 0
+                        )
                         if not has_marks and stale_ea.status == 'DRAFT':
                             stale_ea.delete()
-                # Clear the exams list so they get rebuilt from correct class type
-                exams.clear()
         if acv2_course:
             # Create AcV2Section
             acv2_sec, _ = AcV2Section.objects.get_or_create(
@@ -4290,13 +4376,25 @@ def faculty_course_info(request, ta_id):
             for bad_ea in bad_code_eas:
                 draft = bad_ea.draft_data if isinstance(bad_ea.draft_data, dict) else {}
                 marks = draft.get('marks', {})
-                has_marks = any(v is not None and v != '' for v in marks.values())
+                pub = bad_ea.published_data if isinstance(bad_ea.published_data, dict) else {}
+                pub_marks = pub.get('marks', {})
+                sm_cnt = AcV2StudentMark.objects.filter(exam_assignment=bad_ea).count()
+                dm_cnt = AcV2DraftMark.objects.filter(exam_assignment=bad_ea).count()
+                has_marks = (
+                    any(v is not None and v != '' for v in marks.values())
+                    or any(v is not None and v != '' for v in pub_marks.values())
+                    or sm_cnt > 0
+                    or dm_cnt > 0
+                )
                 if not has_marks:
                     bad_ea.delete()
                     existing_exam_codes.discard(bad_ea.exam)
             # Rebuild after cleanup
             exams = [e for e in exams if e.get('short_name') != qp_type_code]
-            existing_exam_codes = set(e['short_name'] for e in exams)
+            existing_exam_keys = set(
+                norm_exam_key(e.get('name') or e.get('short_name') or '')
+                for e in exams
+            )
 
             # Create/sync exam assignments from effective exam configs (class type qp configs
             # when present; otherwise derived from QP patterns)
@@ -4376,9 +4474,12 @@ def faculty_course_info(request, ta_id):
 
                 final_max = derived_max or weight or 50
 
-                if exam_code_val in existing_exam_codes:
+                norm_val = norm_exam_key(display_name or exam_code_val)
+                if norm_val in existing_exam_keys or norm_exam_key(exam_code_val) in existing_exam_keys:
                     # Already in the exams list, skip
                     continue
+                existing_exam_keys.add(norm_val)
+                existing_exam_keys.add(norm_exam_key(exam_code_val))
 
                 ea_obj, created = AcV2ExamAssignment.objects.get_or_create(
                     section=acv2_sec,
@@ -4413,6 +4514,41 @@ def faculty_course_info(request, ta_id):
                     semester_id=getattr(sec, 'semester_id', None),
                     class_type=acv2_ct,
                 )
+                # Calculate real entered_count and status for ea_obj
+                ea_draft = ea_obj.draft_data if isinstance(ea_obj.draft_data, dict) else {}
+                ea_pub = ea_obj.published_data if isinstance(ea_obj.published_data, dict) else {}
+                ea_draft_marks = ea_draft.get('marks', {})
+                ea_pub_marks = ea_pub.get('marks', {})
+                ea_db_sm = AcV2StudentMark.objects.filter(exam_assignment=ea_obj)
+                ea_db_dm = AcV2DraftMark.objects.filter(exam_assignment=ea_obj)
+                ea_db_sm_dict = {str(m.student_id): m for m in ea_db_sm}
+                ea_db_dm_dict = {str(m.student_id): m for m in ea_db_dm}
+
+                ea_sids = active_student_ids or set(ea_draft_marks.keys()) | set(ea_pub_marks.keys()) | set(ea_db_sm_dict.keys()) | set(ea_db_dm_dict.keys())
+                ea_entered_cnt = 0
+                for sid in ea_sids:
+                    m_info = ea_draft_marks.get(sid) or ea_pub_marks.get(sid)
+                    if m_info:
+                        if isinstance(m_info, dict):
+                            if m_info.get('is_absent') or any(v is not None and v != '' for v in (m_info.get('co_marks') or m_info.get('question_marks') or {}).values()) or (m_info.get('mark') is not None and m_info.get('mark') != ''):
+                                ea_entered_cnt += 1
+                                continue
+                        elif m_info is not None and m_info != '':
+                            ea_entered_cnt += 1
+                            continue
+                    if sid in ea_db_dm_dict or sid in ea_db_sm_dict:
+                        ea_entered_cnt += 1
+                        continue
+
+                ea_strictly_locked = ea_obj.status in PUBLISHED_EXAM_STATUSES
+                ea_has_published = bool(ea_strictly_locked or ea_obj.published_at or ea_pub_marks)
+                if ea_has_published:
+                    ea_sm_status = 'PUBLISHED'
+                elif ea_entered_cnt > 0:
+                    ea_sm_status = 'IN_PROGRESS'
+                else:
+                    ea_sm_status = 'NOT_STARTED'
+
                 exams.append({
                     'id': str(ea_obj.id),
                     'name': display_name,
@@ -4420,17 +4556,17 @@ def faculty_course_info(request, ta_id):
                     'max_marks': ea_obj.max_marks or 0,
                     'weight': ea_obj.weight or 0,
                     'co_weights': co_weights_for_new,  # Per-CO weights
-                    'entered_count': 0,
+                    'entered_count': ea_entered_cnt,
                     'total_students': student_count,
-                    'is_locked': bool(cycle_state['cycle_locked']),
+                    'is_locked': bool(ea_strictly_locked or cycle_state['cycle_locked']),
                     'cycle_locked': cycle_state['cycle_locked'],
                     'lock_reason': cycle_state['cycle_lock_reason'],
                     'cycle_name': cycle_state['cycle_name'],
                     'cycle_code': cycle_state['cycle_code'],
-                    'can_view': False,
-                    'can_edit': not cycle_state['cycle_locked'],
+                    'can_view': bool(ea_has_published),
+                    'can_edit': bool((not ea_strictly_locked) and (not cycle_state['cycle_locked'])),
                     'due_date': None,
-                    'status': 'NOT_STARTED',
+                    'status': ea_sm_status,
                     'kind': _new_kind,
                     'cqi_cos': _new_cqi_cos if isinstance(_new_cqi_cos, list) else [],
                     'cqi_name': _new_cqi_name,
@@ -5162,8 +5298,8 @@ def _get_active_students_for_teaching_assignment(ta):
     sec = getattr(ta, 'section', None)
     elective_id = getattr(ta, 'elective_subject_id', None)
 
-    # 1. Elective TA rosters without a section
-    if not sec and elective_id:
+    # 1. Elective TA rosters
+    if elective_id:
         try:
             from curriculum.models import ElectiveChoice
             eqs = (
@@ -5181,6 +5317,11 @@ def _get_active_students_for_teaching_assignment(ta):
                     students_by_id[sp.id] = sp
         except Exception:
             pass
+
+        if students_by_id:
+            # If elective choices exist, return exactly those students.
+            # This prevents loading unrelated students from a generic section attached to the TA.
+            return sorted(students_by_id.values(), key=lambda s: s.reg_no or '')
 
     # 2. Section-based student assignments (StudentSectionAssignment)
     if sec:
@@ -5624,12 +5765,28 @@ def faculty_course_co_summary(request, ta_id):
     co_count = acv2_course.co_count or 5
     total_internal = float(class_type.total_internal_marks) if class_type else 40
 
-    # Get exam assignments for this section, filtered to the course QP type.
-    # Otherwise, legacy exam assignments (SSA/CIA/Model etc.) bleed into the table.
-    exam_qs = AcV2ExamAssignment.objects.filter(section=acv2_section)
+    # Get exam assignments across sections for this TA.
+    all_ea_qs = list(AcV2ExamAssignment.objects.filter(section__in=acv2_sections).order_by('created_at'))
+    if not qp_type_code:
+        for _ea in all_ea_qs:
+            _t = (getattr(_ea, 'qp_type', '') or '').strip()
+            if _t:
+                qp_type_code = _t
+                break
+
     if qp_type_code:
-        exam_qs = exam_qs.filter(qp_type__iexact=qp_type_code)
-    exam_assignments = list(exam_qs.order_by('created_at'))
+        qp_type_lower = qp_type_code.strip().lower()
+        exam_assignments = [
+            _ea for _ea in all_ea_qs
+            if not getattr(_ea, 'qp_type', None)
+            or str(_ea.qp_type).strip().lower() == qp_type_lower
+            or AcV2StudentMark.objects.filter(exam_assignment=_ea).exists()
+            or AcV2DraftMark.objects.filter(exam_assignment=_ea).exists()
+            or bool((_ea.draft_data or {}).get('marks'))
+            or bool((_ea.published_data or {}).get('marks'))
+        ]
+    else:
+        exam_assignments = all_ea_qs
 
     # Build qp_type-specific effective configs for weight/ordering.
     # Prefer class_type.exam_assignments filtered by qp_type.
@@ -5710,12 +5867,18 @@ def faculty_course_co_summary(request, ta_id):
             seen_ea_config_keys.add(cfg_key)
         effective_ea_configs.append(ea_conf)
 
+    def _ea_data_score_co_sum(ea_item):
+        d_cnt = len((ea_item.draft_data or {}).get('marks', {})) if isinstance(ea_item.draft_data, dict) else 0
+        p_cnt = len((ea_item.published_data or {}).get('marks', {})) if isinstance(ea_item.published_data, dict) else 0
+        sm_cnt = AcV2StudentMark.objects.filter(exam_assignment=ea_item).count()
+        dm_cnt = AcV2DraftMark.objects.filter(exam_assignment=ea_item).count()
+        return max(d_cnt, p_cnt, sm_cnt, dm_cnt)
+
     # Normalization helper for matching exams between DB and ClassType config
     norm_exam_key = lambda s: re.sub(r'[^a-z0-9]+', '', str(s or '').strip().lower())
 
     # Filter out stale AcV2ExamAssignment records that are no longer part of the
-    # effective qp_type exam configuration (i.e. deleted/removed in QP pattern).
-    # Keep legacy behaviour when we have no effective configs to compare against.
+    # effective qp_type exam configuration, UNLESS they contain existing student marks.
     if effective_ea_configs:
         allowed_keys = set()
         for ea_conf in effective_ea_configs:
@@ -5728,6 +5891,7 @@ def faculty_course_co_summary(request, ta_id):
         exam_assignments = [
             ea for ea in exam_assignments
             if norm_exam_key(getattr(ea, 'exam_display_name', '') or getattr(ea, 'exam', '') or '') in allowed_keys
+            or _ea_data_score_co_sum(ea) > 0
         ]
 
     # DB-backed CQI config lookup (authoritative for CQI CO selections/conditions)
@@ -5860,7 +6024,7 @@ def faculty_course_co_summary(request, ta_id):
     # Prefer records with marks entered so progress is not lost.
     exam_assignments.sort(key=lambda ea: (
         ct_index.get(norm_exam_key(getattr(ea, 'exam_display_name', '') or getattr(ea, 'exam', '') or ''), 10**9),
-        -len((ea.draft_data or {}).get('marks', {})) if isinstance(ea.draft_data, dict) else 0,
+        -_ea_data_score_co_sum(ea),
         getattr(ea, 'created_at', None) or timezone.now(),
     ))
     _co_sum_seen_keys = set()

@@ -82,25 +82,22 @@ export interface WeakStudentRow {
   status: string;
 }
 
-export interface PerformanceFilterOptions {
-  sections?: string[];
-  exam_types?: string[];
-  assessments?: string[];
-  batches?: string[];
-  semesters?: Array<number | string>;
-  /** Maps batch year -> available semesters for that batch */
-  batch_semesters?: Record<string, Array<number | string>>;
-}
-
 export interface PerformanceAnalyticsResponse {
   metrics: PerformanceMetrics;
   user_context: UserContext;
-  filter_options?: PerformanceFilterOptions;
   dept_comparison: DeptComparisonRow[];
   subject_performance: SubjectPerformanceRow[];
   pass_fail_trends: PassFailTrendRow[];
   weak_students: WeakStudentRow[];
   total_weak_students: number;
+  filter_options?: {
+    sections?: string[];
+    exam_types?: string[];
+    assessments?: string[];
+    batches?: string[];
+    semesters?: Array<number | string>;
+    batch_semesters?: Record<string, Array<number | string>>;
+  };
 }
 
 export interface StudentProgressReportResponse {

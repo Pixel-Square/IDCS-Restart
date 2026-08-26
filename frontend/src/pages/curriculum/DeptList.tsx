@@ -187,6 +187,26 @@ export default function DeptList() {
     return adminQpTypes.filter(qt => !(qt as any).class_type_id || (qt as any).class_type_id === classTypeId);
   };
 
+  // Helper: get display label for a class type code
+  const getClassTypeLabel = (code: string | null | undefined) => {
+    if (!code) return '-';
+    const adminCt = adminClassTypes.find(ct => ct.code === code);
+    if (adminCt) return adminCt.label;
+    const ct = classTypes.find(c => c.code === code);
+    if (ct) return ct.label;
+    return code;
+  };
+
+  // Helper: get display label for a QP type code
+  const getQpTypeLabel = (code: string | null | undefined) => {
+    if (!code) return '-';
+    const adminQt = adminQpTypes.find(qt => qt.code === code);
+    if (adminQt) return adminQt.label;
+    const qt = qpTypes.find(q => q.code === code);
+    if (qt) return qt.label;
+    return code;
+  };
+
   // Helper: render QP type <option> elements filtered by class type
   const renderQpTypeOptions = (classTypeCode?: string) => {
     const filtered = classTypeCode ? getQpTypesForClassType(classTypeCode) : adminQpTypes;
@@ -762,7 +782,7 @@ export default function DeptList() {
                     </td>
                     <td className="px-3 py-2.5 text-sm text-gray-900 font-medium">{r.course_name || '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.category || '-'}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.class_type || '-'}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{getClassTypeLabel(r.class_type)}</td>
                     <td className="px-3 py-2.5 text-center whitespace-nowrap text-sm">{r.is_elective ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.l ?? 0}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.t ?? 0}</td>
@@ -793,7 +813,7 @@ export default function DeptList() {
                           {renderQpTypeOptions()}
                         </select>
                       ) : (
-                        <span className="text-sm">{r.question_paper_type || '-'}</span>
+                        <span className="text-sm">{getQpTypeLabel(r.question_paper_type)}</span>
                       )}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
@@ -936,7 +956,7 @@ export default function DeptList() {
                                 )}
                               </td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm">{o.category || '-'}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.class_type || '-'}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{getClassTypeLabel(o.class_type)}</td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm">{o.l ?? 0}</td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm">{o.t ?? 0}</td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm">{o.p ?? 0}</td>
@@ -946,7 +966,7 @@ export default function DeptList() {
                               <td className="px-3 py-2 whitespace-nowrap text-sm">{o.external_mark ?? '-'}</td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm">{o.total_mark ?? '-'}</td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm">{o.total_hours ?? '-'}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.question_paper_type || '-'}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">{getQpTypeLabel(o.question_paper_type)}</td>
                               <td className="px-3 py-2 whitespace-nowrap">
                                 <div className="flex items-center gap-2">
                                   <span className="text-sm">{o.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</span>
@@ -1056,7 +1076,7 @@ export default function DeptList() {
                                     ) : '-'}
                                   </td>
                                   <td className="px-3 py-2 whitespace-nowrap text-sm">{o.category || '-'}</td>
-                                  <td className="px-3 py-2 whitespace-nowrap text-sm">{o.class_type || '-'}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap text-sm">{getClassTypeLabel(o.class_type)}</td>
                                   <td className="px-3 py-2 whitespace-nowrap text-sm">{o.l ?? 0}</td>
                                   <td className="px-3 py-2 whitespace-nowrap text-sm">{o.t ?? 0}</td>
                                   <td className="px-3 py-2 whitespace-nowrap text-sm">{o.p ?? 0}</td>
@@ -1426,7 +1446,7 @@ export default function DeptList() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
                   <option value="">— Select —</option>
-                  {renderQpTypeOptions()}
+                  {renderQpTypeOptions(editElectiveForm.class_type)}
                 </select>
               </div>
               <div className="flex items-center gap-2">

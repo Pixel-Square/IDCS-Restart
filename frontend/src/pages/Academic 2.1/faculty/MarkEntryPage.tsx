@@ -1313,13 +1313,13 @@ export default function MarkEntryPage() {
   /* ────── Mark helpers ────── */
   const normalizeMarkInputValue = (value: number | null) => {
     if (value === null) return null;
-    return value === 0 ? null : value;
+    return Number.isFinite(value) ? value : null;
   };
 
   const getSanitizedCoMarks = (coMarks: Record<string, number | null | undefined>) => {
     const nextCoMarks: Record<string, number> = {};
     Object.entries(coMarks || {}).forEach(([key, value]) => {
-      if (value === null || value === undefined || (value as any) === '' || Number(value) === 0) return;
+      if (value === null || value === undefined || (value as any) === '') return;
       const numValue = Number(value);
       if (Number.isFinite(numValue)) nextCoMarks[key] = numValue;
     });
@@ -1354,8 +1354,8 @@ export default function MarkEntryPage() {
     const q = questions.find(x => x.id === qId);
     if (!q) return;
 
-    // Allow clearing to blank or zero
-    if (value === '' || value === '0') {
+    // Allow clearing to blank
+    if (value === '') {
       setStudents(prev => prev.map(s => {
         if (s.id !== studentId) return s;
         const co_marks = { ...s.co_marks };
@@ -1426,6 +1426,9 @@ export default function MarkEntryPage() {
       autoSaveTimeoutRef.current = null;
       setAutoSaveStatus('idle');
     }
+
+    // Clear editing buffer immediately so the newly pasted cell values are rendered directly
+    setEditingCell(null);
 
     setStudents(prev => {
       const updatesByStudentId = new Map<string, { nextCoMarks?: Record<string, number | null>; nextMark?: number | null }>();
