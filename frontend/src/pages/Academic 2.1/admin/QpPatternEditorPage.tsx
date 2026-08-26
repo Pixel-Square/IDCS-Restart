@@ -753,7 +753,7 @@ export default function QpPatternEditorPage() {
 
       // Capture before setPendingDelete clears the ref
       const deletedType = pendingDelete.object_type;
-      const deletedLabel = penngDelete.label;
+      const deletedLabel = pendingDelete.label;
       setPendingDelete(null);
 
       // For qp_pattern: FIRST remove exam assignment from ClassType JSON,

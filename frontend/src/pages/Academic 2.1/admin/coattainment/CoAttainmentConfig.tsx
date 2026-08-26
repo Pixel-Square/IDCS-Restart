@@ -56,6 +56,16 @@ function TokenPickerModal({
       ],
     },
     {
+      title: 'Activity & Continuous Assessment Tokens',
+      tokens: [
+        { token: '[COx-ACTIVITY-RAW]', label: 'Activity — Raw Score for COx', isHighlighted: true },
+        { token: '[COx-ACTIVITY-OBT]', label: 'Activity — Obtained Score for COx' },
+        { token: '[ACTIVITY-COx-RAW]', label: 'Activity — Raw Score for COx (Alias)' },
+        { token: '[COx-SPECIAL_ACTIVITY-RAW]', label: 'Special Activity — Raw Score for COx' },
+        { token: '[COx-ASSIGNMENT-RAW]', label: 'Assignment — Raw Score for COx' },
+      ],
+    },
+    {
       title: 'Exam Assignment CO Tokens',
       tokens: exams.flatMap((ex) => {
         const code = getExamCode(ex);
