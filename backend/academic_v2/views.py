@@ -3820,7 +3820,7 @@ def faculty_course_info(request, ta_id):
 
     course_code = (cr.course_code if cr else None) or (getattr(es, 'course_code', None)) or '-'
     course_name = (cr.course_name if cr else None) or (getattr(es, 'course_name', None)) or '-'
-    class_type_code = (cr.class_type if cr else None) or 'THEORY'
+    class_type_code = getattr(es, 'class_type', None) or getattr(cr, 'class_type', None) or 'THEORY'
 
     # QP type: from curriculum row (authoritative) or elective subject
     qp_type_code = (

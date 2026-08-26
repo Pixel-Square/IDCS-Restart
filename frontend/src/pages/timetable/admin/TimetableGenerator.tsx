@@ -5,6 +5,7 @@ import fetchWithAuth from '../../../services/fetchAuth';
 import { fetchDepartmentStaff } from '../../../services/staff';
 import TeachingAssignSection from './TeachingAssignSection';
 import GroupAllocationModal, { GroupAllocation } from './GroupAllocationModal';
+import VenueAllocationModal from './VenueAllocationModal';
 
 const DEPARTMENT_OPTIONS = [
   { label: 'CIVIL Engineering', value: 'civil' },
@@ -853,6 +854,7 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
   const [showTeachingAssign, setShowTeachingAssign] = useState(false);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [showCreditModal, setShowCreditModal] = useState(false);
+  const [showVenueModal, setShowVenueModal] = useState(false);
   const [sectionSnapshots, setSectionSnapshots] = useState<Record<string, SectionSnapshot>>({});
   const [generatedSections, setGeneratedSections] = useState<GeneratedSectionTimetable[]>([]);
   
@@ -1260,6 +1262,12 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
               🎯 Credit Allocations
             </button>
             <button
+              onClick={() => setShowVenueModal(true)}
+              className="bg-sky-600 text-white px-4 py-2 rounded-lg hover:bg-sky-700 transition-colors text-sm font-semibold shadow-xs flex items-center gap-1.5"
+            >
+              🏛️ Venue Exceptions
+            </button>
+            <button
               onClick={() => {
                 navigator.clipboard.writeText(JSON.stringify(selectedTemplate, null, 2));
                 alert('Template copied to clipboard!');
@@ -1346,6 +1354,13 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
                 className="bg-emerald-600 text-white px-6 py-2 rounded-lg hover:bg-emerald-700 transition-colors font-semibold shadow-sm flex items-center gap-2"
               >
                 🎯 Credit Allocations
+              </button>
+
+              <button
+                onClick={() => setShowVenueModal(true)}
+                className="bg-sky-600 text-white px-6 py-2 rounded-lg hover:bg-sky-700 transition-colors font-semibold shadow-sm flex items-center gap-2"
+              >
+                🏛️ Venue Exceptions
               </button>
 
               {showTeachingAssign && (
@@ -1620,6 +1635,10 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
           isOpen={showCreditModal}
           onClose={() => setShowCreditModal(false)}
         />
+        <VenueAllocationModal
+          isOpen={showVenueModal}
+          onClose={() => setShowVenueModal(false)}
+        />
       </div>
     );
   }
@@ -1761,6 +1780,11 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
       <CreditBasedAllocationModal
         isOpen={showCreditModal}
         onClose={() => setShowCreditModal(false)}
+      />
+
+      <VenueAllocationModal
+        isOpen={showVenueModal}
+        onClose={() => setShowVenueModal(false)}
       />
     </div>
   );

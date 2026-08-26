@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Search, Plus, Trash2, CheckSquare, Square, Layers, BookOpen, Clock, Copy, Clipboard, Pencil } from 'lucide-react';
+import { X, Search, Plus, Trash2, CheckSquare, Square, Layers, BookOpen, Clock, Copy, Clipboard, Pencil, Building2 } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
+import VenueAllocationModal from './VenueAllocationModal';
 
 export interface ExceptionCourse {
   id: number | string;
@@ -78,6 +79,8 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
   // Saved Allocations
   const [savedAllocations, setSavedAllocations] = useState<GroupAllocation[]>([]);
   const [activeTab, setActiveTab] = useState<'create' | 'list'>('create');
+  const [showVenueModal, setShowVenueModal] = useState(false);
+  const [venueCapacity, setVenueCapacity] = useState<number>(0);
 
   // Reset Form
   const resetForm = () => {
@@ -196,13 +199,17 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
     const regular: Array<{ key: string; id: number; name: string; year: number }> = [];
     const mixed: Array<{ key: string; id: number; name: string; year: number }> = [];
 
-    // Helper to map department
+    // Helper to map department — covers all common DB abbreviations
     const matchesDept = (deptStr: any) => {
       const norm = String(deptStr || '').toUpperCase().trim();
       if (!norm) return false;
-      if (deptCode === 'S&H') return norm.includes('SCIENCE') || norm.includes('S&H') || norm.includes('SH');
+      if (deptCode === 'S&H') return norm.includes('SCIENCE') || norm.includes('S&H') || norm.includes('SH') || norm.includes('HUMANITY') || norm.includes('HUMANITIES');
       if (deptCode === 'AI&DS') return norm.includes('AI') && (norm.includes('DS') || norm.includes('DATA'));
       if (deptCode === 'AIML') return norm.includes('AI') && (norm.includes('ML') || norm.includes('MACHINE'));
+      // CIVIL: stored as CIVIL, CE, CIV, or full "Civil Engineering"
+      if (deptCode === 'CIVIL') return norm === 'CIVIL' || norm === 'CE' || norm === 'CIV' || norm.includes('CIVIL');
+      // MECH: stored as MECH, ME, MEC, or full "Mechanical Engineering"
+      if (deptCode === 'MECH') return norm === 'MECH' || norm === 'ME' || norm === 'MEC' || norm.includes('MECH') || norm.includes('MECHANICAL');
       return norm.includes(deptCode);
     };
 
@@ -217,9 +224,10 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
       }
       if (yearNum === null) yearNum = 2;
 
-      const secDept = s.department_short_name || s.department_code || s.department?.short_name || s.department?.code || s.batch?.department?.code || '';
-      
-      if (selectedYears.includes(yearNum) && (matchesDept(secDept) || matchesDept(s.department?.name))) {
+      const secDept = s.department_short_name || s.department_code || s.department?.short_name || s.department?.code || s.batch?.department?.code || s.batch?.department?.short_name || '';
+      const secDeptName = s.department?.name || s.batch?.department?.name || '';
+
+      if (selectedYears.includes(yearNum) && (matchesDept(secDept) || matchesDept(secDeptName))) {
         const sName = String(s.section_name || s.name || s.label || `Section ${s.id}`);
         const sKey = `sec-${s.id}-${deptCode}-${sName}`;
         regular.push({ key: sKey, id: s.id, name: sName, year: yearNum });
@@ -451,26 +459,36 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
         </div>
 
         {/* Navigation Tabs */}
-        <div className="flex border-b border-gray-200 bg-gray-50 px-6 gap-4 pt-2">
+        <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-6 pt-2">
+          <div className="flex gap-4">
+            <button
+              onClick={() => setActiveTab('create')}
+              className={`pb-3 text-xs font-bold transition-colors border-b-2 ${
+                activeTab === 'create'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {editingAllocationId ? '✏️ Edit Group Allocation' : '➕ Create New Group'}
+            </button>
+            <button
+              onClick={() => setActiveTab('list')}
+              className={`pb-3 text-xs font-bold transition-colors border-b-2 ${
+                activeTab === 'list'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              📋 Saved Groups ({savedAllocations.length})
+            </button>
+          </div>
           <button
-            onClick={() => setActiveTab('create')}
-            className={`pb-3 text-xs font-bold transition-colors border-b-2 ${
-              activeTab === 'create'
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
+            type="button"
+            onClick={() => setShowVenueModal(true)}
+            className="mb-2 px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition-colors"
           >
-            {editingAllocationId ? '✏️ Edit Group Allocation' : '➕ Create New Group'}
-          </button>
-          <button
-            onClick={() => setActiveTab('list')}
-            className={`pb-3 text-xs font-bold transition-colors border-b-2 ${
-              activeTab === 'list'
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            📋 Saved Groups ({savedAllocations.length})
+            <Building2 size={14} />
+            Venue Exceptions
           </button>
         </div>
 
@@ -769,7 +787,7 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
                   {/* Individual / Single Periods */}
                   <div className="bg-white p-3.5 rounded-xl border border-indigo-200/80 shadow-xs flex items-center justify-between">
                     <div>
@@ -790,7 +808,7 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
                     </div>
                   </div>
 
-                  {/* Pair Periods (Block) */}
+                  {/* Pair Periods (Block) — restored to original, untouched */}
                   <div className="bg-white p-3.5 rounded-xl border border-indigo-200/80 shadow-xs flex items-center justify-between">
                     <div>
                       <label className="block text-xs font-bold text-gray-800">
@@ -806,6 +824,37 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
                         value={pairedPeriods}
                         onChange={(e) => setPairedPeriods(Math.max(0, parseInt(e.target.value, 10) || 0))}
                         className="w-20 px-3 py-1.5 border border-indigo-300 rounded-lg text-sm font-bold text-center bg-white focus:ring-2 focus:ring-indigo-500 shadow-sm"
+                      />
+                    </div>
+                  </div>
+
+
+                  {/* Venue Exceptions — same layout as other period boxes */}
+                  <div
+                    className="bg-white p-3.5 rounded-xl border border-sky-200/80 shadow-xs flex items-center justify-between cursor-pointer hover:border-sky-400 transition-colors group"
+                    onClick={() => setShowVenueModal(true)}
+                  >
+                    <div>
+                      <label className="block text-xs font-bold text-sky-800 flex items-center gap-1.5 cursor-pointer">
+                        <Building2 size={13} className="text-sky-600" />
+                        Venue Exceptions
+                      </label>
+                      <span className="text-[11px] text-gray-500">Lab venue capacity rules</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="number"
+                        min={0}
+                        max={10}
+                        value={venueCapacity}
+                        onClick={(e) => { e.stopPropagation(); setShowVenueModal(true); }}
+                        onChange={(e) => {
+                          const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+                          setVenueCapacity(val);
+                          setShowVenueModal(true);
+                        }}
+                        className="w-20 px-3 py-1.5 border border-sky-300 rounded-lg text-sm font-bold text-center bg-white focus:ring-2 focus:ring-sky-500 shadow-sm cursor-pointer"
+                        readOnly
                       />
                     </div>
                   </div>
@@ -921,6 +970,12 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
         </div>
 
       </div>
+
+      {/* Venue Exceptions Modal */}
+      <VenueAllocationModal
+        isOpen={showVenueModal}
+        onClose={() => setShowVenueModal(false)}
+      />
     </div>
   );
 }

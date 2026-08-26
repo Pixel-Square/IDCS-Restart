@@ -377,10 +377,10 @@ ASSESSMENT_SPECS = [
 
 def _resolve_class_type(ta: TeachingAssignment) -> str:
     ct = ''
-    if getattr(ta, 'curriculum_row', None) and getattr(ta.curriculum_row, 'class_type', None):
-        ct = str(ta.curriculum_row.class_type).upper().strip()
-    elif getattr(ta, 'elective_subject', None) and getattr(ta.elective_subject, 'class_type', None):
+    if getattr(ta, 'elective_subject', None) and getattr(ta.elective_subject, 'class_type', None):
         ct = str(ta.elective_subject.class_type).upper().strip()
+    elif getattr(ta, 'curriculum_row', None) and getattr(ta.curriculum_row, 'class_type', None):
+        ct = str(ta.curriculum_row.class_type).upper().strip()
     return ct or 'THEORY'
 
 

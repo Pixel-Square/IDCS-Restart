@@ -132,9 +132,9 @@ def _co_weights_34(co):
 
 
 def _resolve_class_type(ta):
-    ct = _safe_text(getattr(getattr(ta, 'curriculum_row', None), 'class_type', ''))
+    ct = _safe_text(getattr(getattr(ta, 'elective_subject', None), 'class_type', ''))
     if not ct:
-        ct = _safe_text(getattr(getattr(ta, 'elective_subject', None), 'class_type', ''))
+        ct = _safe_text(getattr(getattr(ta, 'curriculum_row', None), 'class_type', ''))
     if not ct:
         ct = 'THEORY'
     return ct.upper()
