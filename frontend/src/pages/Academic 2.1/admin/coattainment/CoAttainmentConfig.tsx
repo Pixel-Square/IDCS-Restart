@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import fetchWithAuth from '../../../../services/fetchAuth';
-import { Plus, X, Search, Calculator, ArrowLeft, ArrowRight, Trash2, Edit2 } from 'lucide-react';
+import { Plus, X, Search, Calculator, ArrowLeft, ArrowRight, Trash2, Edit2, Copy, ClipboardPaste, Check, AlertTriangle } from 'lucide-react';
 
 export type ColumnDef = {
   id: string;
   label: string;
   kind: 'raw' | 'weighted' | 'exam' | 'custom' | 'formula' | 'total';
   formula?: string;
+  show_avg?: boolean;
   meta?: any;
 };
 
@@ -71,8 +72,9 @@ function TokenPickerModal({
         const code = getExamCode(ex);
         const name = ex?.exam_display_name || ex?.name || code;
         return [
+          { token: `[COx-${code}-OBT]`, label: `${name} — Marks Obtained for COx ([COx-${code}-OBT])`, isHighlighted: true },
+          { token: `[COx-${code}-MaxMark]`, label: `${name} — Max Marks for COx ([COx-${code}-MaxMark])`, isHighlighted: true },
           { token: `[COx-${code}-RAW]`, label: `${name} — Raw Score for COx` },
-          { token: `[COx-${code}-OBT]`, label: `${name} — Marks Obtained for COx` },
           { token: `[${code}-COx-RAW]`, label: `${name} — Raw Score for COx (Alias)` },
           { token: `[${code}-TOTAL]`, label: `${name} — Total Exam Score` },
         ];
@@ -218,6 +220,7 @@ function CoFieldPickerPopup({
   // Custom Formula Field State
   const [formulaTitle, setFormulaTitle] = useState('COx Custom Formula');
   const [formulaExpr, setFormulaExpr] = useState('');
+  const [formulaShowAvg, setFormulaShowAvg] = useState(false);
   const [tokenModalOpen, setTokenModalOpen] = useState(false);
 
   const formulaInputRef = useRef<HTMLInputElement>(null);
@@ -228,9 +231,11 @@ function CoFieldPickerPopup({
     if (initialColumn) {
       setFormulaTitle(initialColumn.label || '');
       setFormulaExpr(initialColumn.formula || '');
+      setFormulaShowAvg(Boolean(initialColumn.show_avg));
     } else {
       setFormulaTitle('COx Custom Formula');
       setFormulaExpr('');
+      setFormulaShowAvg(false);
     }
 
     const classTypeMeta = classTypes?.find((ct: any) => String(ct.id) === String(selectedClassType));
@@ -252,27 +257,26 @@ function CoFieldPickerPopup({
       return;
     }
 
-    setLoading(true);
+    let cancelled = false;
     (async () => {
+      setLoading(true);
       try {
-        const res = await fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/co-summary/`);
-        if (!res.ok) throw new Error('Failed');
-        const data = await res.json();
-        const filteredExams = Array.isArray(data.exams)
-          ? data.exams.filter((ex: any) => {
-              if (!selectedClassType || !selectedQpType) return true;
-              const exQpType = String(ex.qp_type || ex.qpType || ex.type || '').trim();
-              return exQpType === String(selectedQpType) || (!exQpType && !selectedQpType);
-            })
-          : [];
-        setExams(filteredExams);
+        const res = await fetchWithAuth(`/api/academic-v2/courses/${courseId}/exams/`);
+        if (!cancelled && res.ok) {
+          const data = await res.json();
+          setExams(Array.isArray(data) ? data : data.results || []);
+        }
       } catch (e) {
-        setExams([]);
+        console.error('Failed to load exams', e);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
-  }, [open, courseId, selectedClassType, selectedQpType, classTypes, initialColumn]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, initialColumn, selectedClassType, selectedQpType, classTypes, courseId]);
 
   if (!open) return null;
 
@@ -285,12 +289,19 @@ function CoFieldPickerPopup({
 
     const start = input.selectionStart ?? formulaExpr.length;
     const end = input.selectionEnd ?? formulaExpr.length;
-    const newText = formulaExpr.substring(0, start) + (start > 0 && !formulaExpr[start - 1].endsWith(' ') ? ' ' : '') + token + ' ' + formulaExpr.substring(end);
-    setFormulaExpr(newText);
+    const textBefore = formulaExpr.slice(0, start);
+    const textAfter = formulaExpr.slice(end);
+
+    const spaceBefore = textBefore && !textBefore.endsWith(' ') ? ' ' : '';
+    const spaceAfter = textAfter && !textAfter.startsWith(' ') ? ' ' : '';
+    const inserted = `${spaceBefore}${token}${spaceAfter}`;
+
+    const newExpr = textBefore + inserted + textAfter;
+    setFormulaExpr(newExpr);
 
     setTimeout(() => {
       input.focus();
-      const newPos = start + token.length + 2;
+      const newPos = start + inserted.length;
       input.setSelectionRange(newPos, newPos);
     }, 50);
   };
@@ -305,6 +316,7 @@ function CoFieldPickerPopup({
         label: title || initialColumn.label,
         kind: initialColumn.kind === 'total' ? 'total' : expr ? 'formula' : 'custom',
         formula: expr,
+        show_avg: formulaShowAvg,
       };
       onUpdate(updated);
     } else {
@@ -315,6 +327,7 @@ function CoFieldPickerPopup({
           label: title || 'COx Custom Field',
           kind: expr ? 'formula' : 'custom',
           formula: expr,
+          show_avg: formulaShowAvg,
         });
       }
       if (newCols.length > 0) {
@@ -384,6 +397,22 @@ function CoFieldPickerPopup({
                 Use variable tokens like <code className="text-amber-900 font-bold bg-amber-100 px-1 py-0.5 rounded border border-amber-300">[COx-SUBCOL-TOTAL]</code> or click <span className="font-medium">+ Token Variables</span> to select.
               </div>
             </div>
+
+            {/* Average row display toggle */}
+            <div className="mt-5 pt-4 border-t border-gray-200">
+              <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={formulaShowAvg}
+                  onChange={(e) => setFormulaShowAvg(e.target.checked)}
+                  className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300"
+                />
+                <div>
+                  <span className="text-sm font-semibold text-gray-800">Calculate &amp; Display Class Average (Avg)</span>
+                  <p className="text-xs text-gray-500">Show an Average row below column titles and above the student list for this column.</p>
+                </div>
+              </label>
+            </div>
           </div>
         </div>
       </div>
@@ -409,17 +438,42 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
   const [columnMap, setColumnMap] = useState<Record<string, ColumnDef[]>>(() => loadStoredMap());
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editingColumn, setEditingColumn] = useState<ColumnDef | null>(null);
+  const [schemaCopied, setSchemaCopied] = useState(false);
+  const [schemaInputOpen, setSchemaInputOpen] = useState(false);
+  const [schemaInputText, setSchemaInputText] = useState('');
+  const [schemaInputError, setSchemaInputError] = useState<string | null>(null);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(columnMap));
+    // Also build a mirror map with class type short_code/name so faculty matching is 100% robust
+    const enrichedMap = { ...columnMap };
+    const currentMeta = classTypes.find((ct: any) => String(ct.id) === String(selectedClassType));
+    const ctIdentifiers = [
+      currentMeta?.code,
+      currentMeta?.short_code,
+      currentMeta?.name,
+    ].filter((x) => x && typeof x === 'string' && x.trim() !== '');
+
+    Object.keys(columnMap).forEach((key) => {
+      const parts = key.split('::');
+      if (parts.length === 2) {
+        const [ctKey, qpKey] = parts;
+        if (ctKey === String(selectedClassType)) {
+          ctIdentifiers.forEach((ident) => {
+            enrichedMap[`${ident}::${qpKey}`] = columnMap[key];
+          });
+        }
+      }
+    });
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(enrichedMap));
     if (selectedClassType && Object.keys(columnMap).length > 0) {
       fetchWithAuth(`/api/academic-v2/class-types/${selectedClassType}/`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ coattainment_layout: columnMap }),
+        body: JSON.stringify({ coattainment_layout: enrichedMap }),
       }).catch((e) => console.error('Failed to sync coattainment_layout to backend', e));
     }
-  }, [columnMap, selectedClassType]);
+  }, [columnMap, selectedClassType, classTypes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -573,6 +627,79 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
     setEditingColumn(null);
   };
 
+  const toggleColumnAvg = (columnId: string) => {
+    if (!activeKey) return;
+    setColumnMap((prev) => {
+      const existing = [...currentColumns];
+      const idx = existing.findIndex((c) => c.id === columnId);
+      if (idx !== -1) {
+        existing[idx] = { ...existing[idx], show_avg: !existing[idx].show_avg };
+      }
+      const newMap = { ...prev, [activeKey]: existing };
+      if (altKey) newMap[altKey] = existing;
+      return newMap;
+    });
+  };
+
+  const handleCopySchema = () => {
+    const schema = currentColumns.map((c) => ({
+      id: c.id,
+      label: c.label,
+      kind: c.kind,
+      formula: c.formula,
+      show_avg: Boolean(c.show_avg),
+      meta: c.meta,
+    }));
+    navigator.clipboard.writeText(JSON.stringify(schema, null, 2)).then(() => {
+      setSchemaCopied(true);
+      setTimeout(() => setSchemaCopied(false), 2500);
+    }).catch(() => {
+      setSchemaInputText(JSON.stringify(schema, null, 2));
+      setSchemaInputOpen(true);
+    });
+  };
+
+  const handleApplySchema = () => {
+    if (!activeKey) return;
+    try {
+      const parsed = JSON.parse(schemaInputText);
+      if (!Array.isArray(parsed)) throw new Error('Schema must be a JSON array of column configurations');
+      if (parsed.length === 0) throw new Error('Schema array is empty');
+
+      const validated: ColumnDef[] = parsed.map((item: any, idx: number) => {
+        if (!item || typeof item !== 'object') throw new Error(`Invalid item at position ${idx + 1}`);
+        const id = String(item.id || `col_${Date.now()}_${idx}`);
+        const label = String(item.label || item.title || `Column ${idx + 1}`);
+        const kind = ['raw', 'weighted', 'exam', 'custom', 'formula', 'total'].includes(item.kind)
+          ? item.kind
+          : item.formula
+          ? 'formula'
+          : 'custom';
+        const col: ColumnDef = {
+          id,
+          label,
+          kind,
+          formula: item.formula ? String(item.formula) : undefined,
+          show_avg: Boolean(item.show_avg ?? item.showAvg ?? item.avg),
+          meta: item.meta,
+        };
+        return col;
+      });
+
+      setColumnMap((prev) => {
+        const newMap = { ...prev, [activeKey]: validated };
+        if (altKey) newMap[altKey] = validated;
+        return newMap;
+      });
+
+      setSchemaInputOpen(false);
+      setSchemaInputText('');
+      setSchemaInputError(null);
+    } catch (e: any) {
+      setSchemaInputError(`Invalid schema: ${e.message}`);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-3 gap-4">
@@ -648,28 +775,59 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
             <div className="text-sm text-gray-500 py-6 text-center">Select a QP type to show the saved configuration.</div>
           ) : (
             <>
-              <div className="flex items-center justify-between mb-4 border-b pb-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4 border-b pb-3">
                 <div>
                   <h3 className="font-semibold text-gray-900">Configured Sub-Columns (Per CO)</h3>
                   <p className="text-xs text-gray-500">
                     These columns will be rendered under each CO header (CO1, CO2, etc.) in the Faculty CO Attainment table.
                   </p>
                 </div>
-                <span className="text-xs font-semibold px-2.5 py-1 bg-blue-50 text-blue-700 rounded-full border border-blue-200">
-                  {selectedClassTypeMeta?.display_name || selectedClassTypeMeta?.name || 'Class'} · {selectedQpType}
-                </span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleCopySchema}
+                    disabled={currentColumns.length === 0}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border font-medium transition-colors ${
+                      schemaCopied
+                        ? 'bg-green-50 border-green-400 text-green-700'
+                        : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-white'
+                    }`}
+                    title="Copy column schema to clipboard"
+                  >
+                    {schemaCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    {schemaCopied ? 'Copied!' : 'Copy Schema'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSchemaInputText('');
+                      setSchemaInputError(null);
+                      setSchemaInputOpen(true);
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium"
+                    title="Paste a copied columns schema to replace or import configurations"
+                  >
+                    <ClipboardPaste className="w-3.5 h-3.5" />
+                    Input Schema
+                  </button>
+
+                  <span className="text-xs font-semibold px-2.5 py-1 bg-blue-50 text-blue-700 rounded-full border border-blue-200">
+                    {selectedClassTypeMeta?.display_name || selectedClassTypeMeta?.name || 'Class'} · {selectedQpType}
+                  </span>
+                </div>
               </div>
 
               {currentColumns.length === 0 ? (
                 <div className="text-sm text-gray-500 py-8 text-center border border-dashed rounded-lg bg-gray-50/50">
-                  No saved sub-columns configured yet. Click <strong>Add Fields</strong> to configure.
+                  No saved sub-columns configured yet. Click <strong>Add Fields</strong> or <strong>Input Schema</strong> to configure.
                 </div>
               ) : (
                 <div className="space-y-2">
                   {currentColumns.map((c, idx) => (
                     <div key={c.id} className="flex items-center justify-between border rounded-lg p-3 bg-white shadow-xs">
-                      <div className="space-y-0.5">
-                        <div className="font-medium text-sm text-gray-900 flex items-center gap-2">
+                      <div className="space-y-1">
+                        <div className="font-medium text-sm text-gray-900 flex items-center gap-2 flex-wrap">
                           <span>{c.label}</span>
                           <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${
                             c.kind === 'formula'
@@ -682,12 +840,28 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
                           }`}>
                             {c.kind}
                           </span>
+                          {c.show_avg && (
+                            <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
+                              Avg Active
+                            </span>
+                          )}
                         </div>
                         {c.kind === 'formula' && c.formula && (
                           <div className="text-xs font-mono text-purple-700 bg-purple-50 px-2 py-0.5 rounded border border-purple-100 inline-block">
                             Formula: {c.formula}
                           </div>
                         )}
+                        <div className="pt-0.5">
+                          <label className="inline-flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(c.show_avg)}
+                              onChange={() => toggleColumnAvg(c.id)}
+                              className="w-3.5 h-3.5 rounded text-blue-600 focus:ring-blue-500 border-gray-300"
+                            />
+                            <span className="font-medium">Avg (Calculate &amp; Show Class Average row)</span>
+                          </label>
+                        </div>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <button
@@ -746,6 +920,71 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
           onAdd={onAddColumns}
           onUpdate={updateColumn}
         />
+      )}
+
+      {/* Schema Input Modal */}
+      {schemaInputOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-white rounded-xl shadow-2xl border overflow-hidden">
+            <div className="px-5 py-3 border-b flex items-center justify-between">
+              <div>
+                <div className="text-sm font-semibold text-gray-900">Input Columns Schema</div>
+                <div className="text-xs text-gray-500">Paste a copied columns configuration JSON to replace sub-columns</div>
+              </div>
+              <button
+                onClick={() => {
+                  setSchemaInputOpen(false);
+                  setSchemaInputError(null);
+                }}
+                className="p-2 rounded hover:bg-gray-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 space-y-3">
+              <div className="text-xs text-gray-500 bg-blue-50 border border-blue-200 rounded-lg p-2.5">
+                Paste the JSON array copied from another class/QP type's <strong>Copy Schema</strong> button.<br />
+                Format: <code className="font-mono">[{'{'}"id", "label", "kind", "formula"{'}'}]</code>
+              </div>
+              <textarea
+                value={schemaInputText}
+                onChange={(e) => {
+                  setSchemaInputText(e.target.value);
+                  setSchemaInputError(null);
+                }}
+                rows={10}
+                placeholder={'[\n  {\n    "id": "cia_50",\n    "label": "CIA 50%",\n    "kind": "formula",\n    "formula": "[COx-SUBCOL-TOTAL] * 0.5"\n  },\n  {\n    "id": "co_total",\n    "label": "COx Total",\n    "kind": "total"\n  }\n]'}
+                className="w-full px-3 py-2 border rounded-lg text-xs font-mono focus:ring-2 focus:ring-indigo-500 resize-none"
+                autoFocus
+              />
+              {schemaInputError && (
+                <div className="flex items-start gap-2 p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
+                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                  {schemaInputError}
+                </div>
+              )}
+            </div>
+            <div className="px-4 py-3 border-t flex items-center justify-end gap-2">
+              <button
+                onClick={() => {
+                  setSchemaInputOpen(false);
+                  setSchemaInputError(null);
+                }}
+                className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleApplySchema}
+                disabled={!schemaInputText.trim()}
+                className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1.5"
+              >
+                <ClipboardPaste className="w-3.5 h-3.5" />
+                Apply Schema
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

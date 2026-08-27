@@ -5222,27 +5222,42 @@ def faculty_exam_publish(request, exam_id):
         published_marks = ea.published_data.get('marks', {}) if isinstance(ea.published_data, dict) else {}
         if isinstance(published_marks, dict) and published_marks:
             _materialize_student_marks_from_map(ea, published_marks)
+    # Transaction committed — now run heavy work in background threads so the
+    # HTTP response returns immediately (prevents "Locking…" step from hanging).
 
-        # Recompute internal marks for this section
+    import threading
+
+    # 1. Recompute internal marks asynchronously (N+1 DB queries, can be slow).
+    section_ref = ea.section
+
+    def _bg_compute():
         try:
-            compute_section_internal_marks(ea.section)
+            compute_section_internal_marks(section_ref)
         except Exception:
             pass
 
-    # Send publish notifications after DB commit.
-    try:
-        new_published_data = ea.published_data if isinstance(ea.published_data, dict) else {}
-        new_published_marks = new_published_data.get('marks', {}) if isinstance(new_published_data.get('marks', {}), dict) else {}
-        _send_student_publish_notifications(
-            exam_assignment=ea,
-            actor_user=request.user,
-            prev_published_marks=prev_published_marks,
-            new_published_marks=new_published_marks,
-            was_published_before=was_published_before,
-        )
-    except Exception as e:
-        import logging
-        logging.getLogger('academic_v2.notifications').error(f'Publish notification hook failed: {e}')
+    t_compute = threading.Thread(target=_bg_compute, daemon=True)
+    t_compute.start()
+
+    # 2. Send publish notifications asynchronously (sequential WhatsApp API calls).
+    new_published_data = ea.published_data if isinstance(ea.published_data, dict) else {}
+    new_published_marks = new_published_data.get('marks', {}) if isinstance(new_published_data.get('marks', {}), dict) else {}
+
+    def _bg_notify():
+        try:
+            _send_student_publish_notifications(
+                exam_assignment=ea,
+                actor_user=request.user,
+                prev_published_marks=prev_published_marks,
+                new_published_marks=new_published_marks,
+                was_published_before=was_published_before,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger('academic_v2.notifications').error(f'Publish notification hook failed: {e}')
+
+    t_notify = threading.Thread(target=_bg_notify, daemon=True)
+    t_notify.start()
 
     return Response({'success': True, 'status': ea.status, 'published_at': ea.published_at.isoformat()})
 
@@ -7589,6 +7604,20 @@ def faculty_course_co_summary(request, ta_id):
             'else_formula': str(_raw.get('else_formula', '') or ''),
         }
 
+    # Load existing saved AcV2CoAttainment for this TA if present
+    from .models import AcV2CoAttainment
+    saved_coattainment = None
+    co_att_record = AcV2CoAttainment.objects.filter(teaching_assignment=ta).first()
+    if co_att_record:
+        saved_coattainment = {
+            'id': str(co_att_record.id),
+            'co_numbers': co_att_record.co_numbers,
+            'columns_config': co_att_record.columns_config,
+            'column_averages': co_att_record.column_averages,
+            'student_values': co_att_record.student_values,
+            'updated_at': co_att_record.updated_at.isoformat() if co_att_record.updated_at else None,
+        }
+
     return Response({
         'course_code': course_code,
         'course_name': course_name,
@@ -7608,6 +7637,58 @@ def faculty_course_co_summary(request, ta_id):
         'exams': exams_data,
         'students': students_data,
         'cqi_config': cqi_config,
+        'saved_coattainment': saved_coattainment,
+    })
+
+
+@api_view(['GET', 'POST', 'PUT'])
+@permission_classes([IsAuthenticated])
+def faculty_course_coattainment(request, ta_id):
+    """
+    Save or retrieve the persistent AcV2CoAttainment calculation snapshot,
+    column configs (including show_avg), column averages, and student-level values.
+    """
+    from academics.models import TeachingAssignment
+    from .models import AcV2CoAttainment
+
+    ta = get_object_or_404(TeachingAssignment, pk=ta_id)
+
+    if request.method == 'GET':
+        record = AcV2CoAttainment.objects.filter(teaching_assignment=ta).first()
+        if not record:
+            return Response({'status': 'not_found', 'message': 'No CO Attainment saved yet.'}, status=404)
+        return Response({
+            'id': str(record.id),
+            'co_numbers': record.co_numbers,
+            'columns_config': record.columns_config,
+            'column_averages': record.column_averages,
+            'student_values': record.student_values,
+            'updated_at': record.updated_at.isoformat() if record.updated_at else None,
+        })
+
+    # POST or PUT -> Save/Update
+    data = request.data or {}
+    co_numbers = data.get('co_numbers', [])
+    columns_config = data.get('columns_config', [])
+    column_averages = data.get('column_averages', {})
+    student_values = data.get('student_values', {})
+
+    record, created = AcV2CoAttainment.objects.update_or_create(
+        teaching_assignment=ta,
+        defaults={
+            'co_numbers': co_numbers if isinstance(co_numbers, list) else [],
+            'columns_config': columns_config if isinstance(columns_config, list) else [],
+            'column_averages': column_averages if isinstance(column_averages, dict) else {},
+            'student_values': student_values if isinstance(student_values, dict) else {},
+            'updated_by': request.user if request.user and request.user.is_authenticated else None,
+        }
+    )
+
+    return Response({
+        'status': 'success',
+        'id': str(record.id),
+        'created': created,
+        'updated_at': record.updated_at.isoformat() if record.updated_at else None,
     })
 
 
@@ -7686,12 +7767,18 @@ def faculty_exam_export_template(request, exam_id):
                 'co': cos[i] if i < len(cos) else 0,
             })
 
-    # Students
+    # Students & marks (including draft and published snapshots)
     active_student_profiles = _get_active_students_for_teaching_assignment(ta)
     existing = {
         str(sm.student_id): sm
         for sm in AcV2StudentMark.objects.filter(exam_assignment=ea)
     }
+    draft_existing = {
+        str(dm.student_id): dm
+        for dm in AcV2DraftMark.objects.filter(exam_assignment=ea)
+    }
+    draft_data = ea.draft_data if isinstance(ea.draft_data, dict) else {}
+    draft_marks_map = draft_data.get('marks', {}) if isinstance(draft_data.get('marks', {}), dict) else {}
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -7750,6 +7837,8 @@ def faculty_exam_export_template(request, exam_id):
     row_num = 4
     for idx, sp in enumerate(active_student_profiles):
         sm = existing.get(str(sp.id))
+        dm = draft_existing.get(str(sp.id))
+        draft_row = draft_marks_map.get(str(sp.id)) if isinstance(draft_marks_map.get(str(sp.id)), dict) else {}
         reg_no = sp.reg_no or ''
         name = str(sp.user) if sp.user else reg_no
 
@@ -7766,22 +7855,40 @@ def faculty_exam_export_template(request, exam_id):
         name_cell.fill = locked_fill
 
         # Question marks
-        co_marks = sm.question_marks if sm and isinstance(sm.question_marks, dict) else {}
+        if sm and isinstance(sm.question_marks, dict) and sm.question_marks:
+            co_marks = sm.question_marks
+        elif dm and isinstance(dm.question_marks, dict) and dm.question_marks:
+            co_marks = dm.question_marks
+        else:
+            co_marks = draft_row.get('co_marks') or draft_row.get('question_marks') or {}
+            if not isinstance(co_marks, dict):
+                co_marks = {}
+
         for q_idx, q in enumerate(question_cols):
             val = co_marks.get(q['key'])
+            if val is None:
+                val = co_marks.get(q['title'])
             cell = ws.cell(row=row_num, column=4 + q_idx, value=val if val is not None else '')
             cell.border = thin_border
             cell.alignment = Alignment(horizontal='center')
 
         # Total
-        total_val = float(sm.total_mark) if sm and sm.total_mark is not None else ''
-        total_cell = ws.cell(row=row_num, column=4 + len(question_cols), value=total_val)
+        if sm and sm.total_mark is not None:
+            total_val = float(sm.total_mark)
+        elif dm and dm.total_mark is not None:
+            total_val = float(dm.total_mark)
+        elif draft_row.get('mark') is not None:
+            total_val = _normalize_mark_number(draft_row.get('mark'))
+        else:
+            total_val = ''
+        total_cell = ws.cell(row=row_num, column=4 + len(question_cols), value=total_val if total_val is not None else '')
         total_cell.border = thin_border
         total_cell.alignment = Alignment(horizontal='center')
         total_cell.font = Font(bold=True)
 
         # Absent
-        absent_val = 'Yes' if sm and sm.is_absent else ''
+        is_abs = bool(sm.is_absent) if sm else (bool(dm.is_absent) if dm else bool(draft_row.get('is_absent', False)))
+        absent_val = 'Yes' if is_abs else ''
         absent_cell = ws.cell(row=row_num, column=5 + len(question_cols), value=absent_val)
         absent_cell.border = thin_border
         absent_cell.alignment = Alignment(horizontal='center')

@@ -1,0 +1,114 @@
+# 📦 LCA Complete Module Migration Package & Integration Guide
+
+A standalone **LCA** package directory has been created at `LCA/` in the project root. This directory contains all frontend components, backend logic, services, migrations, and database data fixtures required to move and merge LCA functionality to another branch or system.
+
+---
+
+## 📂 Summary of Package Contents
+
+Location: **`file:///home/iqac/IDCS-Restart/LCA`**
+
+```
+LCA/
+├── README.md                          # Integration guide and AI instructions
+├── load_lca_data.py                   # Python script to load data fixture automatically
+├── data/
+│   └── lca_fixture.json               # 11MB JSON data dump (293 database records)
+├── frontend/
+│   ├── pages/
+│   │   ├── lca/
+│   │   │   ├── LCAPage.tsx            # Main LCA Units 1-5 breakdown & PBR
+│   │   │   ├── COTargetPage.tsx       # CO Target setting & weightings
+│   │   │   ├── CDAPPage.tsx           # Course Development & Action Plan
+│   │   │   ├── ArticulationMatrixPage.tsx # CO -> PO/PSO Articulation Matrix
+│   │   │   └── LCAInstructionsPage.tsx   # Guidelines & filling instructions
+│   │   └── cdap/                      # Re-export proxy pages
+│   ├── services/
+│   │   └── lcaDb.ts                   # Frontend API client methods
+│   └── integration/
+│       └── App_routes_snippet.tsx     # React Router setup snippet
+└── backend/
+    ├── models_lca.py                  # Standalone Django ORM models
+    ├── views_lca.py                   # Django API views
+    ├── serializers_lca.py             # DRF Serializers
+    ├── urls_lca.py                    # Django URL endpoints
+    ├── services/                      # Excel parsers & matrix calculators
+    │   ├── cdap_parser.py
+    │   ├── articulation_parser.py
+    │   └── articulation_from_revision.py
+    └── migrations/                    # Database migrations
+        ├── 0031_lca_revision.py
+        ├── 0051_co_target_revision.py
+        └── 0001_lca_module_initial.py  # Consolidated initial migration
+```
+
+---
+
+## 🛠️ Data Dump Included
+
+The package includes **293 database objects** exported directly from the active database:
+- `LcaRevision` (20 revisions)
+- `CoTargetRevision` (5 revisions)
+- `CdapRevision` (267 revisions)
+- `CdapActiveLearningAnalysisMapping` (1 master mapping)
+
+---
+
+## 🚀 Step-by-Step Instructions to Merge on Target Branch/System
+
+### Step 1: Copy Frontend Files
+Copy the frontend files from `LCA/frontend/` into your target repository:
+- `LCA/frontend/pages/lca/` ➡️ `frontend/src/pages/lca/`
+- `LCA/frontend/services/lcaDb.ts` ➡️ `frontend/src/services/lcaDb.ts`
+
+In `frontend/src/App.tsx`, register the LCA routes:
+```tsx
+import LCAPage from './pages/lca/LCAPage';
+import COTargetPage from './pages/lca/COTargetPage';
+import CDAPPage from './pages/lca/CDAPPage';
+import ArticulationMatrixPage from './pages/lca/ArticulationMatrixPage';
+import LCAInstructionsPage from './pages/lca/LCAInstructionsPage';
+
+<Route path="/obe/course/:code/lca" element={<LCAPage />} />
+<Route path="/obe/course/:code/lca/pbr" element={<LCAPage />} />
+<Route path="/obe/course/:code/lca/cotarget" element={<COTargetPage />} />
+<Route path="/obe/course/:code/cdap" element={<CDAPPage />} />
+<Route path="/obe/course/:code/articulation" element={<ArticulationMatrixPage />} />
+<Route path="/obe/course/:code/lca/instructions" element={<LCAInstructionsPage />} />
+```
+
+### Step 2: Integrate Backend
+- Merge models from `LCA/backend/models_lca.py` into your backend app (`backend/OBE/models.py`).
+- Copy parser services from `LCA/backend/services/*` into `backend/OBE/services/`.
+- Merge views from `LCA/backend/views_lca.py` into `backend/OBE/views.py`.
+- Add URL routes from `LCA/backend/urls_lca.py` to `backend/OBE/urls.py`.
+
+Run migrations:
+```bash
+cd backend
+python manage.py makemigrations
+python manage.py migrate
+```
+
+### Step 3: Import the Data Fixture
+Run the automated data loader:
+```bash
+python LCA/load_lca_data.py
+```
+*Or run Django loaddata:*
+```bash
+python manage.py loaddata LCA/data/lca_fixture.json
+```
+
+---
+
+## 🤖 Prompt to Provide to AI on the Target System/Branch
+
+When you move this `LCA` folder to your target branch or computer, copy and paste this prompt to the AI on that system:
+
+> "Please merge the LCA module contained in the `LCA/` folder into this codebase:
+> 1. Copy `LCA/frontend/pages/lca` and `LCA/frontend/services/lcaDb.ts` to `frontend/src/`.
+> 2. Register the LCA routes in `frontend/src/App.tsx`.
+> 3. Merge backend models from `LCA/backend/models_lca.py` into `backend/OBE/models.py`, copy services from `LCA/backend/services/` to `backend/OBE/services/`, and register API views & URLs.
+> 4. Run `python manage.py migrate`.
+> 5. Run `python LCA/load_lca_data.py` to migrate the 293 LCA/CDAP data records into the database."

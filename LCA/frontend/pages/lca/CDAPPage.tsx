@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import CDAPUploader from '../../components/CDAPUploader';
 import CDAPEditor from '../../components/CDAPEditor';
 import { saveCdapRevision } from '../../services/cdapDb';
@@ -124,6 +124,7 @@ export default function CDAPPage({ courseId, showHeader = true, showCourseInput 
           subjectId={subject}
           imported={uploadResult?.revision || uploadResult}
           onLockChange={(locked) => setPublishedLocked(Boolean(locked))}
+          isIqac={isIqac}
         />
       </div>
     </div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import fetchWithAuth from '../../../../services/fetchAuth';
 
 export type ColumnDef = {
@@ -6,6 +6,7 @@ export type ColumnDef = {
   label: string;
   kind: 'raw' | 'weighted' | 'exam' | 'custom' | 'formula' | 'total';
   formula?: string;
+  show_avg?: boolean;
   meta?: any;
 };
 
@@ -30,21 +31,22 @@ export function evaluateFormulaExpr(expr: string, context: Record<string, number
   // Replace bracketed tokens like [COx-OBT-WEIGHT] or [CO1-MAX-WEIGHT] with numeric values
   let replaced = expr.replace(/\[([^\]]+)\]/g, (_, token) => {
     const rawKey = String(token).toUpperCase().trim();
-    if (rawKey in upperContext) return String(upperContext[rawKey]);
+    if (rawKey in upperContext) return ` ${upperContext[rawKey]} `;
     const normKey = rawKey.replace(/[^A-Z0-9]+/g, '_');
-    if (normKey in upperContext) return String(upperContext[normKey]);
+    if (normKey in upperContext) return ` ${upperContext[normKey]} `;
     const dashKey = rawKey.replace(/[^A-Z0-9]+/g, '-');
-    if (dashKey in upperContext) return String(upperContext[dashKey]);
-    return '0';
+    if (dashKey in upperContext) return ` ${upperContext[dashKey]} `;
+    return ' 0 ';
   });
 
-  // Also replace any unbracketed COX-OBT-WEIGHT or COX-MAX-WEIGHT tokens if typed without brackets
-  for (const [k, v] of Object.entries(upperContext)) {
-    if (k.length >= 3 && !/^[0-9]+$/.test(k)) {
-      const escaped = k.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-      replaced = replaced.replace(new RegExp(`\\b${escaped}\\b`, 'gi'), String(v));
-    }
-  }
+  // Replace any remaining words (variable names without brackets)
+  replaced = replaced.replace(/\b([A-Z][A-Z0-9_-]*)\b/gi, (word) => {
+    const uw = word.toUpperCase().trim();
+    if (uw in upperContext) return ` ${upperContext[uw]} `;
+    const nw = uw.replace(/[^A-Z0-9]+/g, '_');
+    if (nw in upperContext) return ` ${upperContext[nw]} `;
+    return ' 0 ';
+  });
 
   const tokens = replaced.match(/([0-9]+\.?[0-9]*|\+|\-|\*|\/|\%|\(|\))/g);
   if (!tokens || tokens.length === 0) return null;
@@ -146,40 +148,29 @@ export default function COattainmentTable({
   }, [courseId, propData]);
 
   const data = propData || fetchedData;
+  const coCount = data?.co_count || 5;
 
-  if (fetching && !data) {
-    return <div className="p-6 text-sm text-gray-500">Loading CO attainment table…</div>;
-  }
-
-  if (!data) {
-    return <div className="p-6 text-sm text-gray-400">No CO attainment data available.</div>;
-  }
-
-  const coCount = data.co_count || 5;
-
-  const storedColumns: ColumnDef[] = (() => {
+  const storedColumns: ColumnDef[] = useMemo(() => {
+    if (!data) return [];
     try {
       let map: Record<string, ColumnDef[]> = {};
 
-      const rawMap = localStorage.getItem('coatt_columns_by_combination');
-      if (rawMap) {
-        try {
-          const parsed = JSON.parse(rawMap);
-          if (parsed && typeof parsed === 'object') map = { ...parsed };
-        } catch {}
-      }
-
+      // 1. Load from DB class_type layout first
       if (data.class_type?.coattainment_layout && typeof data.class_type.coattainment_layout === 'object') {
         map = { ...map, ...data.class_type.coattainment_layout };
       }
 
-      if (Object.keys(map).length === 0) return [];
+      // 2. Merge with localStorage combinations
+      const rawMap = localStorage.getItem('coatt_columns_by_combination');
+      if (rawMap) {
+        try {
+          const parsed = JSON.parse(rawMap);
+          if (parsed && typeof parsed === 'object') map = { ...map, ...parsed };
+        } catch {}
+      }
 
       const classTypeId = data.class_type?.id ?? data.course?.class_type?.id ?? data.course?.class_type_id ?? data.class_type_id ?? '';
       const qpType = (typeof data.qp_type === 'object' ? data.qp_type?.code || data.qp_type?.name : data.qp_type) ?? data.course?.question_paper_type ?? data.course?.qp_type ?? data.question_paper_type ?? '';
-      const comboKey = classTypeId && qpType ? `${classTypeId}::${qpType}` : `course:${courseId}`;
-
-      if (Array.isArray(map[comboKey]) && map[comboKey].length > 0) return map[comboKey];
 
       const ctIds = [
         data.class_type?.id,
@@ -200,6 +191,10 @@ export default function COattainmentTable({
         data.question_paper_type,
       ].filter((x) => x !== undefined && x !== null && String(x).trim() !== '').map((x) => String(x).trim());
 
+      // Exact match check
+      const comboKey = classTypeId && qpType ? `${classTypeId}::${qpType}` : `course:${courseId}`;
+      if (Array.isArray(map[comboKey]) && map[comboKey].length > 0) return map[comboKey];
+
       for (const ct of ctIds) {
         for (const qp of qpTypes) {
           const targetKey = `${ct}::${qp}`.toLowerCase();
@@ -211,6 +206,7 @@ export default function COattainmentTable({
         }
       }
 
+      // Case-insensitive / partial match check
       const ctIdsLower = ctIds.map((x) => x.toLowerCase());
       const qpTypesLower = qpTypes.map((x) => x.toLowerCase());
       for (const k of Object.keys(map)) {
@@ -224,6 +220,32 @@ export default function COattainmentTable({
         }
       }
 
+      // Check single ct match
+      for (const ct of ctIdsLower) {
+        for (const k of Object.keys(map)) {
+          if (!Array.isArray(map[k]) || map[k].length === 0) continue;
+          if (k.toLowerCase().startsWith(`${ct}::`) || k.toLowerCase() === ct) {
+            return map[k];
+          }
+        }
+      }
+
+      // Check single qp match
+      for (const qp of qpTypesLower) {
+        for (const k of Object.keys(map)) {
+          if (!Array.isArray(map[k]) || map[k].length === 0) continue;
+          if (k.toLowerCase().endsWith(`::${qp}`) || k.toLowerCase() === qp) {
+            return map[k];
+          }
+        }
+      }
+
+      // 3. Fallback to saved coattainment snapshot if available
+      if (Array.isArray(data.saved_coattainment?.columns_config) && data.saved_coattainment.columns_config.length > 0) {
+        return data.saved_coattainment.columns_config;
+      }
+
+      // 4. Fallback to first available combination layout in map
       const keysWithColumns = Object.keys(map).filter((k) => Array.isArray(map[k]) && map[k].length > 0);
       if (keysWithColumns.length > 0) {
         return map[keysWithColumns[0]];
@@ -233,9 +255,9 @@ export default function COattainmentTable({
     } catch {
       return [];
     }
-  })();
+  }, [data, courseId]);
 
-  const subColumns: ColumnDef[] = (() => {
+  const subColumns: ColumnDef[] = useMemo(() => {
     if (storedColumns.length === 0) {
       return [
         { id: 'cia_50', label: 'CIA 50%', kind: 'formula', formula: '([COx-OBT-WEIGHT] / [COx-MAX-WEIGHT]) * 50' },
@@ -247,156 +269,205 @@ export default function COattainmentTable({
       return [...storedColumns, { id: 'co_total', label: 'COx Total', kind: 'total' }];
     }
     return storedColumns;
-  })();
+  }, [storedColumns]);
 
   const formatSubColumnTitle = (label: string, coNum: number) => {
     const str = label || `CO${coNum}`;
     return str.replace(/\bCOx\b/gi, `CO${coNum}`).replace(/\bCOX\b/g, `CO${coNum}`);
   };
 
-  const getExamCode = (ex: any) => {
-    const name = ex?.exam_display_name || ex?.exam_name || ex?.name || ex?.short_name || ex?.title || ex?.label || 'EXAM';
-    return String(name).trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  const getRawTotal = (student: any, coNum: number): number => {
+    if (!data) return 0;
+    const examMarks = student?.exam_marks || {};
+    let total = 0;
+    Object.values(examMarks).forEach((em: any) => {
+      if (em?.is_absent) return;
+      const coKey = `co${coNum}`;
+      if (typeof em?.[coKey] === 'number') {
+        total += em[coKey];
+      }
+    });
+    return Number.isInteger(total) ? total : Number(total.toFixed(2));
   };
 
-  const getRawTotal = (student: any, coNum: number) => {
-    let sum = 0;
-    let found = false;
-    if (student?.exam_marks && typeof student.exam_marks === 'object') {
-      Object.values(student.exam_marks).forEach((exObj: any) => {
-        if (!exObj || typeof exObj !== 'object') return;
-        const val = exObj[`co${coNum}`] ?? exObj[`co_${coNum}`];
-        if (typeof val === 'number') {
-          sum += val;
-          found = true;
+  const getWeightedTotal = (student: any, coNum: number): number => {
+    if (!data) return 0;
+    if (Array.isArray(student?.co_totals) && student.co_totals[coNum - 1] !== undefined) {
+      const val = Number(student.co_totals[coNum - 1] ?? 0);
+      return Number.isInteger(val) ? val : Number(val.toFixed(2));
+    }
+    const examMarks = student?.exam_marks || {};
+    const exams = data?.exams || [];
+    let weightedSum = 0;
+    exams.forEach((ex: any) => {
+      const em = examMarks[ex.id];
+      if (!em || em.is_absent) return;
+      const coVal = Number(em[`co${coNum}`] ?? 0);
+      const maxMarks = Number(ex.max_marks || 0);
+      let weight = Number(ex.weight || 0);
+      if (ex.co_weights && typeof ex.co_weights === 'object') {
+        const customW = ex.co_weights[String(coNum)] ?? ex.co_weights[coNum];
+        if (customW !== undefined && customW !== null) {
+          weight = Number(customW);
+        }
+      }
+      if (maxMarks > 0 && weight > 0) {
+        weightedSum += (coVal / maxMarks) * weight;
+      }
+    });
+    return Number.isInteger(weightedSum) ? weightedSum : Number(weightedSum.toFixed(2));
+  };
+
+  const getExamScore = (student: any, examIdentifier: string, coNum: number): number => {
+    if (!data) return 0;
+    const examMarks = student?.exam_marks || {};
+    const exams = data?.exams || [];
+    const matched = exams.find((e: any) => {
+      const eId = String(e.id || '');
+      const eName = String(e.name || '').toLowerCase();
+      const eDisplay = String(e.exam_display_name || '').toLowerCase();
+      const eShort = String(e.short_name || '').toLowerCase();
+      const target = String(examIdentifier || '').toLowerCase();
+      return eId === target || eName.includes(target) || eDisplay.includes(target) || eShort.includes(target);
+    });
+    if (!matched) return 0;
+    const em = examMarks[matched.id];
+    if (!em || em.is_absent) return 0;
+    const val = Number(em[`co${coNum}`] ?? 0);
+    return Number.isInteger(val) ? val : Number(val.toFixed(2));
+  };
+
+  const getExamCoMaxMarks = (examIdentifier: string, coNum: number): number => {
+    if (!data) return 0;
+    const exams = data?.exams || [];
+    const matched = exams.find((e: any) => {
+      const eId = String(e.id || '');
+      const eName = String(e.name || '').toLowerCase();
+      const eDisplay = String(e.exam_display_name || '').toLowerCase();
+      const eShort = String(e.short_name || '').toLowerCase();
+      const target = String(examIdentifier || '').toLowerCase();
+      return eId === target || eName.includes(target) || eDisplay.includes(target) || eShort.includes(target);
+    });
+    if (!matched) return 0;
+
+    // Check co_max_map on exam
+    if (matched.co_max_map && typeof matched.co_max_map === 'object') {
+      const mVal = matched.co_max_map[coNum] ?? matched.co_max_map[String(coNum)];
+      if (mVal !== undefined && mVal !== null && !isNaN(Number(mVal)) && Number(mVal) > 0) {
+        return Number(mVal);
+      }
+    }
+
+    // Check covered_cos and max_marks
+    const covered = Array.isArray(matched.covered_cos) ? matched.covered_cos : [];
+    if (covered.length > 0 && !covered.includes(coNum)) {
+      return 0;
+    }
+
+    const maxPerCo = Number(matched.max_per_co || 0);
+    if (maxPerCo > 0) return maxPerCo;
+
+    const totalMax = Number(matched.max_marks || 0);
+    if (totalMax > 0 && covered.length > 0) {
+      return Number((totalMax / covered.length).toFixed(2));
+    }
+
+    return totalMax;
+  };
+
+  const getCoMaxWeight = (coNum: number): number => {
+    if (!data) return 0;
+    let finalCoMaxWeight = 0;
+    const examList = data?.exams || [];
+    const customVars = data?.cqi_config?.custom_vars || [];
+
+    const checkedExams: string[] = [];
+    if (data?.cqi_config && Array.isArray(data.cqi_config.exams) && data.cqi_config.exams.length > 0) {
+      checkedExams.push(...data.cqi_config.exams);
+    } else {
+      customVars.forEach((v: any) => {
+        if (v && v.exam && !checkedExams.includes(v.exam)) {
+          checkedExams.push(v.exam);
         }
       });
     }
-    if (found) return Number(sum.toFixed(2));
-    if (Array.isArray(student?.co_totals)) {
-      return Number(student.co_totals[coNum - 1] ?? 0);
-    }
-    return 0;
-  };
 
-  const getWeightedTotal = (student: any, coNum: number) => {
-    // 1. If weighted_marks dictionary is present on student, compute exact sum across regular + CQI exams
-    if (student?.weighted_marks && typeof student.weighted_marks === 'object') {
-      let sum = 0;
-      let found = false;
-      if (Array.isArray(data.exams)) {
-        data.exams.forEach((ex: any) => {
-          const exId = String(ex?.id || '');
-          const wmKey = `${exId}_CO${coNum}`;
-          const wmExamKey = `${exId}_exam_CO${coNum}`;
-          if (student.weighted_marks[wmKey] !== undefined) {
-            const v = Number(student.weighted_marks[wmKey]);
-            if (!Number.isNaN(v)) {
-              sum += v;
-              found = true;
+    if (checkedExams.length > 0 && examList.length > 0) {
+      const matchedExams = examList.filter((ex: any) => {
+        const name = String(ex?.name || '').trim().toLowerCase();
+        const shortName = String(ex?.short_name || '').trim().toLowerCase();
+        const displayName = String(ex?.exam_display_name || '').trim().toLowerCase();
+        const code = String(ex?.code || '').trim().toLowerCase();
+        const examCode = String(ex?.exam || '').trim().toLowerCase();
+        const examId = String(ex?.id || '').trim().toLowerCase();
+
+        return checkedExams.some((chk) => {
+          const c = String(chk || '').trim().toLowerCase();
+          return c === name || c === shortName || c === displayName || c === code || c === examCode || c === examId;
+        });
+      });
+
+      if (matchedExams.length > 0) {
+        matchedExams.forEach((ex: any) => {
+          const covered = Array.isArray(ex?.covered_cos) ? ex.covered_cos : [];
+          if (covered.includes(coNum)) {
+            const exTotalWeight = Number(ex?.weight ?? 0);
+            let parsedWeight = 0;
+            if (ex.co_weights && typeof ex.co_weights === 'object') {
+              const directWeight = ex.co_weights[String(coNum)] ?? ex.co_weights[coNum];
+              if (directWeight !== undefined && directWeight !== null && !isNaN(Number(directWeight))) {
+                parsedWeight = Number(directWeight);
+              }
+              if (parsedWeight > 0 && exTotalWeight > 0) {
+                const totalCoWeightSum = Number((Object.values(ex.co_weights) as any[]).reduce((acc: number, curr: any) => acc + (Number(curr) || 0), 0));
+                if (Math.abs(totalCoWeightSum - exTotalWeight) > 0.05) {
+                  parsedWeight = 0;
+                }
+              }
             }
-          } else if (student.weighted_marks[wmExamKey] !== undefined) {
-            const v = Number(student.weighted_marks[wmExamKey]);
-            if (!Number.isNaN(v)) {
-              sum += v;
-              found = true;
+            if (parsedWeight > 0) {
+              finalCoMaxWeight += parsedWeight;
+            } else {
+              finalCoMaxWeight += exTotalWeight / Math.max(covered.length, 1);
             }
           }
         });
-      }
-      if (found) return Number(sum.toFixed(2));
-    }
-
-    // 2. Fallback to student.co_totals array
-    if (Array.isArray(student?.co_totals)) {
-      return Number(Number(student.co_totals[coNum - 1] ?? 0).toFixed(2));
-    }
-    return 0;
-  };
-
-  const getExamScore = (student: any, examRef: any, coNum: number): number | '-' => {
-    if (!student?.exam_marks || typeof student.exam_marks !== 'object') return '-';
-
-    const examId = String(examRef?.id || '');
-    const examCode = getExamCode(examRef);
-    const examName = String(examRef?.exam_display_name || examRef?.name || examRef?.exam || '').trim().toLowerCase();
-
-    let matchedExamObj: any = null;
-    for (const [k, obj] of Object.entries(student.exam_marks)) {
-      const normK = String(k).trim().toLowerCase();
-      if (k === examId || getExamCode({ name: k }) === examCode || normK === examName) {
-        matchedExamObj = obj;
-        break;
+        finalCoMaxWeight = Number(finalCoMaxWeight.toFixed(4));
       }
     }
 
-    if (matchedExamObj && typeof matchedExamObj === 'object') {
-      const val = matchedExamObj[`co${coNum}`] ?? matchedExamObj[`co_${coNum}`];
-      if (typeof val === 'number') return val;
-    }
-    return '-';
-  };
-
-  const getCoMaxWeight = (coNum: number) => {
-    let coExamsMaxWeight = 0;
-    const examList = Array.isArray(data.exams) && data.exams.length > 0
-      ? data.exams
-      : Array.isArray(data.class_type?.exam_assignments)
-        ? data.class_type.exam_assignments
-        : [];
-
-    if (Array.isArray(examList)) {
+    if (finalCoMaxWeight <= 0 && examList.length > 0) {
+      let nonCqiExamsWithWeights = 0;
       examList.forEach((ex: any) => {
         if (String(ex?.kind || '').toLowerCase() === 'cqi') return;
-        const coWeights = ex?.co_weights;
         const covered = Array.isArray(ex?.covered_cos) ? ex.covered_cos : [];
-        const examWeight = Number(ex?.weight ?? 0);
-
-        if (!covered.includes(coNum)) {
-          // CIA portion for covered COs only — skip if not covered
-          return;
-        }
-
-        // Determine if co_weights represent true COURSE WEIGHTS (not raw question marks).
-        // Valid course weights: their sum across all COs should ≈ the exam's total weight (within 1%).
-        // Raw marks: their sum typically exceeds the exam weight significantly.
-        let useCoWeights = false;
-        if (coWeights && typeof coWeights === 'object' && Object.keys(coWeights).length > 0) {
-          const sumCoWeights = (Object.values(coWeights) as any[]).reduce((s: number, v: any) => s + Number(v || 0), 0 as number);
-          const tolerance = Math.max(examWeight * 0.01, 0.1);
-          useCoWeights = Math.abs(sumCoWeights - examWeight) <= tolerance;
-        }
-
-        if (useCoWeights && (coWeights[coNum] != null || coWeights[String(coNum)] != null)) {
-          const w = Number(coWeights[coNum] ?? coWeights[String(coNum)] ?? 0);
-          if (!Number.isNaN(w) && w > 0) {
-            coExamsMaxWeight += w;
-          } else if (examWeight > 0 && covered.length > 0) {
-            coExamsMaxWeight += examWeight / covered.length;
+        if (covered.includes(coNum)) {
+          const exTotalWeight = Number(ex?.weight ?? 0);
+          let parsedWeight = 0;
+          if (ex.co_weights && typeof ex.co_weights === 'object') {
+            const directWeight = ex.co_weights[String(coNum)] ?? ex.co_weights[coNum];
+            if (directWeight !== undefined && directWeight !== null && !isNaN(Number(directWeight))) {
+              parsedWeight = Number(directWeight);
+            }
+            if (parsedWeight > 0 && exTotalWeight > 0) {
+              const totalCoWeightSum = Number((Object.values(ex.co_weights) as any[]).reduce((acc: number, curr: any) => acc + (Number(curr) || 0), 0));
+              if (Math.abs(totalCoWeightSum - exTotalWeight) > 0.05) {
+                parsedWeight = 0;
+              }
+            }
           }
-        } else {
-          // co_weights not valid as course weights → use weight_per_co or even split
-          const pw = Number(ex?.weight_per_co ?? 0);
-          if (!Number.isNaN(pw) && pw > 0) {
-            coExamsMaxWeight += pw;
-          } else if (examWeight > 0 && covered.length > 0) {
-            coExamsMaxWeight += examWeight / covered.length;
-          }
-        }
-
-        if (ex?.cia_enabled && covered.includes(coNum)) {
-          const ciaW = Number(ex?.cia_weight ?? 0);
-          if (ciaW > 0) {
-            coExamsMaxWeight += ex?.cia_weight_per_co ? ciaW : (ciaW / Math.max(covered.length, 1));
+          if (parsedWeight > 0) {
+            finalCoMaxWeight += parsedWeight;
+            nonCqiExamsWithWeights++;
+          } else if (exTotalWeight > 0) {
+            finalCoMaxWeight += exTotalWeight / Math.max(covered.length, 1);
+            nonCqiExamsWithWeights++;
           }
         }
       });
-    }
+      finalCoMaxWeight = Number(finalCoMaxWeight.toFixed(4));
 
-    let finalCoMaxWeight = Number(coExamsMaxWeight.toFixed(4));
-    if (finalCoMaxWeight <= 0) {
-      // Fallback: sum exam weights evenly split across covered COs
-      if (Array.isArray(examList)) {
+      if (finalCoMaxWeight <= 0 && nonCqiExamsWithWeights === 0) {
         examList.forEach((ex: any) => {
           if (String(ex?.kind || '').toLowerCase() === 'cqi') return;
           const covered = Array.isArray(ex?.covered_cos) ? ex.covered_cos : [];
@@ -407,7 +478,7 @@ export default function COattainmentTable({
         finalCoMaxWeight = Number(finalCoMaxWeight.toFixed(4));
       }
     }
-    if (finalCoMaxWeight <= 0) {
+    if (finalCoMaxWeight <= 0 && data) {
       const totalInternal = Number(data.total_internal_marks || data.class_type?.total_internal_marks || 40);
       finalCoMaxWeight = Number((totalInternal / (data.co_count || 5)).toFixed(2));
     }
@@ -416,15 +487,12 @@ export default function COattainmentTable({
 
   const getCalculatedAttainment = (student: any, coNum: number) => {
     const finalCoMaxWeight = getCoMaxWeight(coNum);
-
-    // Determine obtained weight for student in this CO
     let coObtWeight = 0;
     if (Array.isArray(student?.co_totals) && student.co_totals[coNum - 1] !== undefined) {
       coObtWeight = Number(student.co_totals[coNum - 1] ?? 0);
     } else {
       coObtWeight = getWeightedTotal(student, coNum);
     }
-
     if (finalCoMaxWeight > 0 && coObtWeight >= 0) {
       const calc = (coObtWeight / finalCoMaxWeight) * 50;
       return Number.isInteger(calc) ? calc : Number(calc.toFixed(2));
@@ -432,13 +500,11 @@ export default function COattainmentTable({
     return '-';
   };
 
-  const evaluateFormulaForStudent = (student: any, formula: string, coNum: number, visitedColIds = new Set<string>()): number | '-' => {
-    if (!formula || typeof formula !== 'string' || !formula.trim()) {
-      return getCalculatedAttainment(student, coNum);
-    }
+  const coNumbers = useMemo(() => Array.from({ length: coCount }, (_, i) => i + 1), [coCount]);
 
-    const context: Record<string, number> = {};
-
+  // Compute a single student's subcolumn values iteratively (left to right)
+  const computeStudentRowValues = (student: any, coNum: number): Record<string, number | '-'> => {
+    const rowValues: Record<string, number | '-'> = {};
     const obtWeight = Array.isArray(student?.co_totals) && student.co_totals[coNum - 1] !== undefined
       ? Number(student.co_totals[coNum - 1] ?? 0)
       : getWeightedTotal(student, coNum);
@@ -446,47 +512,55 @@ export default function COattainmentTable({
     const rawTotal = getRawTotal(student, coNum);
     const weightedTotal = getWeightedTotal(student, coNum);
 
-    // Base tokens
-    context[`CO${coNum}-OBT-WEIGHT`] = obtWeight;
-    context[`COX-OBT-WEIGHT`] = obtWeight;
-    context[`CO${coNum}-MAX-WEIGHT`] = maxWeight;
-    context[`COX-MAX-WEIGHT`] = maxWeight;
-    context[`CO${coNum}-TOTAL-RAW`] = rawTotal;
-    context[`COX-TOTAL-RAW`] = rawTotal;
-    context[`CO${coNum}-TOTAL-WEIGHT`] = weightedTotal;
-    context[`COX-TOTAL-WEIGHT`] = weightedTotal;
-    context[`CO${coNum}-WEIGHTED`] = weightedTotal;
-    context[`COX-WEIGHTED`] = weightedTotal;
-    context[`COX-EXAMS-MAX-WEIGHT`] = maxWeight;
-    context[`CO${coNum}-EXAMS-MAX-WEIGHT`] = maxWeight;
+    const baseContext: Record<string, number> = {
+      [`CO${coNum}-OBT-WEIGHT`]: obtWeight,
+      [`CO${coNum}-MAX-WEIGHT`]: maxWeight,
+      [`CO${coNum}-TOTAL-RAW`]: rawTotal,
+      [`CO${coNum}-TOTAL-WEIGHT`]: weightedTotal,
+      [`CO${coNum}-WEIGHTED`]: weightedTotal,
+      [`COX-OBT-WEIGHT`]: obtWeight,
+      [`COX-MAX-WEIGHT`]: maxWeight,
+      [`COX-TOTAL-RAW`]: rawTotal,
+      [`COX-TOTAL-WEIGHT`]: weightedTotal,
+      [`COX-WEIGHTED`]: weightedTotal,
+      [`COX-EXAMS-MAX-WEIGHT`]: maxWeight,
+      [`CO${coNum}-EXAMS-MAX-WEIGHT`]: maxWeight,
+    };
 
-    // Per-exam tokens
-    const examList = Array.isArray(data.exams) && data.exams.length > 0
-      ? data.exams
-      : Array.isArray(data.class_type?.exam_assignments)
-        ? data.class_type.exam_assignments
-        : [];
+    if (data?.exams) {
+      data.exams.forEach((ex: any) => {
+        const eName = ex?.exam_display_name || ex?.exam_name || ex?.name || ex?.short_name || ex?.title || 'EXAM';
+        const eCode = String(eName).trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        const score = getExamScore(student, ex.id, coNum);
+        const maxScore = getExamCoMaxMarks(ex.id, coNum);
 
-    examList.forEach((ex: any) => {
-      const code = getExamCode(ex);
-      const score = getExamScore(student, ex, coNum);
-      const numScore = typeof score === 'number' ? score : 0;
+        baseContext[`CO${coNum}-${eCode}-RAW`] = score;
+        baseContext[`CO${coNum}-${eCode}-OBT`] = score;
+        baseContext[`${eCode}-CO${coNum}-RAW`] = score;
+        baseContext[`${eCode}-CO${coNum}-OBT`] = score;
+        baseContext[`COX-${eCode}-RAW`] = score;
+        baseContext[`COX-${eCode}-OBT`] = score;
+        baseContext[`${eCode}-COX-RAW`] = score;
+        baseContext[`${eCode}-COX-OBT`] = score;
+        baseContext[`CO${coNum}-${eCode}`] = score;
+        baseContext[`COX-${eCode}`] = score;
 
-      context[`CO${coNum}-${code}-RAW`] = numScore;
-      context[`COX-${code}-RAW`] = numScore;
-      context[`CO${coNum}-${code}-OBT`] = numScore;
-      context[`COX-${code}-OBT`] = numScore;
-      context[`${code}-CO${coNum}-RAW`] = numScore;
-      context[`${code}-COX-RAW`] = numScore;
+        baseContext[`CO${coNum}-${eCode}-MAXMARK`] = maxScore;
+        baseContext[`CO${coNum}-${eCode}-MAXMARKS`] = maxScore;
+        baseContext[`CO${coNum}-${eCode}-MAX_MARK`] = maxScore;
+        baseContext[`CO${coNum}-${eCode}-MAX_MARKS`] = maxScore;
+        baseContext[`CO${coNum}-${eCode}-MAX`] = maxScore;
+        baseContext[`COX-${eCode}-MAXMARK`] = maxScore;
+        baseContext[`COX-${eCode}-MAXMARKS`] = maxScore;
+        baseContext[`COX-${eCode}-MAX_MARK`] = maxScore;
+        baseContext[`COX-${eCode}-MAX_MARKS`] = maxScore;
+        baseContext[`COX-${eCode}-MAX`] = maxScore;
+        baseContext[`${eCode}-CO${coNum}-MAXMARK`] = maxScore;
+        baseContext[`${eCode}-COX-MAXMARK`] = maxScore;
+        baseContext[`${eCode}-MAXMARK`] = maxScore;
+      });
+    }
 
-      // Check total mark
-      const exId = String(ex?.id || '');
-      const exMarksObj = student?.exam_marks?.[exId] || student?.exam_marks?.[code];
-      const totalScore = typeof exMarksObj?.total === 'number' ? exMarksObj.total : numScore;
-      context[`${code}-TOTAL`] = totalScore;
-    });
-
-    // Also check student.exam_marks directly for any exam/activity keys (e.g. activity, assignment, lab)
     if (student?.exam_marks && typeof student.exam_marks === 'object') {
       for (const [k, obj] of Object.entries(student.exam_marks)) {
         if (!obj || typeof obj !== 'object') continue;
@@ -494,96 +568,207 @@ export default function COattainmentTable({
         const val = (obj as any)[`co${coNum}`] ?? (obj as any)[`co_${coNum}`];
         const numVal = typeof val === 'number' ? val : 0;
 
-        context[`CO${coNum}-${normKey}-RAW`] = numVal;
-        context[`COX-${normKey}-RAW`] = numVal;
-        context[`CO${coNum}-${normKey}-OBT`] = numVal;
-        context[`COX-${normKey}-OBT`] = numVal;
-        context[`${normKey}-CO${coNum}-RAW`] = numVal;
-        context[`${normKey}-COX-RAW`] = numVal;
-
-        // If normKey contains ACTIVITY or similar
-        if (normKey.includes('ACTIVITY')) {
-          context[`CO${coNum}-ACTIVITY-RAW`] = numVal;
-          context[`COX-ACTIVITY-RAW`] = numVal;
-          context[`CO${coNum}-ACTIVITY`] = numVal;
-          context[`COX-ACTIVITY`] = numVal;
-        }
+        baseContext[`CO${coNum}-${normKey}-RAW`] = numVal;
+        baseContext[`COX-${normKey}-RAW`] = numVal;
+        baseContext[`CO${coNum}-${normKey}-OBT`] = numVal;
+        baseContext[`COX-${normKey}-OBT`] = numVal;
+        baseContext[`${normKey}-CO${coNum}-RAW`] = numVal;
+        baseContext[`${normKey}-COX-RAW`] = numVal;
+        baseContext[`${normKey}-RAW`] = numVal;
+        baseContext[`${normKey}-OBT`] = numVal;
+        baseContext[normKey] = numVal;
       }
     }
 
-    // Sub-column totals (sum of all non-total, non-formula sub-columns or preceding columns)
-    let subColTotal = 0;
-    subColumns.forEach((c) => {
-      if (c.kind !== 'total' && c.id !== 'co_total' && !visitedColIds.has(c.id)) {
-        const val = getCellValueInternal(student, c, coNum, new Set([...visitedColIds, c.id]));
-        if (typeof val === 'number') {
-          subColTotal += val;
-          const colKey = c.label.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-          context[`CO${coNum}-${colKey}`] = val;
-          context[`COX-${colKey}`] = val;
-          context[`${colKey}`] = val;
+    let runningSubcolSum = 0;
+
+    // Evaluate subcolumns strictly in sequence from left to right
+    subColumns.forEach((col) => {
+      if (col.kind === 'total' || col.id === 'co_total') {
+        if (col.formula && col.formula.trim()) {
+          const evalCtx = {
+            ...baseContext,
+            [`CO${coNum}-SUBCOL-TOTAL`]: runningSubcolSum,
+            [`COX-SUBCOL-TOTAL`]: runningSubcolSum,
+            [`CO${coNum}-TOTAL`]: runningSubcolSum,
+            [`COX-TOTAL`]: runningSubcolSum,
+            [`CO_TOTAL`]: runningSubcolSum,
+            [`CO${coNum}_TOTAL`]: runningSubcolSum,
+            [`COX_TOTAL`]: runningSubcolSum,
+          };
+          const res = evaluateFormulaExpr(col.formula, evalCtx);
+          const val = res !== null && !isNaN(res) ? (Number.isInteger(res) ? res : Number(res.toFixed(2))) : runningSubcolSum;
+          rowValues[col.id] = val;
+          runningSubcolSum = typeof val === 'number' ? val : runningSubcolSum;
+        } else {
+          const val = Number.isInteger(runningSubcolSum) ? runningSubcolSum : Number(runningSubcolSum.toFixed(2));
+          rowValues[col.id] = val;
+        }
+        return;
+      }
+
+      let colVal: number | '-' = '-';
+      if (col.kind === 'raw') {
+        colVal = getRawTotal(student, coNum);
+      } else if (col.kind === 'weighted') {
+        colVal = getWeightedTotal(student, coNum);
+      } else if (col.kind === 'exam') {
+        colVal = getExamScore(student, col.meta?.exam, coNum);
+      } else if ((col.kind === 'formula' || col.formula) && col.formula?.trim()) {
+        const evalCtx = {
+          ...baseContext,
+          [`CO${coNum}-SUBCOL-TOTAL`]: runningSubcolSum,
+          [`COX-SUBCOL-TOTAL`]: runningSubcolSum,
+          [`CO${coNum}-TOTAL`]: runningSubcolSum,
+          [`COX-TOTAL`]: runningSubcolSum,
+          [`CO_TOTAL`]: runningSubcolSum,
+          [`CO${coNum}_TOTAL`]: runningSubcolSum,
+          [`COX_TOTAL`]: runningSubcolSum,
+        };
+        const res = evaluateFormulaExpr(col.formula, evalCtx);
+        if (res !== null && !isNaN(res)) {
+          colVal = Number.isInteger(res) ? res : Number(res.toFixed(2));
+        } else {
+          colVal = getCalculatedAttainment(student, coNum);
+        }
+      } else {
+        colVal = getCalculatedAttainment(student, coNum);
+      }
+
+      rowValues[col.id] = colVal;
+      if (typeof colVal === 'number') {
+        runningSubcolSum += colVal;
+        const cleanLabel = col.label.replace(/[^a-zA-Z0-9]+/g, '_').toUpperCase().replace(/^_+|_+$/g, '');
+        baseContext[col.id] = colVal;
+        baseContext[col.id.toUpperCase()] = colVal;
+        baseContext[`COL-${col.id.toUpperCase()}`] = colVal;
+        if (cleanLabel) {
+          baseContext[cleanLabel] = colVal;
+          baseContext[`CO${coNum}-${cleanLabel}`] = colVal;
+          baseContext[`COX-${cleanLabel}`] = colVal;
         }
       }
     });
-    context[`CO${coNum}-SUBCOL-TOTAL`] = subColTotal;
-    context[`COX-SUBCOL-TOTAL`] = subColTotal;
 
-    const res = evaluateFormulaExpr(formula, context);
-    if (res === null) return '-';
-    return Number.isInteger(res) ? res : Number(res.toFixed(2));
+    return rowValues;
   };
 
-  const getCoTotalValue = (student: any, coNum: number, visitedColIds = new Set<string>()) => {
-    // If there are configured sub-columns before the total, sum them up
-    const otherCols = subColumns.filter((c) => c.kind !== 'total' && c.id !== 'co_total');
-    if (otherCols.length > 0) {
-      let sum = 0;
-      let hasVal = false;
-      otherCols.forEach((c) => {
-        if (!visitedColIds.has(c.id)) {
-          const val = getCellValueInternal(student, c, coNum, new Set([...visitedColIds, c.id]));
-          if (typeof val === 'number') {
-            sum += val;
-            hasVal = true;
-          }
+  // Cache precalculated values for all students per CO to render instantly
+  const precalculatedAttainment = useMemo(() => {
+    if (!data || !Array.isArray(data.students)) return {};
+    const map: Record<string, Record<string, Record<string, number | '-'>>> = {};
+
+    data.students.forEach((s: any) => {
+      const sId = String(s.student_id || s.reg_no || '');
+      if (!sId) return;
+      map[sId] = {};
+      coNumbers.forEach((co) => {
+        const coKey = `co${co}`;
+        map[sId][coKey] = computeStudentRowValues(s, co);
+      });
+    });
+
+    return map;
+  }, [data, subColumns, coNumbers]);
+
+  const getCellValue = (student: any, col: ColumnDef, coNum: number): number | '-' => {
+    const sId = String(student?.student_id || student?.reg_no || '');
+    const coKey = `co${coNum}`;
+    const cached = precalculatedAttainment[sId]?.[coKey]?.[col.id];
+    if (cached !== undefined) return cached;
+    return computeStudentRowValues(student, coNum)[col.id] ?? '-';
+  };
+
+  const getCoTotalValue = (student: any, coNum: number): number | '-' => {
+    const totalCol = subColumns.find((c) => c.kind === 'total' || c.id === 'co_total');
+    const colId = totalCol?.id || 'co_total';
+    return getCellValue(student, { id: colId, label: 'COx Total', kind: 'total' }, coNum);
+  };
+
+  const getColumnAverage = (col: ColumnDef, coNum: number): number | '-' => {
+    if (!Array.isArray(data?.students) || data.students.length === 0) return '-';
+    let sum = 0;
+    let count = 0;
+    data.students.forEach((s: any) => {
+      let val: any = null;
+      if (col.kind === 'total' || col.id === 'co_total') {
+        val = getCoTotalValue(s, coNum);
+      } else {
+        val = getCellValue(s, col, coNum);
+      }
+      if (typeof val === 'number' && !isNaN(val)) {
+        sum += val;
+        count += 1;
+      }
+    });
+    if (count === 0) return '-';
+    const avg = sum / count;
+    return Number.isInteger(avg) ? avg : Number(avg.toFixed(2));
+  };
+
+  const hasAnyAvg = useMemo(() => subColumns.some((col) => col.show_avg), [subColumns]);
+
+  const lastSyncedKeyRef = React.useRef<string>('');
+
+  useEffect(() => {
+    if (!courseId || !data || !Array.isArray(data.students) || data.students.length === 0) return;
+
+    const columnAveragesMap: Record<string, Record<string, number | '-'>> = {};
+    coNumbers.forEach((co) => {
+      columnAveragesMap[String(co)] = {};
+      subColumns.forEach((col) => {
+        if (col.show_avg) {
+          columnAveragesMap[String(co)][col.id] = getColumnAverage(col, co);
         }
       });
-      if (hasVal) {
-        return Number.isInteger(sum) ? sum : Number(sum.toFixed(2));
-      }
-    }
-    return getCalculatedAttainment(student, coNum);
-  };
+    });
 
-  const getCellValueInternal = (student: any, col: ColumnDef, coNum: number, visitedColIds = new Set<string>()): number | '-' => {
-    if (col.kind === 'total' || col.id === 'co_total') {
-      return getCoTotalValue(student, coNum, visitedColIds);
-    }
-    if (col.kind === 'formula') {
-      return evaluateFormulaForStudent(student, col.formula || '', coNum, visitedColIds);
-    }
-    if (col.kind === 'raw') {
-      const val = getRawTotal(student, coNum);
-      return Number.isInteger(val) ? val : Number(val.toFixed(2));
-    }
-    if (col.kind === 'weighted') {
-      const val = getWeightedTotal(student, coNum);
-      return Number.isInteger(val) ? val : Number(val.toFixed(2));
-    }
-    if (col.kind === 'exam') {
-      return getExamScore(student, col.meta?.exam, coNum);
-    }
-    if (col.formula) {
-      return evaluateFormulaForStudent(student, col.formula, coNum, visitedColIds);
-    }
-    return getCalculatedAttainment(student, coNum);
-  };
+    const studentValuesMap: Record<string, Record<string, any>> = {};
+    data.students.forEach((s: any) => {
+      const sId = String(s.student_id || s.reg_no || '');
+      if (!sId) return;
+      studentValuesMap[sId] = {};
+      coNumbers.forEach((co) => {
+        const coKey = `co${co}`;
+        studentValuesMap[sId][coKey] = {};
+        subColumns.forEach((col) => {
+          studentValuesMap[sId][coKey][col.id] =
+            col.kind === 'total' || col.id === 'co_total'
+              ? getCoTotalValue(s, co)
+              : getCellValue(s, col, co);
+        });
+      });
+    });
 
-  const getCellValue = (student: any, col: ColumnDef, coNum: number) => {
-    return getCellValueInternal(student, col, coNum, new Set([col.id]));
-  };
+    const payload = {
+      co_numbers: coNumbers,
+      columns_config: subColumns,
+      column_averages: columnAveragesMap,
+      student_values: studentValuesMap,
+    };
 
-  const coNumbers = Array.from({ length: coCount }, (_, i) => i + 1);
+    const syncKey = `${courseId}_${JSON.stringify(subColumns)}_${data.students.length}`;
+    if (lastSyncedKeyRef.current === syncKey) return;
+    lastSyncedKeyRef.current = syncKey;
+
+    const timer = setTimeout(() => {
+      fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/co-attainment/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch((err) => console.error('Failed to sync CO attainment to database', err));
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [courseId, subColumns, data?.students?.length, coNumbers]);
+
+  if (fetching && !data) {
+    return <div className="p-6 text-sm text-gray-500">Loading CO attainment table…</div>;
+  }
+
+  if (!data) {
+    return <div className="p-6 text-sm text-gray-400">No CO attainment data available.</div>;
+  }
 
   return (
     <div className="bg-white rounded-lg border p-4 shadow-sm overflow-auto">
@@ -598,21 +783,21 @@ export default function COattainmentTable({
         </div>
       </div>
 
-      <div className="overflow-x-auto border rounded-lg">
-        <table className="min-w-full text-xs border-collapse">
-          <thead>
+      <div className="overflow-x-auto border rounded-lg max-h-[calc(100vh-220px)] overflow-y-auto">
+        <table className="min-w-full text-xs border-separate border-spacing-0">
+          <thead className="sticky top-0 z-20 bg-gray-100 shadow-sm">
             <tr className="bg-gray-100 text-gray-800">
-              <th rowSpan={2} className="border px-3 py-2 text-left font-semibold w-28 sticky left-0 bg-gray-100 z-10">
+              <th rowSpan={2} className="border px-3 py-2 text-left font-semibold w-28 sticky left-0 top-0 bg-gray-100 z-30 border-b border-gray-300">
                 Reg No
               </th>
-              <th rowSpan={2} className="border px-3 py-2 text-left font-semibold w-40">
+              <th rowSpan={2} className="border px-3 py-2 text-left font-semibold w-40 sticky top-0 bg-gray-100 z-20 border-b border-gray-300">
                 Student Name
               </th>
               {coNumbers.map((co) => (
                 <th
                   key={`co-header-${co}`}
                   colSpan={Math.max(1, subColumns.length)}
-                  className="border px-3 py-1.5 text-center font-bold text-sm bg-blue-50 text-blue-900 border-blue-200"
+                  className="border px-3 py-1.5 text-center font-bold text-sm bg-blue-50 text-blue-900 border-blue-200 sticky top-0 border-b border-gray-300"
                 >
                   CO{co}
                 </th>
@@ -625,10 +810,10 @@ export default function COattainmentTable({
                   subColumns.map((col) => (
                     <th
                       key={`co-${co}-col-${col.id}`}
-                      className={`border px-2 py-1.5 text-center truncate ${
+                      className={`border px-2 py-1.5 text-center truncate sticky top-[34px] z-20 border-b border-gray-300 ${
                         col.kind === 'total' || col.id === 'co_total'
                           ? 'font-bold min-w-[100px] max-w-[140px] bg-amber-100/90 text-amber-950 border-amber-300'
-                          : 'font-medium min-w-[110px] max-w-[160px]'
+                          : 'font-medium min-w-[110px] max-w-[160px] bg-gray-50'
                       }`}
                       title={formatSubColumnTitle(col.label, co)}
                     >
@@ -643,12 +828,57 @@ export default function COattainmentTable({
                     </th>
                   ))
                 ) : (
-                  <th key={`co-${co}-empty`} className="border px-2 py-1.5 text-center font-normal italic text-gray-400">
+                  <th key={`co-${co}-empty`} className="border px-2 py-1.5 text-center font-normal italic text-gray-400 sticky top-[34px] z-20 bg-gray-50 border-b border-gray-300">
                     No columns
                   </th>
                 )
               )}
             </tr>
+
+            {/* Header row 3: Class Average row directly below column titles */}
+            {hasAnyAvg && (
+              <tr className="bg-emerald-50/95 text-emerald-950 font-bold border-b-2 border-emerald-300">
+                <th className="border px-3 py-2 text-left font-mono font-bold sticky left-0 top-[68px] bg-emerald-100 z-30 text-emerald-900 border-b border-emerald-300">
+                  Avg
+                </th>
+                <th className="border px-3 py-2 text-left font-bold sticky top-[68px] bg-emerald-100/95 z-20 text-emerald-900 truncate max-w-[180px] border-b border-emerald-300">
+                  Class Average
+                </th>
+                {coNumbers.flatMap((co) =>
+                  subColumns.length > 0 ? (
+                    subColumns.map((col) => {
+                      if (!col.show_avg) {
+                        return (
+                          <th
+                            key={`avg-${co}-${col.id}`}
+                            className="border px-2 py-2 text-center font-mono text-gray-300 bg-emerald-50/40 sticky top-[68px] z-20 border-b border-emerald-300 font-normal"
+                          >
+                            -
+                          </th>
+                        );
+                      }
+                      const avgVal = getColumnAverage(col, co);
+                      return (
+                        <th
+                          key={`avg-${co}-${col.id}`}
+                          className={`border px-2 py-2 text-center font-mono font-bold text-xs sticky top-[68px] z-20 border-b ${
+                            col.kind === 'total' || col.id === 'co_total'
+                              ? 'bg-amber-100 text-amber-950 border-amber-300'
+                              : 'bg-emerald-100/90 text-emerald-950 border-emerald-300'
+                          }`}
+                        >
+                          {avgVal}
+                        </th>
+                      );
+                    })
+                  ) : (
+                    <th key={`avg-${co}-empty`} className="border px-2 py-2 text-center text-gray-300 sticky top-[68px] z-20 bg-emerald-50/40 border-b border-emerald-300 font-normal">
+                      -
+                    </th>
+                  )
+                )}
+              </tr>
+            )}
           </thead>
           <tbody className="divide-y divide-gray-200 bg-white">
             {Array.isArray(data.students) && data.students.length > 0 ? (

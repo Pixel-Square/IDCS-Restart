@@ -8,7 +8,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, BookOpen, Users, CheckCircle, Clock, AlertCircle,
-  Edit2, Lock, RefreshCw, FileText, Download, BarChart3, AlertTriangle, Copy,
+  Edit2, Lock, RefreshCw, FileText, Download, BarChart3, AlertTriangle, Copy, GraduationCap,
 } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 import { exportCOSummaryToExcel, exportCOSummaryToPDF, exportInternalMarksExcel } from './COSummaryExport';
@@ -16,6 +16,8 @@ import FacultyCourseDashboard from './FacultyCourseDashboard';
 import ResultAnalysisPage from './result_analysis/ResultAnalysisPage';
 import ResetNoticePopup, { type ResetNotice } from './ResetNoticePopup';
 const COattainmentTable = React.lazy(() => import('./coattainment/COattainmentTable'));
+const LCAWorkflowPage = React.lazy(() => import('./LCAWorkflowPage'));
+const QuestionBankPage = React.lazy(() => import('../../QuestionBankPage'));
 
 function COattainmentTableWrapper({ courseId, data, courseInfo }: { courseId?: string | undefined; data?: any; courseInfo?: any }) {
   return <COattainmentTable courseId={courseId} data={data} />;
@@ -111,7 +113,7 @@ export default function InternalMarkPage() {
   const [loading, setLoading] = useState(true);
   const [courseInfo, setCourseInfo] = useState<CourseInfo | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [tab, setTab] = useState<'dashboard' | 'exams' | 'co' | 'result' | 'coattainment'>('dashboard');
+  const [tab, setTab] = useState<'dashboard' | 'exams' | 'co' | 'result' | 'coattainment' | 'lca' | 'question_bank'>('dashboard');
   // add coattainment tab
   const [showCoAttainment, setShowCoAttainment] = useState(false);
 
@@ -515,6 +517,22 @@ export default function InternalMarkPage() {
         >
           <BarChart3 className="w-4 h-4 inline mr-1.5 -mt-0.5" />CO Attainment
         </button>
+        <button
+          onClick={() => setTab('lca')}
+          className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            tab === 'lca' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <GraduationCap className="w-4 h-4 inline mr-1.5 -mt-0.5" />LCA
+        </button>
+        <button
+          onClick={() => setTab('question_bank')}
+          className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            tab === 'question_bank' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <BookOpen className="w-4 h-4 inline mr-1.5 -mt-0.5" />Question Bank
+        </button>
       </div>
 
       {/* ─── Tab: Dashboard ─── */}
@@ -670,6 +688,20 @@ export default function InternalMarkPage() {
           {/* lazy import faculty COattainment table */}
           <React.Suspense fallback={<div className="p-6">Loading…</div>}>
             <COattainmentTableWrapper courseId={courseId} data={orderedCoSummary} courseInfo={courseInfo} />
+          </React.Suspense>
+        </div>
+      )}
+      {tab === 'lca' && courseId && (
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          <React.Suspense fallback={<div className="p-6 text-center text-gray-500 animate-pulse">Loading LCA module…</div>}>
+            <LCAWorkflowPage courseCode={courseInfo?.course_code} courseName={courseInfo?.course_name} />
+          </React.Suspense>
+        </div>
+      )}
+      {tab === 'question_bank' && courseId && (
+        <div className="bg-white rounded-lg shadow overflow-hidden p-4">
+          <React.Suspense fallback={<div className="p-6 text-center text-gray-500 animate-pulse">Loading Question Bank…</div>}>
+            <QuestionBankPage courseCode={courseInfo?.course_code || courseId} courseName={courseInfo?.course_name} />
           </React.Suspense>
         </div>
       )}
@@ -1142,7 +1174,8 @@ function COSummaryTab({
           </button>
         </div>
         
-        {/* Decimal Places Selector */}
+        {/* Decimal Places Selector - Hidden for now, kept Fix 2 (2 decimal places) as default */}
+        {/*
         <div className="flex border rounded-lg overflow-hidden text-sm">
           <button
             onClick={() => setDecimalPlaces(1)}
@@ -1159,6 +1192,7 @@ function COSummaryTab({
             Fix 2
           </button>
         </div>
+        */}
 
         <button onClick={() => setShowExportModal(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50">
           <Download className="w-3.5 h-3.5" /> Export
@@ -1276,19 +1310,19 @@ function COSummaryTab({
             <span className="text-amber-600">Cells where the CQI cap limit was reached are highlighted in red. Cap applies only to students who satisfy the cap condition.</span>
           </div>
         )}
-        <div className="overflow-x-auto">
-          <table ref={tableRef} className="min-w-full text-sm divide-y divide-gray-200">
+        <div className="overflow-x-auto max-h-[calc(100vh-220px)] overflow-y-auto">
+          <table ref={tableRef} className="min-w-full text-sm divide-y divide-gray-200 border-separate border-spacing-0">
             {/* Header row 1: exam names spanning columns */}
-            <thead>
+            <thead className="sticky top-0 z-20 bg-gray-100 shadow-sm">
               <tr className="bg-gray-100">
-                <th rowSpan={2} className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase sticky left-0 bg-gray-100 z-10 w-10">#</th>
-                <th rowSpan={2} className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase sticky left-10 bg-gray-100 z-10 min-w-[100px]">Reg No</th>
-                <th rowSpan={2} className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase min-w-[140px]">Name</th>
+                <th rowSpan={2} className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase sticky left-0 top-0 bg-gray-100 z-30 w-10 border-b border-gray-300">#</th>
+                <th rowSpan={2} className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase sticky left-10 top-0 bg-gray-100 z-30 min-w-[100px] border-b border-gray-300">Reg No</th>
+                <th rowSpan={2} className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase sticky top-0 bg-gray-100 z-20 min-w-[140px] border-b border-gray-300">Name</th>
                 {examGroups.map(({ exam, colCount }) => (
                   <th
                     key={exam.id}
                     colSpan={colCount}
-                    className={`px-2 py-2 text-center text-xs font-semibold border-l ${String(exam.kind || 'exam').toLowerCase() === 'cqi' ? 'bg-purple-50 text-purple-800 border-purple-200' : 'text-gray-700 border-gray-300'}`}
+                    className={`px-2 py-2 text-center text-xs font-semibold border-l border-b border-gray-300 sticky top-0 ${String(exam.kind || 'exam').toLowerCase() === 'cqi' ? 'bg-purple-50 text-purple-800 border-purple-200' : 'bg-gray-100 text-gray-700'}`}
                   >
                     {exam.name}
                     <div className="text-[10px] text-gray-400 font-normal flex items-center justify-center gap-1 flex-wrap">
@@ -1320,14 +1354,14 @@ function COSummaryTab({
                 {view === 'weighted' && (
                   <>
                     {coNumbers.map((coNum) => (
-                      <th key={`co-total-h-${coNum}`} rowSpan={2} className="px-2 py-2 text-center text-xs font-semibold text-indigo-700 border-l border-indigo-200 bg-indigo-50 min-w-[60px]">
+                      <th key={`co-total-h-${coNum}`} rowSpan={2} className="px-2 py-2 text-center text-xs font-semibold text-indigo-700 border-l border-b border-indigo-200 bg-indigo-50 min-w-[60px] sticky top-0 z-20">
                         CO{coNum}<br />Total
                       </th>
                     ))}
-                    <th rowSpan={2} className="px-3 py-2 text-center text-xs font-bold text-gray-900 border-l border-gray-300 bg-green-50 min-w-[70px]">
+                    <th rowSpan={2} className="px-3 py-2 text-center text-xs font-bold text-gray-900 border-l border-b border-gray-300 bg-green-50 min-w-[70px] sticky top-0 z-20">
                       Final<br />/{computedTotalWeight}
                     </th>
-                    <th rowSpan={2} className="px-3 py-2 text-center text-xs font-bold text-purple-900 border-l border-purple-300 bg-purple-50 min-w-[70px]">
+                    <th rowSpan={2} className="px-3 py-2 text-center text-xs font-bold text-purple-900 border-l border-b border-purple-300 bg-purple-50 min-w-[70px] sticky top-0 z-20">
                       Total<br />/100
                     </th>
                   </>
@@ -1338,7 +1372,7 @@ function COSummaryTab({
                 {cols.map((col, ci) => (
                   <th
                     key={ci}
-                    className={`px-2 py-1.5 text-center text-[11px] font-medium ${col.isExamSplit || col.isCombo || String(exams[col.examIdx].kind || 'exam').toLowerCase() === 'cqi' ? 'bg-purple-50 text-purple-700' : 'text-gray-500'} ${col.co === 0 ? 'bg-gray-100 font-semibold' : ''} ${ci === 0 || exams[col.examIdx].id !== exams[cols[ci - 1]?.examIdx]?.id ? 'border-l border-gray-300' : ''}`}
+                    className={`px-2 py-1.5 text-center text-[11px] font-medium sticky top-[41px] z-20 border-b border-gray-300 ${col.isExamSplit || col.isCombo || String(exams[col.examIdx].kind || 'exam').toLowerCase() === 'cqi' ? 'bg-purple-50 text-purple-700' : 'bg-gray-50 text-gray-500'} ${col.co === 0 ? 'bg-gray-100 font-semibold' : ''} ${ci === 0 || exams[col.examIdx].id !== exams[cols[ci - 1]?.examIdx]?.id ? 'border-l border-gray-300' : ''}`}
                   >
                     {col.label}
                     <div className={`text-[10px] font-normal ${col.weightNotSet ? 'text-red-500 font-medium' : (col.isExamSplit || col.isCombo) ? 'text-purple-400' : 'text-gray-400'}`}>{col.sub}</div>

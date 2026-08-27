@@ -30,6 +30,7 @@ const CourseManagerDashboard = React.lazy(() => import('./admin/CourseManagerDas
 const StudentDashboardPage = React.lazy(() => import('./students/DashboardPage'));
 const StudentCourseListPage = React.lazy(() => import('./students/CourseListPage'));
 const StudentCourseDetailPage = React.lazy(() => import('./students/CourseDetailPage'));
+const LCAWorkflowPage = React.lazy(() => import('./faculty/LCAWorkflowPage'));
 
 export const academicV2Routes: RouteObject[] = [
   // Admin Routes - Dashboard
@@ -119,6 +120,11 @@ export const academicV2Routes: RouteObject[] = [
   {
     path: 'academic-v2/exam/:examId',
     element: <MarkEntryPage />,
+  },
+  // LCA Workflow — accessible from course page
+  {
+    path: 'academic-v2/course/:courseId/lca',
+    element: <LCAWorkflowPage />,
   },
 ];
 

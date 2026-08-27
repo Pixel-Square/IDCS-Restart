@@ -751,9 +751,44 @@ class AcV2ExamAssignment(models.Model):
         return False
 
     def get_qp_pattern(self):
-        """Get the QP pattern for this exam (from local or global)."""
+        """Get the QP pattern for this exam (from local draft, local pattern, or global)."""
+        # 1. Check draft_data user_pattern first (Mark Manager user_define mode confirmed by faculty)
+        draft = self.draft_data if isinstance(self.draft_data, dict) else {}
+        user_pattern = draft.get('user_pattern')
+        if user_pattern and isinstance(user_pattern, dict):
+            titles = user_pattern.get('titles', [])
+            marks_list = user_pattern.get('marks', [])
+            cos = user_pattern.get('cos', [])
+            btls = user_pattern.get('btls', [])
+            enabled = user_pattern.get('enabled', [])
+            if titles and isinstance(titles, list):
+                questions = []
+                for i in range(len(titles)):
+                    if i < len(enabled) and not enabled[i]:
+                        continue
+                    questions.append({
+                        'id': f'q{i}',
+                        'question_number': titles[i] if i < len(titles) else str(i + 1),
+                        'title': titles[i] if i < len(titles) else str(i + 1),
+                        'max_marks': marks_list[i] if i < len(marks_list) else 0,
+                        'btl_level': btls[i] if i < len(btls) else None,
+                        'co_number': cos[i] if i < len(cos) else 0,
+                        'enabled': True,
+                    })
+                if questions:
+                    return {'questions': questions, 'mark_manager': user_pattern.get('mark_manager')}
+
         if self.qp_pattern:
-            return self.qp_pattern
+            p = self.qp_pattern
+            if isinstance(p, dict) and p.get('questions'):
+                return p
+            # Check if mark_manager is embedded
+            mm = p.get('mark_manager') if isinstance(p, dict) else None
+            if mm and isinstance(mm, dict) and mm.get('enabled') and mm.get('cos'):
+                gen_p = self._generate_pattern_from_mark_manager(mm)
+                if gen_p:
+                    return gen_p
+            return p
         
         # Try to find from AcV2QpPattern
         qp_type = ''
@@ -781,17 +816,86 @@ class AcV2ExamAssignment(models.Model):
             else:
                 pattern = scoped.order_by('-updated_at').first()
         
-        if pattern:
-            return pattern.pattern
+        if not pattern:
+            # Fallback to global pattern
+            global_qs = base_qs.filter(class_type__isnull=True)
+            if exam_key:
+                pattern = global_qs.filter(name__iexact=exam_key).order_by('-updated_at').first()
+            else:
+                pattern = global_qs.order_by('-updated_at').first()
         
-        # Fallback to global pattern
-        global_qs = base_qs.filter(class_type__isnull=True)
-        if exam_key:
-            pattern = global_qs.filter(name__iexact=exam_key).order_by('-updated_at').first()
-        else:
-            pattern = global_qs.order_by('-updated_at').first()
-        
-        return pattern.pattern if pattern else {}
+        p = pattern.pattern if pattern and isinstance(pattern.pattern, dict) else {}
+        if isinstance(p, dict):
+            if p.get('questions'):
+                return p
+            mm = p.get('mark_manager')
+            if mm and isinstance(mm, dict) and mm.get('enabled') and mm.get('cos'):
+                gen_p = self._generate_pattern_from_mark_manager(mm)
+                if gen_p:
+                    return gen_p
+        return p
+
+    def _generate_pattern_from_mark_manager(self, mm: dict):
+        """Generate a questions list from mark manager config."""
+        if not isinstance(mm, dict):
+            return None
+        cos_cfg = mm.get('cos', {})
+        if not isinstance(cos_cfg, dict):
+            return None
+        common_item_name = str(mm.get('item_name') or 'Item').strip() or 'Item'
+        cia_label = str(mm.get('cia_label') or 'Exam').strip() or 'Exam'
+        cia_enabled = bool(mm.get('cia_enabled'))
+        cia_max_marks = float(mm.get('cia_max_marks') or 0)
+
+        questions = []
+        q_idx = 0
+
+        # CO items
+        try:
+            sorted_keys = sorted(cos_cfg.keys(), key=lambda x: int(x))
+        except Exception:
+            sorted_keys = sorted(cos_cfg.keys())
+
+        for co_k in sorted_keys:
+            c_val = cos_cfg[co_k]
+            if not isinstance(c_val, dict) or not c_val.get('enabled'):
+                continue
+            try:
+                co_num = int(co_k)
+            except Exception:
+                co_num = 1
+            num_items = int(c_val.get('num_items') or 1)
+            raw_max = float(c_val.get('max_marks') or 0)
+            # In user_define mode, max_marks in config is per-item; in admin_define, check if total or per-item
+            per_item_max = raw_max
+            for i in range(num_items):
+                questions.append({
+                    'id': f'q{q_idx}',
+                    'question_number': f'CO{co_num} - {common_item_name} {i + 1}',
+                    'title': f'CO{co_num} - {common_item_name} {i + 1}',
+                    'max_marks': per_item_max,
+                    'btl_level': None,
+                    'co_number': co_num,
+                    'enabled': True,
+                })
+                q_idx += 1
+
+        # Exam / CIA column
+        if cia_enabled and cia_max_marks > 0:
+            questions.append({
+                'id': f'q{q_idx}',
+                'question_number': cia_label,
+                'title': cia_label,
+                'max_marks': cia_max_marks,
+                'btl_level': None,
+                'co_number': 0,
+                'enabled': True,
+            })
+            q_idx += 1
+
+        if questions:
+            return {'questions': questions, 'mark_manager': mm}
+        return None
 
 
 # ============================================================================
@@ -1762,6 +1866,56 @@ class AcV2CqiAttained(models.Model):
 
     def __str__(self):
         return f"CQI Attained - TA {getattr(self.teaching_assignment, 'id', '')}"
+
+
+class AcV2CoAttainment(models.Model):
+    """
+    CO Attainment table storing calculated attainment records,
+    column configurations, calculated column values per student,
+    and class averages per column for the course section.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    teaching_assignment = models.OneToOneField(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        related_name='acv2_co_attainment',
+    )
+
+    # Number of COs and list of CO numbers, e.g. [1, 2, 3, 4, 5]
+    co_numbers = models.JSONField(default=list, blank=True)
+
+    # Configured column definitions (subColumns schema with show_avg flags, formulas, kinds)
+    columns_config = models.JSONField(default=list, blank=True)
+
+    # Calculated column averages per CO & column:
+    # { "1": { "col_id": 42.5 }, "2": { ... } }
+    column_averages = models.JSONField(default=dict, blank=True)
+
+    # Full student-level calculated values:
+    # { "<student_id>": { "co1": { "col_id": value, "total": value }, "co2": { ... } } }
+    student_values = models.JSONField(default=dict, blank=True)
+
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='acv2_co_attainments_updated',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_co_attainment'
+        verbose_name = 'CO Attainment'
+        verbose_name_plural = 'CO Attainments'
+        indexes = [
+            models.Index(fields=['updated_at']),
+        ]
+
+    def __str__(self):
+        return f"CO Attainment - TA {getattr(self.teaching_assignment, 'id', '')}"
 
 
 class AcV2CqiEditRequest(models.Model):
