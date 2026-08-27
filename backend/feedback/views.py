@@ -294,14 +294,28 @@ def calculate_feedback_response_metrics(feedback_form):
                     if feedback_form.years:
                         year_filters = Q()
                         for year in feedback_form.years:
-                            if current_acad_year:
-                                batch_start_year = current_acad_year - year + 1
-                                year_filters |= Q(section__batch__start_year=batch_start_year)
+                            try:
+                                year_val = int(year)
+                                sem_nums = [2 * year_val - 1, 2 * year_val]
+                                current_year_filter = Q(section__semester__number__in=sem_nums)
+                                if current_acad_year:
+                                    batch_start_year = current_acad_year - year_val + 1
+                                    current_year_filter |= Q(section__batch__start_year=batch_start_year)
+                                year_filters |= current_year_filter
+                            except Exception:
+                                continue
                         student_filters &= year_filters
                     elif feedback_form.year:
-                        if current_acad_year:
-                            batch_start_year = current_acad_year - feedback_form.year + 1
-                            student_filters &= Q(section__batch__start_year=batch_start_year)
+                        try:
+                            year_val = int(feedback_form.year)
+                            sem_nums = [2 * year_val - 1, 2 * year_val]
+                            current_year_filter = Q(section__semester__number__in=sem_nums)
+                            if current_acad_year:
+                                batch_start_year = current_acad_year - year_val + 1
+                                current_year_filter |= Q(section__batch__start_year=batch_start_year)
+                            student_filters &= current_year_filter
+                        except Exception:
+                            pass
 
                     if feedback_form.semesters:
                         student_filters &= Q(section__semester_id__in=feedback_form.semesters)
@@ -315,14 +329,28 @@ def calculate_feedback_response_metrics(feedback_form):
                     if feedback_form.years:
                         year_filters = Q()
                         for year in feedback_form.years:
-                            if current_acad_year:
-                                batch_start_year = current_acad_year - year + 1
-                                year_filters |= Q(batch__start_year=batch_start_year)
+                            try:
+                                year_val = int(year)
+                                sem_nums = [2 * year_val - 1, 2 * year_val]
+                                current_year_filter = Q(semester__number__in=sem_nums)
+                                if current_acad_year:
+                                    batch_start_year = current_acad_year - year_val + 1
+                                    current_year_filter |= Q(batch__start_year=batch_start_year)
+                                year_filters |= current_year_filter
+                            except Exception:
+                                continue
                         sections_filter &= year_filters
                     elif feedback_form.year:
-                        if current_acad_year:
-                            batch_start_year = current_acad_year - feedback_form.year + 1
-                            sections_filter &= Q(batch__start_year=batch_start_year)
+                        try:
+                            year_val = int(feedback_form.year)
+                            sem_nums = [2 * year_val - 1, 2 * year_val]
+                            current_year_filter = Q(semester__number__in=sem_nums)
+                            if current_acad_year:
+                                batch_start_year = current_acad_year - year_val + 1
+                                current_year_filter |= Q(batch__start_year=batch_start_year)
+                            sections_filter &= current_year_filter
+                        except Exception:
+                            pass
 
                     if feedback_form.semesters:
                         sections_filter &= Q(semester_id__in=feedback_form.semesters)
@@ -2291,19 +2319,38 @@ class GetResponseListView(APIView):
                         # Use form's department for sections query (skip dept filter for Year-1)
                         sections_filter = Q()
                         if not is_year1_target:
-                            sections_filter = Q(batch__course__department_id=form_department)
+                            sections_filter = Q(
+                                Q(batch__course__department_id=form_department) |
+                                Q(batch__department_id=form_department)
+                            )
                         
                         if feedback_form.years:
                             year_filters = Q()
                             for year in feedback_form.years:
-                                if current_acad_year:
-                                    batch_start_year = current_acad_year - year + 1
-                                    year_filters |= Q(batch__start_year=batch_start_year)
+                                try:
+                                    year_val = int(year)
+                                    sem_nums = [2 * year_val - 1, 2 * year_val]
+                                    current_year_filter = Q(semester__number__in=sem_nums)
+                                    if current_acad_year:
+                                        batch_start_year = current_acad_year - year_val + 1
+                                        current_year_filter |= Q(batch__start_year=batch_start_year)
+                                        current_year_filter |= Q(batch__name__startswith=str(batch_start_year))
+                                    year_filters |= current_year_filter
+                                except Exception:
+                                    continue
                             sections_filter &= year_filters
                         elif feedback_form.year:
-                            if current_acad_year:
-                                batch_start_year = current_acad_year - feedback_form.year + 1
-                                sections_filter &= Q(batch__start_year=batch_start_year)
+                            try:
+                                year_val = int(feedback_form.year)
+                                sem_nums = [2 * year_val - 1, 2 * year_val]
+                                current_year_filter = Q(semester__number__in=sem_nums)
+                                if current_acad_year:
+                                    batch_start_year = current_acad_year - year_val + 1
+                                    current_year_filter |= Q(batch__start_year=batch_start_year)
+                                    current_year_filter |= Q(batch__name__startswith=str(batch_start_year))
+                                sections_filter &= current_year_filter
+                            except Exception:
+                                pass
                         
                         if feedback_form.semesters:
                             sections_filter &= Q(semester_id__in=feedback_form.semesters)
@@ -2315,7 +2362,14 @@ class GetResponseListView(APIView):
                     
                     if sections_to_query:
                         expected_qs = User.objects.filter(
-                            student_profile__section_id__in=sections_to_query
+                            is_active=True,
+                            student_profile__status='ACTIVE',
+                        ).filter(
+                            Q(student_profile__section_id__in=sections_to_query) |
+                            Q(
+                                student_profile__section_assignments__end_date__isnull=True,
+                                student_profile__section_assignments__section_id__in=sections_to_query,
+                            )
                         )
                         if is_year1_target:
                             expected_qs = expected_qs.filter(
@@ -2496,9 +2550,21 @@ class GetStudentSubjectsView(APIView):
             
             batch = effective_section.batch or section.batch
             student_year = None
+            try:
+                sem_num = getattr(getattr(effective_section, 'semester', None), 'number', None)
+                if sem_num is not None:
+                    if sem_num in (1, 2):
+                        student_year = 1
+                    elif sem_num in (3, 4):
+                        student_year = 2
+                    elif sem_num in (5, 6):
+                        student_year = 3
+                    elif sem_num in (7, 8):
+                        student_year = 4
+            except Exception:
+                pass
             
-            # Calculate year from batch
-            if batch and batch.start_year:
+            if not student_year and batch and batch.start_year:
                 current_ay = AcademicYear.objects.filter(is_active=True).first()
                 if current_ay:
                     try:
@@ -3550,6 +3616,7 @@ class GetSubjectsByYearView(APIView):
                 }, status=status.HTTP_400_BAD_REQUEST)
             
             # Calculate batch start years for all given years
+            batch_start_years = []
             try:
                 acad_start = int(str(current_ay.name).split('-')[0])
                 batch_start_years = [acad_start - year + 1 for year in years]
@@ -3557,14 +3624,15 @@ class GetSubjectsByYearView(APIView):
                 print(f"[GetSubjectsByYearView] Requested years: {years}, calculated batch_start_years: {batch_start_years}")
             except Exception as e:
                 print(f"[GetSubjectsByYearView] Error calculating batch years: {str(e)}")
-                return Response({
-                    'detail': 'Error calculating batch years.'
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             
-            # Build filters for sections (multiple batch start years)
-            section_filters = Q(
-                batch__start_year__in=batch_start_years
-            )
+            # Build filters for sections (multiple batch start years or semesters)
+            sem_nums = []
+            for year in years:
+                sem_nums.extend([2 * year - 1, 2 * year])
+            
+            section_filters = Q(semester__number__in=sem_nums)
+            if batch_start_years:
+                section_filters |= Q(batch__start_year__in=batch_start_years)
             
             # Filter by department if provided
             if department_id:
@@ -3599,7 +3667,19 @@ class GetSubjectsByYearView(APIView):
             
             if sections.exists():
                 for section in sections:
-                    if section.batch and section.batch.start_year:
+                    # Try semester-based mapping first
+                    matched = False
+                    try:
+                        sem_num = getattr(getattr(section, 'semester', None), 'number', None)
+                        if sem_num is not None:
+                            year_val = (sem_num + 1) // 2
+                            if year_val in years:
+                                section_to_year[section.id] = year_val
+                                matched = True
+                    except Exception:
+                        pass
+                    
+                    if not matched and section.batch and section.batch.start_year:
                         # Calculate which year this section belongs to
                         for year in years:
                             expected_start = acad_start - year + 1
@@ -4470,15 +4550,34 @@ class IQACCommonExportView(APIView):
                             student_dept_id = student_profile.section.batch.course.department.id
                         
                         # Calculate year and get section
-                        if student_profile.section and current_acad_year:
+                        if student_profile.section:
                             section_name = student_profile.section.name or ""
                             batch = student_profile.section.batch
-                            if batch and batch.start_year:
+                            calculated_year = None
+                            try:
+                                sem_num = getattr(getattr(student_profile.section, 'semester', None), 'number', None)
+                                if sem_num is not None:
+                                    if sem_num in (1, 2):
+                                        calculated_year = 1
+                                    elif sem_num in (3, 4):
+                                        calculated_year = 2
+                                    elif sem_num in (5, 6):
+                                        calculated_year = 3
+                                    elif sem_num in (7, 8):
+                                        calculated_year = 4
+                            except Exception:
+                                pass
+
+                            if calculated_year is None and batch and batch.start_year and current_acad_year:
                                 try:
                                     calculated_year = current_acad_year - int(batch.start_year) + 1
-                                    year_section = f"{calculated_year} / {section_name}"
-                                except:
-                                    year_section = f"/ {section_name}"
+                                except Exception:
+                                    pass
+
+                            if calculated_year:
+                                year_section = f"{calculated_year} / {section_name}"
+                            else:
+                                year_section = f"/ {section_name}"
                     except (AttributeError, StudentProfile.DoesNotExist):
                         pass
                 
@@ -4885,10 +4984,12 @@ class NonRespondersExportView(APIView):
                     current_acad_year = None
 
             def _student_year_from_section(section):
-                if not section or not current_acad_year:
-                    # Fallback to semester-based mapping when batch year is unavailable.
-                    try:
-                        sem_num = getattr(getattr(section, 'semester', None), 'number', None)
+                if not section:
+                    return None
+                # Prioritize semester-based mapping as the primary source of truth
+                try:
+                    sem_num = getattr(getattr(section, 'semester', None), 'number', None)
+                    if sem_num is not None:
                         if sem_num in (1, 2):
                             return 1
                         if sem_num in (3, 4):
@@ -4897,8 +4998,10 @@ class NonRespondersExportView(APIView):
                             return 3
                         if sem_num in (7, 8):
                             return 4
-                    except Exception:
-                        return None
+                except Exception:
+                    pass
+
+                if not current_acad_year:
                     return None
                 try:
                     batch = getattr(section, 'batch', None)
@@ -4909,19 +5012,6 @@ class NonRespondersExportView(APIView):
                         except Exception:
                             start_year = None
                     if not start_year:
-                        # Fallback to semester-based mapping when batch year is missing.
-                        try:
-                            sem_num = getattr(getattr(section, 'semester', None), 'number', None)
-                            if sem_num in (1, 2):
-                                return 1
-                            if sem_num in (3, 4):
-                                return 2
-                            if sem_num in (5, 6):
-                                return 3
-                            if sem_num in (7, 8):
-                                return 4
-                        except Exception:
-                            return None
                         return None
                     derived_year = int(current_acad_year) - int(start_year) + 1
                     # For S&H Year-1 sections, prefer semester mapping over batch start year.
@@ -4972,24 +5062,13 @@ class NonRespondersExportView(APIView):
                 if form.year == 1:
                     is_year1_form = True
 
-                # Determine responded users per form using submission tracker first.
-                # This avoids counting partial/incomplete responses as submitted.
+                # Determine responded users per form directly from FeedbackResponse.
                 responded_user_ids = set(
-                    FeedbackFormSubmission.objects.filter(
-                        feedback_form=form,
-                        submission_status='SUBMITTED',
+                    FeedbackResponse.objects.filter(
+                        feedback_form=form
                     ).values_list('user_id', flat=True)
+                    .distinct()
                 )
-                if not responded_user_ids:
-                    # Backward-compatible fallback for legacy data without submission rows.
-                    responded_user_ids = set(
-                        FeedbackResponse.objects.filter(
-                            feedback_form=form,
-                            feedback_form__status='ACTIVE',
-                            feedback_form__active=True
-                        ).values_list('user_id', flat=True)
-                        .distinct()
-                    )
 
                 expected_qs = User.objects.none()
 
@@ -5033,19 +5112,29 @@ class NonRespondersExportView(APIView):
                         if form.years:
                             year_filters = Q()
                             for year in form.years:
-                                if current_acad_year:
-                                    try:
-                                        batch_start_year = int(current_acad_year) - int(year) + 1
-                                        year_filters |= Q(batch__start_year=batch_start_year)
-                                        year_filters |= Q(batch__name__startswith=str(batch_start_year))
-                                    except Exception:
-                                        continue
+                                try:
+                                    year_val = int(year)
+                                    sem_nums = [2 * year_val - 1, 2 * year_val]
+                                    current_year_filter = Q(semester__number__in=sem_nums)
+                                    if current_acad_year:
+                                        batch_start_year = int(current_acad_year) - year_val + 1
+                                        current_year_filter |= Q(batch__start_year=batch_start_year)
+                                        current_year_filter |= Q(batch__name__startswith=str(batch_start_year))
+                                    year_filters |= current_year_filter
+                                except Exception:
+                                    continue
                             if year_filters:
                                 sections_filter &= year_filters
-                        elif form.year and current_acad_year:
+                        elif form.year:
                             try:
-                                batch_start_year = int(current_acad_year) - int(form.year) + 1
-                                sections_filter &= (Q(batch__start_year=batch_start_year) | Q(batch__name__startswith=str(batch_start_year)))
+                                year_val = int(form.year)
+                                sem_nums = [2 * year_val - 1, 2 * year_val]
+                                current_year_filter = Q(semester__number__in=sem_nums)
+                                if current_acad_year:
+                                    batch_start_year = int(current_acad_year) - year_val + 1
+                                    current_year_filter |= Q(batch__start_year=batch_start_year)
+                                    current_year_filter |= Q(batch__name__startswith=str(batch_start_year))
+                                sections_filter &= current_year_filter
                             except Exception:
                                 pass
 
@@ -5062,7 +5151,12 @@ class NonRespondersExportView(APIView):
                         expected_qs = User.objects.filter(
                             is_active=True,
                             student_profile__status='ACTIVE',
-                            student_profile__section_id__in=sections_to_query,
+                        ).filter(
+                            Q(student_profile__section_id__in=sections_to_query) |
+                            Q(
+                                student_profile__section_assignments__end_date__isnull=True,
+                                student_profile__section_assignments__section_id__in=sections_to_query,
+                            )
                         )
                         # For Year-1 dept-based forms, restrict to core dept mapping
                         if is_year1_form:
@@ -5126,19 +5220,22 @@ class NonRespondersExportView(APIView):
                     if is_year1_form:
                         # For Year-1 dept forms, include all matching students regardless of derived year.
                         student_year = 1
-                    if years and (student_year is None or int(student_year) not in years):
-                        # Fallback: allow year filtering based on form targeting when year is unknown
-                        form_years = []
-                        if form.years:
-                            form_years = [int(y) for y in form.years if str(y).strip()]
-                        elif form.year:
-                            form_years = [int(form.year)]
-
-                        if form_years and any(y in years for y in form_years):
-                            if student_year is None and len(form_years) == 1:
-                                student_year = form_years[0]
+                    if years:
+                        if student_year is not None:
+                            if int(student_year) not in years:
+                                continue
                         else:
-                            continue
+                            # Fallback: allow year filtering based on form targeting when year is unknown
+                            form_years = []
+                            if form.years:
+                                form_years = [int(y) for y in form.years if str(y).strip()]
+                            elif form.year:
+                                form_years = [int(form.year)]
+
+                            if form_years and len(form_years) == 1 and form_years[0] in years:
+                                student_year = form_years[0]
+                            else:
+                                continue
 
                     section_name = ''
                     if getattr(student_profile, 'section', None):
@@ -5464,15 +5561,34 @@ class FormExportExcelView(APIView):
                             department_name = student_profile.section.batch.course.department.name or ""
                         
                         # Calculate year and get section
-                        if student_profile.section and current_acad_year:
+                        if student_profile.section:
                             section_name = student_profile.section.name or ""
                             batch = student_profile.section.batch
-                            if batch and batch.start_year:
+                            calculated_year = None
+                            try:
+                                sem_num = getattr(getattr(student_profile.section, 'semester', None), 'number', None)
+                                if sem_num is not None:
+                                    if sem_num in (1, 2):
+                                        calculated_year = 1
+                                    elif sem_num in (3, 4):
+                                        calculated_year = 2
+                                    elif sem_num in (5, 6):
+                                        calculated_year = 3
+                                    elif sem_num in (7, 8):
+                                        calculated_year = 4
+                            except Exception:
+                                pass
+
+                            if calculated_year is None and batch and batch.start_year and current_acad_year:
                                 try:
                                     calculated_year = current_acad_year - int(batch.start_year) + 1
-                                    year_section = f"{calculated_year} / {section_name}"
-                                except:
-                                    year_section = f"/ {section_name}"
+                                except Exception:
+                                    pass
+
+                            if calculated_year:
+                                year_section = f"{calculated_year} / {section_name}"
+                            else:
+                                year_section = f"/ {section_name}"
                     except (AttributeError, StudentProfile.DoesNotExist):
                         pass
                 

@@ -52,7 +52,7 @@ export interface WorkflowStep {
   is_current: boolean;
   is_completed: boolean;
   status: 'approved' | 'rejected' | null;
-  approver: { id: number; name: string; username: string } | null;
+  approver: { id: number; full_name: string; username: string } | null;
   comments: string | null;
   action_date: string | null;
 }
@@ -62,7 +62,7 @@ export interface ApprovalLogEntry {
   step_order: number;
   action: 'approved' | 'rejected';
   comments: string;
-  approver: { id: number; name: string; username: string };
+  approver: { id: number; full_name: string; username: string };
   action_date: string;
 }
 

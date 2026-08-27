@@ -156,6 +156,8 @@ export interface EventAnalyticsRow {
   department: string;
   od_type: string;
   grand_total: number;
+  status: 'approved' | 'pending' | 'rejected';
+  updated_at: string;
   approved_at: string;
 }
 

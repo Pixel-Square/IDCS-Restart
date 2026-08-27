@@ -6,7 +6,7 @@ import { getActiveTemplates } from '../../../services/staffRequests';
 import type { RequestTemplate } from '../../../types/staffRequests';
 import DynamicFormRenderer from '../DynamicFormRenderer';
 import ImageCropperModal from '../../../components/ImageCropperModal';
-import { ChevronDown, ChevronUp, Plus, Trash2, Upload, CheckCircle, AlertTriangle, FileText, Link2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, Plus, Trash2, Upload, CheckCircle, AlertTriangle, FileText, Link2, X, PartyPopper } from 'lucide-react';
 
 interface Props {
   odForms: ApprovedODForm[];
@@ -143,7 +143,7 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
   const [orientations, setOrientations] = useState<Record<string, 'portrait' | 'landscape'>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
 
   const [activeCropperFile, setActiveCropperFile] = useState<File | null>(null);
   const [activeCropperKey, setActiveCropperKey] = useState<string | null>(null);
@@ -227,7 +227,7 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
       return;
     }
 
-    setError(''); setSuccess(''); setSubmitting(true);
+    setError(''); setSubmitting(true);
     try {
       const fd = new FormData();
       if (formMode === 'od') {
@@ -256,7 +256,7 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
       });
       
       await submitEventForm(fd);
-      setSuccess('Event Attending form submitted successfully!');
+      setShowSuccessModal(true);
       setSelectedOD(null);
       setOdClaim('yes');
       setEventDetails({});
@@ -558,7 +558,6 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
           </div>
 
           {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex gap-2"><AlertTriangle size={18} /> {error}</div>}
-          {success && <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm flex gap-2"><CheckCircle size={18} /> {success}</div>}
 
           <button onClick={handleSubmit} disabled={submitting} className="w-full py-3 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors shadow-md">
             {submitting ? 'Submitting...' : 'Submit Event Attending Form'}
@@ -574,6 +573,58 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
           onSave={handleCropperSave}
         />
       )}
+
+      {showSuccessModal && (
+        <SubmissionSuccessModal onClose={() => setShowSuccessModal(false)} />
+      )}
+    </div>
+  );
+}
+
+function SubmissionSuccessModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden relative">
+        {/* Green top accent */}
+        <div className="h-2 bg-gradient-to-r from-emerald-400 to-green-500" />
+
+        <div className="p-8 flex flex-col items-center text-center">
+          {/* Animated checkmark */}
+          <div className="relative w-20 h-20 mb-5">
+            <div className="absolute inset-0 rounded-full bg-emerald-100 animate-ping opacity-40" />
+            <div className="relative flex items-center justify-center w-20 h-20 rounded-full bg-emerald-50 border-4 border-emerald-200">
+              <CheckCircle size={40} className="text-emerald-500" />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 mb-2">
+            <PartyPopper size={20} className="text-amber-500" />
+            <h2 className="text-2xl font-black text-gray-900">Form Submitted!</h2>
+            <PartyPopper size={20} className="text-amber-500" />
+          </div>
+          <p className="text-gray-500 text-sm leading-relaxed mb-2">
+            Your Event Attending form has been submitted successfully.
+          </p>
+          <p className="text-xs text-gray-400 bg-gray-50 rounded-lg px-4 py-2 mb-6">
+            Your form is now pending approval. You will be notified once it is reviewed.
+          </p>
+
+          <button
+            onClick={onClose}
+            className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl transition-colors shadow-md text-sm"
+          >
+            Great, Continue
+          </button>
+        </div>
+
+        {/* Close icon */}
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+        >
+          <X size={18} />
+        </button>
+      </div>
     </div>
   );
 }

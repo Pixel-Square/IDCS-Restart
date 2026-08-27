@@ -5,6 +5,7 @@
 
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { PDFDocument } from 'pdf-lib';
 import type { StaffRequest } from '../../../types/staffRequests';
 
 const INSTITUTION = 'K RAMAKRISHNAN GROUP OF INSTITUTIONS';
@@ -44,6 +45,199 @@ async function loadImageBase64(src: string): Promise<string | null> {
     });
   } catch {
     return null;
+  }
+}
+
+async function fetchFileAsData(url: string): Promise<{ buffer: ArrayBuffer; base64: string; mimeType: string } | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    let mimeType = res.headers.get('content-type') || '';
+    if (url.toLowerCase().endsWith('.pdf')) mimeType = 'application/pdf';
+    else if (url.toLowerCase().endsWith('.png')) mimeType = 'image/png';
+    else if (url.toLowerCase().endsWith('.jpg') || url.toLowerCase().endsWith('.jpeg')) mimeType = 'image/jpeg';
+    
+    const buffer = await res.arrayBuffer();
+    
+    let base64 = '';
+    if (mimeType.startsWith('image/')) {
+      const uint8Array = new Uint8Array(buffer);
+      let binary = '';
+      for (let i = 0; i < uint8Array.byteLength; i++) {
+        binary += String.fromCharCode(uint8Array[i]);
+      }
+      base64 = `data:${mimeType};base64,${btoa(binary)}`;
+    }
+    
+    return { buffer, base64, mimeType };
+  } catch (err) {
+    console.error('Error fetching file', err);
+    return null;
+  }
+}
+
+export interface PdfDrawOp {
+  pageIndex: number;
+  buffer: ArrayBuffer;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+async function drawProofBlock(
+  doc: jsPDF,
+  file: any,
+  logoLeftBase64: string | null,
+  logoRightBase64: string | null,
+  startX: number,
+  startY: number,
+  blockWidth: number,
+  blockHeight: number,
+  pdfDrawOps: PdfDrawOp[],
+  hideLogos: boolean = false
+) {
+  let textY = startY + 14;
+
+  if (!hideLogos) {
+    if (logoLeftBase64) {
+      try { doc.addImage(logoLeftBase64, 'PNG', startX + 10, startY + 8, 55, 15); } catch { }
+    }
+    if (logoRightBase64) {
+      try { doc.addImage(logoRightBase64, 'PNG', startX + blockWidth - 25, startY + 8, 12, 12); } catch { }
+    }
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(0, 0, 0);
+    doc.text('ON DUTY SETTLEMENT', startX + (blockWidth / 2), startY + 14, { align: 'center' });
+    textY = startY + 20;
+  }
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  const expTypeLabel = (file.expense_type || 'Proof').toUpperCase();
+  doc.text(`Proof Document - ${expTypeLabel}`, startX + (blockWidth / 2), textY, { align: 'center' });
+  doc.text(`File: ${file.original_filename || 'attachment'}`, startX + (blockWidth / 2), textY + 6, { align: 'center' });
+
+  doc.setDrawColor(60, 60, 60);
+  doc.setLineWidth(0.4);
+  doc.line(startX + 10, textY + 10, startX + blockWidth - 10, textY + 10);
+  
+  const headerSpace = textY + 13 - startY;
+
+  const fetched = await fetchFileAsData(file.file_url!);
+  if (!fetched) {
+    doc.setFontSize(10);
+    doc.setTextColor(180, 0, 0);
+    doc.text('(File could not be loaded)', startX + (blockWidth / 2), startY + (blockHeight / 2), { align: 'center' });
+    doc.setTextColor(0, 0, 0);
+    return;
+  }
+
+  const mime = fetched.mimeType.toLowerCase();
+
+  if (mime.startsWith('image/')) {
+    const imgType = mime.includes('png') ? 'PNG' : 'JPEG';
+    const maxImgW = blockWidth - 20;
+    const maxImgH = blockHeight - 40;
+    try {
+      const props = doc.getImageProperties(fetched.data);
+      let imgW = props.width;
+      let imgH = props.height;
+      let angle = 0;
+      let drawX, drawY, dw, dh;
+
+      if (maxImgW > maxImgH && imgH > imgW) {
+        angle = -90;
+        const ratio = Math.min(maxImgW / imgH, maxImgH / imgW);
+        dw = imgW * ratio;
+        dh = imgH * ratio;
+        drawX = startX + (blockWidth - dh) / 2;
+        drawY = startY + headerSpace + 3 + (maxImgH - dw) / 2 + dw;
+      } else {
+        const ratio = Math.min(maxImgW / imgW, maxImgH / imgH);
+        dw = imgW * ratio;
+        dh = imgH * ratio;
+        drawX = startX + (blockWidth - dw) / 2;
+        drawY = startY + headerSpace + 3 + (maxImgH - dh) / 2;
+      }
+      
+      doc.addImage(fetched.base64, imgType, drawX, drawY, dw, dh, undefined, 'FAST', angle);
+    } catch {
+      doc.addImage(fetched.base64, imgType, startX + 10, startY + headerSpace + 3, maxImgW, maxImgH);
+    }
+  } else if (mime === 'application/pdf') {
+    const pageIndex = (doc as any).internal.getNumberOfPages() - 1;
+    const maxImgW = blockWidth - 20;
+    const maxImgH = blockHeight - 40;
+    const drawX = startX + 10;
+    const drawY = startY + headerSpace + 3;
+
+    pdfDrawOps.push({
+        pageIndex,
+        buffer: fetched.buffer,
+        x: drawX,
+        y: drawY,
+        width: maxImgW,
+        height: maxImgH,
+    });
+  } else {
+    doc.setFontSize(9);
+    doc.setTextColor(60, 60, 60);
+    doc.text(`(Unsupported file type: ${mime})`, startX + (blockWidth / 2), startY + (blockHeight / 2), { align: 'center' });
+    doc.setTextColor(0, 0, 0);
+  }
+}
+
+async function buildODProofPages(
+  doc: jsPDF,
+  proofFiles: any[],
+  logoLeftBase64: string | null,
+  logoRightBase64: string | null,
+  layout: { signatureStartY: number, availableTopY: number },
+  pdfDrawOps: PdfDrawOp[]
+) {
+  if (!proofFiles.length) return;
+
+  const portraitFiles = proofFiles.filter(f => f.orientation !== 'landscape');
+  const landscapeFiles = proofFiles.filter(f => f.orientation === 'landscape');
+
+  const W = doc.internal.pageSize.getWidth();
+  const H = doc.internal.pageSize.getHeight();
+  const spaceLeft = H - 15 - layout.availableTopY;
+  const halfH = H / 2;
+
+  let i_landscape = 0;
+
+  if (landscapeFiles.length > 0 && spaceLeft >= halfH - 5) {
+    const file = landscapeFiles[0];
+    
+    doc.setDrawColor(200, 200, 200);
+    doc.setLineWidth(0.2);
+    doc.line(10, layout.availableTopY, W - 10, layout.availableTopY);
+    await drawProofBlock(doc, file, logoLeftBase64, logoRightBase64, 0, layout.availableTopY, W, halfH - 14, pdfDrawOps, true);
+    i_landscape = 1;
+  }
+
+  for (let i = 0; i < portraitFiles.length; i++) {
+    doc.addPage('a4', 'portrait');
+    await drawProofBlock(doc, portraitFiles[i], logoLeftBase64, logoRightBase64, 0, 0, W, H - 14, pdfDrawOps);
+  }
+
+  for (let i = i_landscape; i < landscapeFiles.length; i += 2) {
+    doc.addPage('a4', 'portrait');
+    const file1 = landscapeFiles[i];
+    const file2 = landscapeFiles[i + 1];
+    
+    await drawProofBlock(doc, file1, logoLeftBase64, logoRightBase64, 0, 0, W, halfH, pdfDrawOps);
+    
+    if (file2) {
+      doc.setDrawColor(200, 200, 200);
+      doc.setLineWidth(0.2);
+      doc.line(10, halfH, W - 10, halfH);
+      await drawProofBlock(doc, file2, logoLeftBase64, logoRightBase64, 0, halfH, W, halfH - 14, pdfDrawOps, true);
+    }
   }
 }
 
@@ -274,6 +468,15 @@ function buildMainContent(
   
   curY = ((doc as any).lastAutoTable?.finalY ?? curY + 30) + 15;
   
+  const H = doc.internal.pageSize.getHeight();
+  const signatureHeight = 40;
+  if (curY + signatureHeight > H - 15) {
+      doc.addPage();
+      curY = 20;
+  }
+  
+  const signatureStartY = curY;
+  
   // ── First Signature Block (Faculty and HOD) ─────────
   const getSigData = (role: string) => {
       if (role === 'Faculty') {
@@ -331,13 +534,12 @@ function buildMainContent(
     });
   }
 
-  drawHorizSigRow(['Faculty', 'HOD', 'HAA'], curY);
-  curY += 25;
+  drawHorizSigRow(['Faculty', 'HOD', 'HAA'], signatureStartY + 12);
   
   // ── Second Signature Block (CFFA, IQAC, Principal) ─────────
-  drawHorizSigRow(['CFFA', 'IQAC', 'Principal'], curY);
+  drawHorizSigRow(['CFFA', 'IQAC', 'Principal'], signatureStartY + 37);
   
-  return { signatureStartY: curY, availableTopY: curY };
+  return { signatureStartY, availableTopY: signatureStartY + 50 };
 }
 
 export async function generateODPdf(form: StaffRequest): Promise<void> {
@@ -346,7 +548,71 @@ export async function generateODPdf(form: StaffRequest): Promise<void> {
   const logoLeftBase64 = await loadImageBase64(LOGO_LEFT);
   const logoRightBase64 = await loadImageBase64(LOGO_RIGHT);
 
-  buildMainContent(doc, form, logoLeftBase64, logoRightBase64);
+  const layout = buildMainContent(doc, form, logoLeftBase64, logoRightBase64);
+
+  const proofFiles: any[] = [];
+  const rawData = form.form_data || {};
+  const schema: Array<any> = form.template?.form_schema || [];
+  
+  const extractSchemaFiles = (fields: any[]) => {
+    fields.forEach(f => {
+      let val = rawData[f.name];
+      if (Array.isArray(val) && val.length > 0) val = val[0];
+
+      if (f.type === 'file' && val) {
+        if (typeof val === 'string') {
+          let url = val;
+          if (!url.startsWith('http') && !url.startsWith('/') && !url.startsWith('data:')) url = `/media/${url}`;
+          proofFiles.push({
+            file_url: url,
+            original_filename: url.split('/').pop() || f.label || f.name,
+            expense_type: f.label || f.name.replace(/_/g, ' '),
+            orientation: 'portrait'
+          });
+        } else if (typeof val === 'object' && val.content) {
+          proofFiles.push({
+            file_url: val.content,
+            original_filename: val.filename || f.label || f.name,
+            expense_type: f.label || f.name.replace(/_/g, ' '),
+            orientation: 'portrait'
+          });
+        }
+      }
+      if (f.can_change_form_fields && f.conditional_fields && val) {
+        const children = f.conditional_fields[String(val)] || [];
+        extractSchemaFiles(children);
+      }
+    });
+  };
+  extractSchemaFiles(schema);
+
+  Object.entries(rawData).forEach(([k, v]) => {
+    if (typeof v === 'string' && (v.includes('/media/') || v.startsWith('http') || v.startsWith('data:')) && k.toLowerCase().includes('proof')) {
+      const exists = proofFiles.some(p => p.file_url === v);
+      if (!exists) {
+        proofFiles.push({
+          file_url: v,
+          original_filename: v.split('/').pop() || k,
+          expense_type: k.replace(/_/g, ' '),
+          orientation: 'portrait'
+        });
+      }
+    } else if (typeof v === 'object' && v && (v as any).content && (v as any).content.startsWith('data:') && k.toLowerCase().includes('proof')) {
+      const content = (v as any).content;
+      const exists = proofFiles.some(p => p.file_url === content);
+      if (!exists) {
+        proofFiles.push({
+          file_url: content,
+          original_filename: (v as any).filename || k,
+          expense_type: k.replace(/_/g, ' '),
+          orientation: 'portrait'
+        });
+      }
+    }
+  });
+
+  const pdfDrawOps: PdfDrawOp[] = [];
+  await buildODProofPages(doc, proofFiles, logoLeftBase64, logoRightBase64, layout, pdfDrawOps);
 
   const totalPages = (doc as any).internal.getNumberOfPages();
   const downloadDateStr = `Downloaded: ${new Date().toLocaleString('en-IN')}`;
@@ -377,5 +643,55 @@ export async function generateODPdf(form: StaffRequest): Promise<void> {
     /[^a-zA-Z0-9\-_]/g,
     '_',
   );
+
+  if (pdfDrawOps.length > 0) {
+    try {
+      const mainPdfBytes = doc.output('arraybuffer');
+      const mergedPdf = await PDFDocument.load(mainPdfBytes);
+      const allPages = mergedPdf.getPages();
+      
+      for (const op of pdfDrawOps) {
+          try {
+              const pdfToEmbed = await PDFDocument.load(op.buffer);
+              const [embeddedPage] = await mergedPdf.embedPdf(pdfToEmbed, [0]);
+              
+              const page = allPages[op.pageIndex];
+              const pageHeight = page.getSize().height;
+              
+              const pt = 2.83465;
+              const boxX = op.x * pt;
+              const boxY = op.y * pt;
+              const boxW = op.width * pt;
+              const boxH = op.height * pt;
+              
+              const scale = Math.min(boxW / embeddedPage.width, boxH / embeddedPage.height);
+              const drawW = embeddedPage.width * scale;
+              const drawH = embeddedPage.height * scale;
+              
+              const finalX = boxX + (boxW - drawW) / 2;
+              const finalY = pageHeight - boxY - boxH + (boxH - drawH) / 2;
+              
+              page.drawPage(embeddedPage, { x: finalX, y: finalY, width: drawW, height: drawH });
+          } catch (err) {
+              console.error('Failed to embed a PDF proof', err);
+          }
+      }
+      
+      const finalPdfBytes = await mergedPdf.save();
+      const blob = new Blob([finalPdfBytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${eventTitle}_participation_approval.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      return;
+    } catch (err) {
+      console.error('Error embedding PDFs with pdf-lib, falling back to basic jsPDF', err);
+    }
+  }
+
   doc.save(`${eventTitle}_participation_approval.pdf`);
 }

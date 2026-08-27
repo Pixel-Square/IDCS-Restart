@@ -1,7 +1,15 @@
 from django.contrib import admin
 from django.utils.html import format_html
 
-from .models import AuditATR, AuditCycle, AuditDepartmentAssignment, AuditQuestion, AuditScore
+from .models import (
+    AuditATR,
+    AuditCycle,
+    AuditDepartmentAssignment,
+    AuditQuestion,
+    AuditScore,
+    AuditQuestionSet,
+    AuditRubric,
+)
 from .services import get_assignment_totals
 
 
@@ -122,4 +130,26 @@ class AuditATRAdmin(admin.ModelAdmin):
     search_fields = ('assignment__department__code', 'question__details', 'action_taken')
     readonly_fields = ('submitted_by', 'submitted_at')
     autocomplete_fields = ('assignment', 'question')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Question Sets & Rubrics
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@admin.register(AuditQuestionSet)
+class AuditQuestionSetAdmin(admin.ModelAdmin):
+    list_display = ('name', 'description', 'created_by', 'created_at', 'is_active')
+    list_filter = ('is_active', 'created_at')
+    search_fields = ('name', 'description')
+    filter_horizontal = ('questions',)
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(AuditRubric)
+class AuditRubricAdmin(admin.ModelAdmin):
+    list_display = ('name', 'file', 'uploaded_by', 'uploaded_at', 'is_active')
+    list_filter = ('is_active', 'uploaded_at')
+    search_fields = ('name',)
+    readonly_fields = ('uploaded_at',)
 

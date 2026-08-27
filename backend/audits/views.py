@@ -766,13 +766,15 @@ class AuditATRView(APIView):
         assignment = self._get_assignment(request, pk)
         required_scores = get_atr_required_scores(assignment)
         atrs = {a.question_id: a for a in assignment.atrs.all()}
+        all_questions = list(get_assignment_questions(assignment))
+        q_index_map = {q.id: idx for idx, q in enumerate(all_questions, start=1)}
         rows = []
         for score in required_scores:
             atr = atrs.get(score.question_id)
             q = score.question
             rows.append({
                 'question_id': q.id,
-                'sl_no': q.sl_no,
+                'sl_no': q_index_map.get(q.id, q.sl_no),
                 'details': q.details,
                 'max_marks': str(q.max_marks),
                 'marks': str(score.marks) if score.marks is not None else None,

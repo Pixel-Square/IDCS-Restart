@@ -206,7 +206,8 @@ export default function AuditManagementPage() {
   }
 
   const openAddQuestion = () => {
-    setQForm({ sl_no: '', details: '', documents_checklist: '', detailed_description: '', max_marks: '' })
+    const nextSl = questions.length ? Math.max(...questions.map((q) => q.sl_no)) + 1 : 1
+    setQForm({ sl_no: String(nextSl), details: '', documents_checklist: '', detailed_description: '', max_marks: '10' })
     setEditingQId(null)
     setQMsg('')
     setAddingQ(true)
@@ -1035,7 +1036,7 @@ export default function AuditManagementPage() {
                       editingQId === q.id ? (
                         <tr key={q.id} className="bg-blue-50/50 align-top">
                           <td className="px-4 py-2">
-                            <input type="number" min={1} value={qForm.sl_no} onChange={(e) => setQForm((f) => ({ ...f, sl_no: e.target.value }))} className="w-16 border rounded-lg px-2 py-1.5 text-sm" />
+                            <input type="number" min={1} value={qForm.sl_no} disabled className="w-16 border rounded-lg px-2 py-1.5 text-sm bg-gray-100 text-gray-500 cursor-not-allowed" />
                           </td>
                           <td className="px-4 py-2">
                             <input value={qForm.details} onChange={(e) => setQForm((f) => ({ ...f, details: e.target.value }))} className="w-full border rounded-lg px-3 py-1.5 text-sm" placeholder="Question details…" />
@@ -1087,7 +1088,7 @@ export default function AuditManagementPage() {
                   <div className="grid md:grid-cols-[120px_1fr] gap-3">
                     <div>
                       <label className="text-xs text-gray-500">S.No</label>
-                      <input type="number" min={1} value={qForm.sl_no} onChange={(e) => setQForm((f) => ({ ...f, sl_no: e.target.value }))} className="w-full border rounded-lg px-3 py-2 text-sm mt-1" />
+                      <input type="number" min={1} value={qForm.sl_no} disabled className="w-full border rounded-lg px-3 py-2 text-sm mt-1 bg-gray-100 text-gray-500 cursor-not-allowed" />
                     </div>
                     <div>
                       <label className="text-xs text-gray-500">Details</label>
@@ -1183,7 +1184,7 @@ export default function AuditManagementPage() {
                         <div className="grid md:grid-cols-[90px_1fr_90px] gap-2">
                           <div>
                             <label className="text-[11px] text-gray-500">S.No</label>
-                            <input type="number" min={1} value={setNewQForm.sl_no} onChange={(e) => setSetNewQForm((f) => ({ ...f, sl_no: e.target.value }))} className="w-full border rounded-lg px-2 py-1.5 text-sm mt-0.5" />
+                            <input type="number" min={1} value={setNewQForm.sl_no} disabled className="w-full border rounded-lg px-2 py-1.5 text-sm mt-0.5 bg-gray-100 text-gray-500 cursor-not-allowed" />
                           </div>
                           <div>
                             <label className="text-[11px] text-gray-500">Details</label>

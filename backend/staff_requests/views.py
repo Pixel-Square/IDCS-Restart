@@ -7154,10 +7154,6 @@ class EventAttendingViewSet(viewsets.ViewSet):
             return False
         approver_role = step.approver_role
 
-        # For all other generic roles, check user's global roles dynamically
-        if hasattr(user, 'user_roles') and user.user_roles.filter(role__name__iexact=approver_role).exists():
-            return True
-
         if approver_role == 'HOD':
             try:
                 from academics.models import DepartmentRole
@@ -7175,6 +7171,10 @@ class EventAttendingViewSet(viewsets.ViewSet):
                 ).exists()
             except Exception:
                 return False
+
+        # For all other generic roles, check user's global roles dynamically
+        if hasattr(user, 'user_roles') and user.user_roles.filter(role__name__iexact=approver_role).exists():
+            return True
 
         return False
 
@@ -7265,6 +7265,34 @@ class EventAttendingViewSet(viewsets.ViewSet):
             if not custom_event_details:
                 return Response({'error': 'Either on_duty_request_id or event_details is required'}, status=status.HTTP_400_BAD_REQUEST)
 
+            # ── Duplicate check for direct/manual forms ──────────────────────────
+            def _normalize_event_details(details):
+                """Return a canonical JSON string for duplicate comparison (excludes meta-only fields)."""
+                if not details:
+                    return ''
+                exclude = {'kss_link', 'template_id', 'kss_submission'}
+                normalized = {
+                    k.strip().lower(): str(v).strip().lower()
+                    for k, v in details.items()
+                    if k not in exclude and v is not None and str(v).strip()
+                }
+                return json.dumps(normalized, sort_keys=True)
+
+            normalized_new = _normalize_event_details(custom_event_details)
+            if normalized_new:
+                existing_direct = EventAttendingForm.objects.filter(
+                    staff=request.user,
+                    on_duty_request__isnull=True,
+                    custom_event_details__isnull=False,
+                )
+                for existing in existing_direct:
+                    if _normalize_event_details(existing.custom_event_details) == normalized_new:
+                        return Response(
+                            {'error': 'Duplicate submission detected. You have already submitted a form with the same event details. Please do not re-submit the same form.'},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+            # ────────────────────────────────────────────────────────────────────
+
             # If od_claim=yes, auto-create a StaffRequest (OD) in the calendar workflow
             od_claim = str(data.get('od_claim', 'no')).strip().lower()
             if od_claim == 'yes' and custom_event_details:
@@ -7293,6 +7321,7 @@ class EventAttendingViewSet(viewsets.ViewSet):
                         custom_event_details = None
                 except Exception:
                     pass  # If OD auto-creation fails, continue with custom_event_details
+
 
         # Parse JSON fields
         def parse_json_field(val):

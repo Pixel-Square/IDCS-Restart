@@ -24,7 +24,7 @@ class AuditQuestionSetSerializer(serializers.ModelSerializer):
         required=False,
     )
     question_count = serializers.SerializerMethodField()
-    questions_detail = AuditQuestionSerializer(many=True, source='questions', read_only=True)
+    questions_detail = serializers.SerializerMethodField()
 
     class Meta:
         model = AuditQuestionSet
@@ -34,6 +34,15 @@ class AuditQuestionSetSerializer(serializers.ModelSerializer):
 
     def get_question_count(self, obj):
         return obj.questions.count()
+
+    def get_questions_detail(self, obj):
+        questions = obj.questions.filter(is_active=True).order_by('sl_no')
+        data = []
+        for idx, q in enumerate(questions, start=1):
+            serialized = AuditQuestionSerializer(q).data
+            serialized['sl_no'] = idx
+            data.append(serialized)
+        return data
 
 
 class AuditRubricSerializer(serializers.ModelSerializer):

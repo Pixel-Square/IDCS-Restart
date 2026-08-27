@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import CLASS_TYPES, { normalizeClassType } from '../../constants/classTypes';
 import CurriculumLayout from './CurriculumLayout';
-import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives, fetchBatchYears, propagateDeptRow, deleteCurriculumDepartment, deleteElective, fetchElectiveChoices, DeptRow } from '../../services/curriculum';
+import { fetchDeptRows, updateDeptRow, updateElective, approveDeptRow, createElective, fetchElectives, fetchBatchYears, propagateDeptRow, deleteCurriculumDepartment, deleteElective, fetchElectiveChoices, DeptRow } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
 import { Edit, Check, X, Save, RefreshCw, Copy, Trash2 } from 'lucide-react';
 import { showAlert, showConfirm } from '../../utils/dialog';
@@ -359,7 +359,8 @@ export default function DeptList() {
       const payload: any = { ...editElectiveForm };
       if (!payload.course_code) delete payload.course_code;
       if (!payload.course_name) delete payload.course_name;
-      await updateDeptRow(payload.id, payload);
+      // Elective subjects are ElectiveSubject records — use /api/curriculum/elective/{id}/ NOT /api/curriculum/department/{id}/
+      await updateElective(payload.id, payload);
       const fresh = await fetchDeptRows();
       setRows(fresh);
       const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined });

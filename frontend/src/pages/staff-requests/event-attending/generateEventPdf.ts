@@ -8,6 +8,7 @@
 
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { EventAttendingFormDetail } from '../../../types/eventAttending';
 
 const INSTITUTION = 'K RAMAKRISHNAN GROUP OF INSTITUTION';
@@ -53,19 +54,20 @@ async function loadImageBase64(src: string): Promise<string | null> {
   }
 }
 
-// ── helper: fetch remote url as blob then base64 ─────────────────────
-async function fetchFileAsBase64(url: string): Promise<{ data: string; mimeType: string } | null> {
+// ── helper: fetch remote url as blob then base64 and buffer ─────────────────────
+async function fetchFileAsData(url: string): Promise<{ base64: string; buffer: ArrayBuffer; mimeType: string } | null> {
   try {
     const res = await fetch(url);
     if (!res.ok) return null;
     const blob = await res.blob();
-    const data = await new Promise<string>((resolve, reject) => {
+    const buffer = await blob.arrayBuffer();
+    const base64 = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result as string);
       reader.onerror = reject;
       reader.readAsDataURL(blob);
     });
-    return { data, mimeType: blob.type };
+    return { base64, buffer, mimeType: blob.type };
   } catch {
     return null;
   }
@@ -260,14 +262,8 @@ function buildMainContent(
   let curY = ((doc as any).lastAutoTable?.finalY ?? 60) + 8;
 
   // ── Expense Claim section (continuous on same page flow) ──────────
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.setTextColor(0, 0, 0);
-  doc.text('EXPENSE CLAIM FORM', W / 2, curY, { align: 'center' });
-  doc.setLineWidth(0.5);
-  doc.setDrawColor(60, 60, 60);
-  doc.line(10, curY + 2, W - 10, curY + 2);
-  curY += 8;
+  // Removed "EXPENSE CLAIM FORM" header as requested.
+  // curY is untouched here so spacing remains reasonable.
 
   // Travel Expenses
   if (form.travel_expenses?.length) {
@@ -407,21 +403,19 @@ function buildMainContent(
     margin: { left: W - 100, right: 10 },
   });
 
-  curY = ((doc as any).lastAutoTable?.finalY ?? curY + 24) + 10;
+  curY = ((doc as any).lastAutoTable?.finalY ?? curY + 24) + 5;
 
   // ── Signature block (horizontal, 2 rows) ─────────────────────────
   const H = doc.internal.pageSize.getHeight();
-  const signatureHeight = 45; // Space needed for signature block
-  
-  let availableTopY = curY;
+  const signatureHeight = 40; // Space needed for signature block
   
   if (curY + signatureHeight > H - 15) {
       doc.addPage();
-      availableTopY = 20; // Top of the new page is available
+      curY = 20; // Top of the new page is available
   }
   
-  // ALWAYS place signature at the bottom of the page it lands on
-  const signatureStartY = H - signatureHeight - 15;
+  // Place signature directly after the content
+  const signatureStartY = curY;
   
   const balanceLabel = form.balance >= 0 ? 'Balance Received' : 'Refunded';
   
@@ -492,7 +486,16 @@ function buildMainContent(
   // Row 2: Administrative Officer / Manager | Balance Received
   drawHorizSigRow(['Administrative Officer / Manager', balanceLabel], signatureStartY + 34);
 
-  return { signatureStartY, availableTopY };
+  return { signatureStartY, availableTopY: signatureStartY + 50 };
+}
+
+export interface PdfDrawOp {
+  pageIndex: number;
+  buffer: ArrayBuffer;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 async function drawProofBlock(
@@ -504,6 +507,7 @@ async function drawProofBlock(
   startY: number,
   blockWidth: number,
   blockHeight: number,
+  pdfDrawOps: PdfDrawOp[],
   hideLogos: boolean = false
 ) {
   let textY = startY + 14;
@@ -540,7 +544,7 @@ async function drawProofBlock(
   const headerSpace = textY + 13 - startY;
 
   // Fetch the proof file
-  const fetched = await fetchFileAsBase64(file.file_url!);
+  const fetched = await fetchFileAsData(file.file_url!);
   if (!fetched) {
     doc.setFontSize(10);
     doc.setTextColor(180, 0, 0);
@@ -585,20 +589,25 @@ async function drawProofBlock(
         drawY = startY + headerSpace + 3 + (maxImgH - dh) / 2;
       }
       
-      doc.addImage(fetched.data, imgType, drawX, drawY, dw, dh, undefined, 'FAST', angle);
+      doc.addImage(fetched.base64, imgType, drawX, drawY, dw, dh, undefined, 'FAST', angle);
     } catch {
-      doc.addImage(fetched.data, imgType, startX + 10, startY + headerSpace + 3, maxImgW, maxImgH);
+      doc.addImage(fetched.base64, imgType, startX + 10, startY + headerSpace + 3, maxImgW, maxImgH);
     }
   } else if (mime === 'application/pdf') {
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(60, 60, 60);
-    doc.text('(PDF proof - please open the link below)', startX + (blockWidth / 2), startY + (blockHeight / 2) - 6, { align: 'center' });
-    if (file.file_url) {
-      doc.setTextColor(0, 0, 200);
-      doc.textWithLink('Open PDF File', startX + (blockWidth / 2), startY + (blockHeight / 2) + 4, { url: file.file_url, align: 'center' } as any);
-      doc.setTextColor(0, 0, 0);
-    }
+    const pageIndex = (doc as any).internal.getNumberOfPages() - 1;
+    const maxImgW = blockWidth - 20;
+    const maxImgH = blockHeight - 40;
+    const drawX = startX + 10;
+    const drawY = startY + headerSpace + 3;
+
+    pdfDrawOps.push({
+        pageIndex,
+        buffer: fetched.buffer,
+        x: drawX,
+        y: drawY,
+        width: maxImgW,
+        height: maxImgH,
+    });
   } else {
     doc.setFontSize(9);
     doc.setTextColor(60, 60, 60);
@@ -612,9 +621,86 @@ async function buildProofPages(
   form: EventAttendingFormDetail,
   logoLeftBase64: string | null,
   logoRightBase64: string | null,
-  layout: { signatureStartY: number, availableTopY: number }
+  layout: { signatureStartY: number, availableTopY: number },
+  pdfDrawOps: PdfDrawOp[]
 ) {
-  const proofFiles = (form.files || []).filter(f => f.file_url);
+  const rawFiles = (form.files || []).filter(f => f.file_url);
+  const proofFiles: any[] = [...rawFiles];
+
+  if (form.event_proof) {
+    let proofUrl = form.event_proof;
+    if (!proofUrl.startsWith('http') && !proofUrl.startsWith('/')) {
+        proofUrl = `/media/${proofUrl}`;
+    }
+    proofFiles.push({
+      file_url: proofUrl,
+      original_filename: proofUrl.split('/').pop() || 'Event_Proof',
+      expense_type: 'Event Proof',
+      orientation: 'portrait'
+    });
+  }
+
+  const rawData = form.on_duty_form_data || {};
+  const schema: Array<any> = form.on_duty_form_schema || [];
+  
+  const extractSchemaFiles = (fields: any[]) => {
+    fields.forEach(f => {
+      let val = rawData[f.name];
+      if (Array.isArray(val) && val.length > 0) val = val[0];
+
+      if (f.type === 'file' && val) {
+        if (typeof val === 'string') {
+          let url = val;
+          if (!url.startsWith('http') && !url.startsWith('/') && !url.startsWith('data:')) url = `/media/${url}`;
+          proofFiles.push({
+            file_url: url,
+            original_filename: url.split('/').pop() || f.label || f.name,
+            expense_type: f.label || f.name.replace(/_/g, ' '),
+            orientation: 'portrait'
+          });
+        } else if (typeof val === 'object' && val.content) {
+          proofFiles.push({
+            file_url: val.content,
+            original_filename: val.filename || f.label || f.name,
+            expense_type: f.label || f.name.replace(/_/g, ' '),
+            orientation: 'portrait'
+          });
+        }
+      }
+      if (f.can_change_form_fields && f.conditional_fields && val) {
+        const children = f.conditional_fields[String(val)] || [];
+        extractSchemaFiles(children);
+      }
+    });
+  };
+  extractSchemaFiles(schema);
+
+  // fallback for any unhandled strings containing 'proof' or '/media/'
+  Object.entries(rawData).forEach(([k, v]) => {
+    if (typeof v === 'string' && (v.includes('/media/') || v.startsWith('http') || v.startsWith('data:')) && k.toLowerCase().includes('proof')) {
+      const exists = proofFiles.some(p => p.file_url === v);
+      if (!exists) {
+        proofFiles.push({
+          file_url: v,
+          original_filename: v.split('/').pop() || k,
+          expense_type: k.replace(/_/g, ' '),
+          orientation: 'portrait'
+        });
+      }
+    } else if (typeof v === 'object' && v && (v as any).content && (v as any).content.startsWith('data:') && k.toLowerCase().includes('proof')) {
+      const content = (v as any).content;
+      const exists = proofFiles.some(p => p.file_url === content);
+      if (!exists) {
+        proofFiles.push({
+          file_url: content,
+          original_filename: (v as any).filename || k,
+          expense_type: k.replace(/_/g, ' '),
+          orientation: 'portrait'
+        });
+      }
+    }
+  });
+
   if (!proofFiles.length) return;
 
   const portraitFiles = proofFiles.filter(f => f.orientation !== 'landscape');
@@ -622,39 +708,27 @@ async function buildProofPages(
 
   const W = doc.internal.pageSize.getWidth();
   const H = doc.internal.pageSize.getHeight();
-  
-  let i_portrait = 0;
+  const spaceLeft = H - 15 - layout.availableTopY;
+  const halfH = H / 2;
+
   let i_landscape = 0;
-  
-  const availableSpace = layout.signatureStartY - layout.availableTopY;
-  
-  // Fill the remaining space on the signature page if large enough (e.g. > 60mm)
-  if (availableSpace > 60) {
-      if (portraitFiles.length > 0) {
-          const file = portraitFiles[0];
-          await drawProofBlock(doc, file, logoLeftBase64, logoRightBase64, 0, layout.availableTopY, W, availableSpace, true);
-          i_portrait++;
-      } else if (landscapeFiles.length > 0) {
-          const file1 = landscapeFiles[0];
-          const blockH = Math.min(availableSpace, H / 2);
-          await drawProofBlock(doc, file1, logoLeftBase64, logoRightBase64, 0, layout.availableTopY, W, blockH, true);
-          i_landscape++;
-          
-          if (availableSpace >= H / 2 + blockH - 5 && landscapeFiles.length > 1) {
-              const file2 = landscapeFiles[1];
-              doc.setDrawColor(200, 200, 200);
-              doc.setLineWidth(0.2);
-              doc.line(10, layout.availableTopY + blockH, W - 10, layout.availableTopY + blockH);
-              await drawProofBlock(doc, file2, logoLeftBase64, logoRightBase64, 0, layout.availableTopY + blockH, W, availableSpace - blockH, true);
-              i_landscape++;
-          }
-      }
+
+  // Try to fit one landscape file in the remaining space of the signature page
+  if (landscapeFiles.length > 0 && spaceLeft >= halfH - 5) {
+    const file = landscapeFiles[0];
+    
+    // Separator line
+    doc.setDrawColor(200, 200, 200);
+    doc.setLineWidth(0.2);
+    doc.line(10, layout.availableTopY, W - 10, layout.availableTopY);
+    await drawProofBlock(doc, file, logoLeftBase64, logoRightBase64, 0, layout.availableTopY, W, halfH - 14, pdfDrawOps, true);
+    i_landscape = 1;
   }
 
   // Draw remaining portrait files (1 per page)
-  for (let i = i_portrait; i < portraitFiles.length; i++) {
+  for (let i = 0; i < portraitFiles.length; i++) {
     doc.addPage('a4', 'portrait');
-    await drawProofBlock(doc, portraitFiles[i], logoLeftBase64, logoRightBase64, 0, 0, W, H - 14); // H-14 leaves room for footer
+    await drawProofBlock(doc, portraitFiles[i], logoLeftBase64, logoRightBase64, 0, 0, W, H - 14, pdfDrawOps);
   }
 
   // Draw remaining landscape files (2 per page top-and-bottom)
@@ -668,7 +742,7 @@ async function buildProofPages(
     const halfH = H / 2;
     
     // Top half
-    await drawProofBlock(doc, file1, logoLeftBase64, logoRightBase64, 0, 0, W, halfH);
+    await drawProofBlock(doc, file1, logoLeftBase64, logoRightBase64, 0, 0, W, halfH, pdfDrawOps);
     
     // Bottom half (if there's a second file)
     if (file2) {
@@ -677,7 +751,7 @@ async function buildProofPages(
       doc.setLineWidth(0.2);
       doc.line(10, halfH, W - 10, halfH);
       
-      await drawProofBlock(doc, file2, logoLeftBase64, logoRightBase64, 0, halfH, W, halfH - 14, true);
+      await drawProofBlock(doc, file2, logoLeftBase64, logoRightBase64, 0, halfH, W, halfH - 14, pdfDrawOps, true);
     }
   }
 }
@@ -692,13 +766,13 @@ export async function generateEventPdf(form: EventAttendingFormDetail): Promise<
 
   // Build content — event info + expense claim on same continuous page flow
   const layout = buildMainContent(doc, form, logoLeftBase64, logoRightBase64);
-  await buildProofPages(doc, form, logoLeftBase64, logoRightBase64, layout);
+  const pdfDrawOps: PdfDrawOp[] = [];
+  await buildProofPages(doc, form, logoLeftBase64, logoRightBase64, layout, pdfDrawOps);
 
-  // Page numbers and download date footer on every page
-  const totalPages = (doc as any).internal.getNumberOfPages();
+  const jsPdfPages = (doc as any).internal.getNumberOfPages();
   const downloadDateStr = `Downloaded: ${new Date().toLocaleString('en-IN')}`;
   
-  for (let i = 1; i <= totalPages; i++) {
+  for (let i = 1; i <= jsPdfPages; i++) {
     doc.setPage(i);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7);
@@ -714,7 +788,7 @@ export async function generateEventPdf(form: EventAttendingFormDetail): Promise<
     
     // Center footer
     doc.text(
-      `Page ${i} of ${totalPages}  |  ${INSTITUTION}`,
+      `Page ${i} of ${jsPdfPages}  |  ${INSTITUTION}`,
       doc.internal.pageSize.getWidth() / 2,
       doc.internal.pageSize.getHeight() - 5,
       { align: 'center' },
@@ -726,5 +800,63 @@ export async function generateEventPdf(form: EventAttendingFormDetail): Promise<
     /[^a-zA-Z0-9\-_]/g,
     '_',
   );
+
+  if (pdfDrawOps.length > 0) {
+    try {
+      const mainPdfBytes = doc.output('arraybuffer');
+      const mergedPdf = await PDFDocument.load(mainPdfBytes);
+      const allPages = mergedPdf.getPages();
+      
+      for (const op of pdfDrawOps) {
+          try {
+              const pdfToEmbed = await PDFDocument.load(op.buffer);
+              const [embeddedPage] = await mergedPdf.embedPdf(pdfToEmbed, [0]); // embed the first page
+              
+              const page = allPages[op.pageIndex];
+              const pageHeight = page.getSize().height;
+              
+              // Convert mm to points (1 mm = 2.83465 points)
+              const pt = 2.83465;
+              const boxX = op.x * pt;
+              const boxY = op.y * pt;
+              const boxW = op.width * pt;
+              const boxH = op.height * pt;
+              
+              // Calculate scale to fit within box while preserving aspect ratio
+              const scale = Math.min(boxW / embeddedPage.width, boxH / embeddedPage.height);
+              const drawW = embeddedPage.width * scale;
+              const drawH = embeddedPage.height * scale;
+              
+              // Center within the box
+              const finalX = boxX + (boxW - drawW) / 2;
+              const finalY = pageHeight - boxY - boxH + (boxH - drawH) / 2;
+              
+              page.drawPage(embeddedPage, {
+                  x: finalX,
+                  y: finalY,
+                  width: drawW,
+                  height: drawH,
+              });
+          } catch (err) {
+              console.error('Failed to embed a PDF proof', err);
+          }
+      }
+      
+      const finalPdfBytes = await mergedPdf.save();
+      const blob = new Blob([finalPdfBytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${eventTitle}_expense_claim.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      return;
+    } catch (err) {
+      console.error('Error embedding PDFs with pdf-lib, falling back to basic jsPDF', err);
+    }
+  }
+
   doc.save(`${eventTitle}_expense_claim.pdf`);
 }

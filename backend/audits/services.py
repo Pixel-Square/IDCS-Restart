@@ -189,12 +189,12 @@ def build_question_rows(assignment, include_atr=False):
     atrs = {a.question_id: a for a in assignment.atrs.select_related('question').all()}
 
     rows = []
-    for q in all_questions:
+    for idx, q in enumerate(all_questions, start=1):
         score = score_by_question.get(q.id)
         atr = atrs.get(q.id)
         rows.append({
             'question_id': q.id,
-            'sl_no': q.sl_no,
+            'sl_no': idx,
             'details': q.details,
             'documents_checklist': q.documents_checklist,
             'detailed_description': q.detailed_description,

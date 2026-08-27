@@ -2,15 +2,20 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   fetchEventAnalytics,
   getEventAnalyticsExcelUrl,
+  fetchEventFormDetail,
 } from '../../../services/eventAttending';
 import type { EventAnalyticsResponse } from '../../../services/eventAttending';
-import { BarChart3, Download, RefreshCw, FileSpreadsheet, IndianRupee, FileCheck2, Building2, ChevronDown, XCircle } from 'lucide-react';
+import type { EventAttendingFormDetail } from '../../../types/eventAttending';
+import { BarChart3, Download, RefreshCw, FileSpreadsheet, IndianRupee, FileCheck2, Building2, ChevronDown, XCircle, Eye, Loader2 } from 'lucide-react';
+import EventFormDetailModal from './EventFormDetailModal';
 
 export default function AnalyticsTab() {
   const [data, setData] = useState<EventAnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState('');
+  const [viewingForm, setViewingForm] = useState<EventAttendingFormDetail | null>(null);
+  const [viewLoadingId, setViewLoadingId] = useState<number | null>(null);
 
   const [deptFilter, setDeptFilter] = useState('');
   const [fromDate, setFromDate] = useState('');
@@ -69,6 +74,18 @@ export default function AnalyticsTab() {
       alert('Failed to download: ' + msg);
     } finally {
       setDownloading(false);
+    }
+  };
+
+  const handleViewForm = async (id: number) => {
+    setViewLoadingId(id);
+    try {
+      const detail = await fetchEventFormDetail(id);
+      setViewingForm(detail);
+    } catch (e: any) {
+      alert('Failed to load form details.');
+    } finally {
+      setViewLoadingId(null);
     }
   };
 
@@ -246,6 +263,7 @@ export default function AnalyticsTab() {
                       <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider">Amount</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider">Status</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider">Date</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider">Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -287,6 +305,18 @@ export default function AnalyticsTab() {
                             {row.updated_at}
                           </span>
                         </td>
+                        <td className="px-4 py-3.5 text-center">
+                          <button
+                            onClick={() => handleViewForm(row.id)}
+                            disabled={viewLoadingId === row.id}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
+                          >
+                            {viewLoadingId === row.id
+                              ? <Loader2 size={12} className="animate-spin" />
+                              : <Eye size={12} />}
+                            View
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -302,6 +332,7 @@ export default function AnalyticsTab() {
                         </span>
                       </td>
                       <td />
+                      <td />
                     </tr>
                   </tfoot>
                 </table>
@@ -309,6 +340,10 @@ export default function AnalyticsTab() {
             </div>
           )}
         </>
+      )}
+
+      {viewingForm && (
+        <EventFormDetailModal form={viewingForm} onClose={() => setViewingForm(null)} />
       )}
     </div>
   );

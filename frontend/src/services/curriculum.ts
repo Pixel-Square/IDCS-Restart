@@ -562,6 +562,15 @@ export async function createElective(payload: Partial<DeptRow> & { parent: numbe
   return res.json();
 }
 
+export async function updateElective(id: number, payload: Record<string, any>) {
+  const res = await fetchWithAuth(`/api/curriculum/elective/${id}/`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function updateDeptRow(id: number, payload: Partial<DeptRow>) {
   const res = await fetchWithAuth(`/api/curriculum/department/${id}/`, {
     method: 'PATCH',

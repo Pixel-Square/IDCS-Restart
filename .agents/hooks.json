@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "post_task": [
+      {
+        "name": "Automated Frontend Build & Backend Restart",
+        "description": "Automatically builds the frontend and restarts gunicorn if successful after the agent finishes its task.",
+        "command": "./post_task_deploy.sh",
+        "cwd": "/home/iqac/IDCS-Restart",
+        "onError": "stop"
+      }
+    ]
+  }
+}

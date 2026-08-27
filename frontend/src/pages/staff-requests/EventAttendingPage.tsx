@@ -12,7 +12,8 @@ import WorkflowSettingsTab from './event-attending/WorkflowSettingsTab';
 import AnalyticsTab from './event-attending/AnalyticsTab';
 import { generateEventPdf } from './event-attending/generateEventPdf';
 import ConditionsTab from './event-attending/ConditionsTab';
-import { ClipboardList, CheckSquare, BookOpen, Settings, Clock, CheckCircle, XCircle, ChevronDown, ChevronUp, Download, Loader2, ListPlus, BarChart3, Trash2 } from 'lucide-react';
+import { ClipboardList, CheckSquare, BookOpen, Settings, Clock, CheckCircle, XCircle, ChevronDown, ChevronUp, Download, Loader2, ListPlus, BarChart3, Trash2, Eye } from 'lucide-react';
+import EventFormDetailModal from './event-attending/EventFormDetailModal';
 
 export default function EventAttendingPage() {
   const [activeTab, setActiveTab] = useState<'forms' | 'approvals' | 'declarations' | 'conditions' | 'settings' | 'analytics'>('forms');
@@ -24,6 +25,9 @@ export default function EventAttendingPage() {
   const [loading, setLoading] = useState(true);
   const [expandedForm, setExpandedForm] = useState<number | null>(null);
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
+  const [viewingFormDetail, setViewingFormDetail] = useState<import('../../types/eventAttending').EventAttendingFormDetail | null>(null);
+  const [viewLoadingId, setViewLoadingId] = useState<number | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
 
   // Dynamic role checks
   const [isApprover, setIsApprover] = useState(false);
@@ -83,12 +87,23 @@ export default function EventAttendingPage() {
     }
   };
 
+  const handleViewForm = async (id: number) => {
+    setViewLoadingId(id);
+    try {
+      const detail = await fetchEventFormDetail(id);
+      setViewingFormDetail(detail);
+    } catch (e: any) {
+      alert('Failed to load form details: ' + (e?.response?.data?.error || e.message));
+    } finally {
+      setViewLoadingId(null);
+    }
+  };
+
   const handleDeleteForm = async (id: number) => {
-    if (!window.confirm('Are you sure you want to delete this pending form? This action cannot be undone.')) return;
+    setDeleteConfirmId(null);
     try {
       await deleteEventForm(id);
       loadData();
-      alert('Form deleted successfully.');
     } catch (e: any) {
       alert('Failed to delete form: ' + (e?.response?.data?.error || e.message));
     }
@@ -152,11 +167,25 @@ export default function EventAttendingPage() {
                             {/* Left: clickable expand area */}
                             <div className="flex-1 cursor-pointer hover:bg-gray-50 rounded-lg pr-2" onClick={() => setExpandedForm(expanded ? null : form.id)}>
                               <p className="text-sm font-semibold text-gray-900">{form.on_duty_form_data?.event_title || 'Event Form'}</p>
-                              <p className="text-xs text-gray-500">Submitted {new Date(form.created_at).toLocaleDateString()} • Grand Total: ₹{form.grand_total.toLocaleString()}</p>
+                              <p className="text-xs text-gray-500">
+                                Submitted {new Date(form.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true })} • Grand Total: ₹{form.grand_total.toLocaleString()}
+                              </p>
                             </div>
                             {/* Right: status badge + download btn + chevron */}
                             <div className="flex items-center gap-2 flex-shrink-0">
                               <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${badge?.bg} ${badge?.text}`}>{badge?.icon} {badge?.label}</span>
+                              {/* View button */}
+                              <button
+                                onClick={() => handleViewForm(form.id)}
+                                disabled={viewLoadingId === form.id}
+                                title="View Details"
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold rounded-lg transition-colors border border-blue-200 disabled:opacity-50"
+                              >
+                                {viewLoadingId === form.id
+                                  ? <Loader2 size={12} className="animate-spin" />
+                                  : <Eye size={12} />}
+                                View
+                              </button>
                               {isFullyApproved && (
                                 <button
                                   onClick={() => handleDownloadPdf(form.id)}
@@ -172,7 +201,7 @@ export default function EventAttendingPage() {
                               )}
                               {form.status === 'pending' && (
                                 <button
-                                  onClick={() => handleDeleteForm(form.id)}
+                                  onClick={() => setDeleteConfirmId(form.id)}
                                   title="Delete Pending Form"
                                   className="p-1.5 text-red-500 hover:bg-red-50 rounded-md transition-colors"
                                 >
@@ -233,6 +262,31 @@ export default function EventAttendingPage() {
           {activeTab === 'analytics' && <AnalyticsTab />}
           {activeTab === 'settings' && <WorkflowSettingsTab />}
         </>
+      )}
+
+      {/* View Form Detail Modal */}
+      {viewingFormDetail && (
+        <EventFormDetailModal form={viewingFormDetail} onClose={() => setViewingFormDetail(null)} />
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmId !== null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <h3 className="text-lg font-bold text-gray-900 mb-2">Delete Form?</h3>
+            <p className="text-sm text-gray-500 mb-6">This pending form will be permanently deleted. This action cannot be undone.</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setDeleteConfirmId(null)}
+                className="flex-1 py-2.5 border border-gray-200 text-gray-700 font-semibold rounded-xl hover:bg-gray-50 transition-colors text-sm"
+              >Cancel</button>
+              <button
+                onClick={() => handleDeleteForm(deleteConfirmId)}
+                className="flex-1 py-2.5 bg-red-600 text-white font-semibold rounded-xl hover:bg-red-700 transition-colors text-sm"
+              >Delete</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
