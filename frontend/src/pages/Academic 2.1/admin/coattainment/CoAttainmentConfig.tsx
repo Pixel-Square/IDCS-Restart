@@ -12,10 +12,21 @@ export type ColumnDef = {
 };
 
 const STORAGE_KEY = 'coatt_columns_by_combination';
+const CO_AVG_STORAGE_KEY = 'coatt_co_avg_by_combination';
 
 function loadStoredMap(): Record<string, ColumnDef[]> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function loadStoredCoAvgMap(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(CO_AVG_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     return parsed && typeof parsed === 'object' ? parsed : {};
   } catch {
@@ -48,6 +59,8 @@ function TokenPickerModal({
       title: 'CO Aggregates & Sub-Column Totals',
       tokens: [
         { token: '[COx-SUBCOL-TOTAL]', label: 'Sum / Total of sub-columns inside COx (Amber column value)', isHighlighted: true },
+        { token: '[COx-OBT-WEIGHTSETTED-RAW-MARKS]', label: 'Total Raw Marks obtained in weight-setted exam assignments for COx', isHighlighted: true },
+        { token: '[COx-MAX-WEIGHTSETTED-RAW-MARKS]', label: 'Total Max Raw Marks in weight-setted exam assignments for COx', isHighlighted: true },
         { token: '[COx-OBT-WEIGHT]', label: 'Total weight marks obtained by student in this CO across exams' },
         { token: '[COx-MAX-WEIGHT]', label: 'Total max weight assigned to this CO across exams' },
         { token: '[COx-TOTAL-RAW]', label: 'Total Raw Marks for COx across all exams' },
@@ -436,6 +449,7 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
   const [selectedClassType, setSelectedClassType] = useState<string>('');
   const [selectedQpType, setSelectedQpType] = useState<string>('');
   const [columnMap, setColumnMap] = useState<Record<string, ColumnDef[]>>(() => loadStoredMap());
+  const [coAvgMap, setCoAvgMap] = useState<Record<string, string>>(() => loadStoredCoAvgMap());
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editingColumn, setEditingColumn] = useState<ColumnDef | null>(null);
   const [schemaCopied, setSchemaCopied] = useState(false);
@@ -446,6 +460,7 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
   useEffect(() => {
     // Also build a mirror map with class type short_code/name so faculty matching is 100% robust
     const enrichedMap = { ...columnMap };
+    const enrichedCoAvgMap = { ...coAvgMap };
     const currentMeta = classTypes.find((ct: any) => String(ct.id) === String(selectedClassType));
     const ctIdentifiers = [
       currentMeta?.code,
@@ -460,20 +475,28 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
         if (ctKey === String(selectedClassType)) {
           ctIdentifiers.forEach((ident) => {
             enrichedMap[`${ident}::${qpKey}`] = columnMap[key];
+            if (coAvgMap[key]) {
+              enrichedCoAvgMap[`${ident}::${qpKey}`] = coAvgMap[key];
+            }
           });
         }
       }
     });
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify(enrichedMap));
+    localStorage.setItem(CO_AVG_STORAGE_KEY, JSON.stringify(enrichedCoAvgMap));
+
     if (selectedClassType && Object.keys(columnMap).length > 0) {
       fetchWithAuth(`/api/academic-v2/class-types/${selectedClassType}/`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ coattainment_layout: enrichedMap }),
+        body: JSON.stringify({
+          coattainment_layout: enrichedMap,
+          coattainment_co_avg_config: enrichedCoAvgMap,
+        }),
       }).catch((e) => console.error('Failed to sync coattainment_layout to backend', e));
     }
-  }, [columnMap, selectedClassType, classTypes]);
+  }, [columnMap, coAvgMap, selectedClassType, classTypes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -498,6 +521,17 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
             list.forEach((ct: any) => {
               if (ct?.coattainment_layout && typeof ct.coattainment_layout === 'object') {
                 Object.assign(merged, ct.coattainment_layout);
+              }
+            });
+            return merged;
+          });
+
+          // Populate coAvgMap with backend database co_avg configs
+          setCoAvgMap((prev) => {
+            const merged = { ...prev };
+            list.forEach((ct: any) => {
+              if (ct?.coattainment_co_avg_config && typeof ct.coattainment_co_avg_config === 'object') {
+                Object.assign(merged, ct.coattainment_co_avg_config);
               }
             });
             return merged;
@@ -812,9 +846,46 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
                     Input Schema
                   </button>
 
-                  <span className="text-xs font-semibold px-2.5 py-1 bg-blue-50 text-blue-700 rounded-full border border-blue-200">
-                    {selectedClassTypeMeta?.display_name || selectedClassTypeMeta?.name || 'Class'} · {selectedQpType}
-                  </span>
+                </div>
+              </div>
+
+              {/* CO-Avg Column Selector Option */}
+              <div className="mb-4 p-3 bg-amber-50/60 border border-amber-200 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+                  <div>
+                    <span className="text-xs font-bold text-gray-800 uppercase tracking-wider">CO-Avg Column Selection</span>
+                    <p className="text-xs text-gray-500">
+                      Select which column value represents the <strong>CO-Avg</strong> (used in Articulation Matrix & CO Attainment Analysis).
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <label htmlFor="co-avg-select" className="text-xs font-semibold text-gray-700 whitespace-nowrap">
+                    CO-Avg:
+                  </label>
+                  <select
+                    id="co-avg-select"
+                    value={activeKey ? coAvgMap[activeKey] || '' : ''}
+                    onChange={(e) => {
+                      if (!activeKey) return;
+                      const selectedVal = e.target.value;
+                      setCoAvgMap((prev) => {
+                        const updated = { ...prev, [activeKey]: selectedVal };
+                        if (altKey) updated[altKey] = selectedVal;
+                        return updated;
+                      });
+                    }}
+                    className="px-3 py-1.5 border border-amber-300 rounded-md text-xs font-medium bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-amber-400 min-w-[160px]"
+                  >
+                    <option value="">-- Default (COx Total) --</option>
+                    {currentColumns.map((col) => (
+                      <option key={col.id} value={col.id}>
+                        {col.label} ({col.kind})
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 

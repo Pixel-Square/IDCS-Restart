@@ -457,7 +457,7 @@ export default function COTargetPage({
     return manuals.map((entry) => {
       const subValue = Number(entry?.aco);
       if (!Number.isFinite(subValue)) return null;
-      return roundHalfUp((subValue * 3) / 100, 2);
+      return roundHalfUp((subValue / 3) * 100, 2);
     });
   }, [manuals]);
 
@@ -781,13 +781,15 @@ export default function COTargetPage({
                   <tr>
                     <th style={styles.th}>COs</th>
                     <th style={styles.th}>SUB</th>
+                    <th style={styles.th}>ACO = (SUB / 3) × 100</th>
                   </tr>
                 </thead>
                 <tbody>
                   {coLabels.map((co, idx) => (
                     <tr key={co}>
                       <td style={styles.tdLeft}>{co}</td>
-                       <td style={styles.td}><input min={0} step="any" style={styles.inputNumber} type="number" value={manuals[idx]?.aco ?? ''} onChange={(e) => { const v = e.target.value === '' ? null : e.target.value; setManuals((m) => { const copy = [...m]; copy[idx] = { ...copy[idx], aco: v === null ? null : Number(v) }; return copy; }); }} onBlur={(e) => { const v = normalizeNumberInput(e.target.value, 2, true); setManuals((m) => { const copy = [...m]; copy[idx] = { ...copy[idx], aco: v }; return copy; }); }} /></td>
+                      <td style={styles.td}><input min={0} step="any" style={styles.inputNumber} type="number" value={manuals[idx]?.aco ?? ''} onChange={(e) => { const v = e.target.value === '' ? null : e.target.value; setManuals((m) => { const copy = [...m]; copy[idx] = { ...copy[idx], aco: v === null ? null : Number(v) }; return copy; }); }} onBlur={(e) => { const v = normalizeNumberInput(e.target.value, 2, true); setManuals((m) => { const copy = [...m]; copy[idx] = { ...copy[idx], aco: v }; return copy; }); }} /></td>
+                      <td style={{ ...styles.td, fontWeight: 700, color: '#0b4a6f' }}>{acoComputed[idx] != null ? acoComputed[idx]?.toFixed(2) : '—'}</td>
                     </tr>
                   ))}
                 </tbody>

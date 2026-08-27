@@ -15,12 +15,13 @@ import { exportCOSummaryToExcel, exportCOSummaryToPDF, exportInternalMarksExcel 
 import FacultyCourseDashboard from './FacultyCourseDashboard';
 import ResultAnalysisPage from './result_analysis/ResultAnalysisPage';
 import ResetNoticePopup, { type ResetNotice } from './ResetNoticePopup';
-const COattainmentTable = React.lazy(() => import('./coattainment/COattainmentTable'));
-const LCAWorkflowPage = React.lazy(() => import('./LCAWorkflowPage'));
-const QuestionBankPage = React.lazy(() => import('../../QuestionBankPage'));
+import COattainmentContainer from './coattainment/COattainmentContainer';
+import { safeLazy } from '../../../utils/safeLazy';
+const LCAWorkflowPage: any = safeLazy(() => import('./LCAWorkflowPage'), 'LCAWorkflowPage');
+const QuestionBankPage: any = safeLazy(() => import('../../QuestionBankPage'), 'QuestionBankPage');
 
 function COattainmentTableWrapper({ courseId, data, courseInfo }: { courseId?: string | undefined; data?: any; courseInfo?: any }) {
-  return <COattainmentTable courseId={courseId} data={data} />;
+  return <COattainmentContainer courseId={courseId} data={data} courseInfo={courseInfo} />;
 }
 
 /* ─── types ─── */

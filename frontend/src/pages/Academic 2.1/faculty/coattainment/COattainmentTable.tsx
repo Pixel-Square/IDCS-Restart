@@ -1,102 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import fetchWithAuth from '../../../../services/fetchAuth';
+import { ColumnDef, evaluateFormulaExpr, computeStudentRowValues, getRawTotal, getWeightedTotal, getExamScore, getExamCoMaxMarks, getCoMaxWeight, getCalculatedAttainment } from './coattainmentEngine';
 
-export type ColumnDef = {
-  id: string;
-  label: string;
-  kind: 'raw' | 'weighted' | 'exam' | 'custom' | 'formula' | 'total';
-  formula?: string;
-  show_avg?: boolean;
-  meta?: any;
-};
-
-/**
- * Safely evaluates a mathematical expression string with a numeric context map.
- * Operates without eval() or Function() constructor for strict security.
- */
-export function evaluateFormulaExpr(expr: string, context: Record<string, number>): number | null {
-  if (!expr || typeof expr !== 'string') return null;
-
-  // Build normalized lookup map for tokens
-  const upperContext: Record<string, number> = {};
-  for (const [k, v] of Object.entries(context || {})) {
-    const uk = String(k).toUpperCase().trim();
-    upperContext[uk] = typeof v === 'number' && !isNaN(v) ? v : 0;
-    const normK = uk.replace(/[^A-Z0-9]+/g, '_');
-    upperContext[normK] = upperContext[uk];
-    const dashK = uk.replace(/[^A-Z0-9]+/g, '-');
-    upperContext[dashK] = upperContext[uk];
-  }
-
-  // Replace bracketed tokens like [COx-OBT-WEIGHT] or [CO1-MAX-WEIGHT] with numeric values
-  let replaced = expr.replace(/\[([^\]]+)\]/g, (_, token) => {
-    const rawKey = String(token).toUpperCase().trim();
-    if (rawKey in upperContext) return ` ${upperContext[rawKey]} `;
-    const normKey = rawKey.replace(/[^A-Z0-9]+/g, '_');
-    if (normKey in upperContext) return ` ${upperContext[normKey]} `;
-    const dashKey = rawKey.replace(/[^A-Z0-9]+/g, '-');
-    if (dashKey in upperContext) return ` ${upperContext[dashKey]} `;
-    return ' 0 ';
-  });
-
-  // Replace any remaining words (variable names without brackets)
-  replaced = replaced.replace(/\b([A-Z][A-Z0-9_-]*)\b/gi, (word) => {
-    const uw = word.toUpperCase().trim();
-    if (uw in upperContext) return ` ${upperContext[uw]} `;
-    const nw = uw.replace(/[^A-Z0-9]+/g, '_');
-    if (nw in upperContext) return ` ${upperContext[nw]} `;
-    return ' 0 ';
-  });
-
-  const tokens = replaced.match(/([0-9]+\.?[0-9]*|\+|\-|\*|\/|\%|\(|\))/g);
-  if (!tokens || tokens.length === 0) return null;
-
-  let pos = 0;
-
-  function parseExpression(): number {
-    let left = parseTerm();
-    while (pos < tokens!.length && (tokens![pos] === '+' || tokens![pos] === '-')) {
-      const op = tokens![pos++];
-      const right = parseTerm();
-      if (op === '+') left += right;
-      else left -= right;
-    }
-    return left;
-  }
-
-  function parseTerm(): number {
-    let left = parseFactor();
-    while (pos < tokens!.length && (tokens![pos] === '*' || tokens![pos] === '/' || tokens![pos] === '%')) {
-      const op = tokens![pos++];
-      const right = parseFactor();
-      if (op === '*') left *= right;
-      else if (op === '/') left = right !== 0 ? left / right : 0;
-      else if (op === '%') left = right !== 0 ? left % right : 0;
-    }
-    return left;
-  }
-
-  function parseFactor(): number {
-    if (pos >= tokens!.length) return 0;
-    const token = tokens![pos++];
-    if (token === '(') {
-      const val = parseExpression();
-      if (pos < tokens!.length && tokens![pos] === ')') pos++;
-      return val;
-    }
-    if (token === '-') return -parseFactor();
-    if (token === '+') return parseFactor();
-    const num = parseFloat(token);
-    return isNaN(num) ? 0 : num;
-  }
-
-  try {
-    const res = parseExpression();
-    return isNaN(res) || !isFinite(res) ? null : res;
-  } catch {
-    return null;
-  }
-}
+export type { ColumnDef };
+export { evaluateFormulaExpr };
 
 export default function COattainmentTable({
   courseId,
@@ -512,7 +419,41 @@ export default function COattainmentTable({
     const rawTotal = getRawTotal(student, coNum);
     const weightedTotal = getWeightedTotal(student, coNum);
 
+    // Calculate raw marks and max marks exclusively for exam assignments with weight setted by admin
+    let obtWeightSettedRaw = 0;
+    let maxWeightSettedRaw = 0;
+
+    if (data?.exams && Array.isArray(data.exams)) {
+      data.exams.forEach((ex: any) => {
+        const covered = Array.isArray(ex?.covered_cos) ? ex.covered_cos : [];
+        if (!covered.includes(coNum)) return;
+
+        // Check if admin has set weight for this CO or exam
+        let hasWeight = false;
+        if (ex.co_weights && typeof ex.co_weights === 'object') {
+          const directWeight = ex.co_weights[String(coNum)] ?? ex.co_weights[coNum];
+          if (directWeight !== undefined && directWeight !== null && !isNaN(Number(directWeight)) && Number(directWeight) > 0) {
+            hasWeight = true;
+          }
+        }
+        if (!hasWeight && Number(ex?.weight || 0) > 0) {
+          hasWeight = true;
+        }
+
+        if (hasWeight) {
+          const studentScore = getExamScore(student, ex.id, coNum);
+          const maxScore = getExamCoMaxMarks(ex.id, coNum);
+          obtWeightSettedRaw += studentScore;
+          maxWeightSettedRaw += maxScore;
+        }
+      });
+    }
+
     const baseContext: Record<string, number> = {
+      [`CO${coNum}-OBT-WEIGHTSETTED-RAW-MARKS`]: obtWeightSettedRaw,
+      [`COX-OBT-WEIGHTSETTED-RAW-MARKS`]: obtWeightSettedRaw,
+      [`CO${coNum}-MAX-WEIGHTSETTED-RAW-MARKS`]: maxWeightSettedRaw,
+      [`COX-MAX-WEIGHTSETTED-RAW-MARKS`]: maxWeightSettedRaw,
       [`CO${coNum}-OBT-WEIGHT`]: obtWeight,
       [`CO${coNum}-MAX-WEIGHT`]: maxWeight,
       [`CO${coNum}-TOTAL-RAW`]: rawTotal,
