@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import { derivePrimaryRole, getMe } from "./services/auth";
 import { seedUCState } from "./utils/underConstruction";
 import Navbar from "./components/navigation/Navbar";
@@ -128,7 +128,6 @@ import CollegesPage from './pages/colleges/CollegesPage';
 import CollegeDetailPage from './pages/colleges/CollegeDetailPage';
 import CollegeUsersPage from './pages/colleges/CollegeUsersPage';
 import CollegeFeaturesPage from './pages/colleges/CollegeFeaturesPage';
-import CollegeInfoEditPage from './pages/colleges/CollegeInfoEditPage';
 import RolesPage from './pages/roles/RolesPage';
 import DepartmentsPage from './pages/colleges/DepartmentsPage';
 import BatchesPage from './pages/colleges/BatchesPage';
@@ -155,55 +154,6 @@ export default function App() {
   const [user, setUser] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
   const { collapsed } = useSidebar();
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  const isSuperOrCollegeAdmin = Boolean(
-    user && (
-      (user as any).is_superuser ||
-      (Array.isArray(user.roles) && user.roles.some((r: any) => {
-        const name = String(typeof r === 'string' ? r : r?.name || '').toUpperCase();
-        return name === 'SUPER_ADMIN' || name === 'SUPERADMIN' || name === 'ADMIN' || name === 'COLLEGE_ADMIN' || name === 'COLLEGE ADMIN';
-      })) ||
-      ['SUPER_ADMIN', 'SUPERADMIN', 'ADMIN', 'COLLEGE_ADMIN'].includes(String(user.role || '').toUpperCase())
-    )
-  );
-
-  const [isOnboardingLocked, setIsOnboardingLocked] = useState<boolean>(
-    () => sessionStorage.getItem('idcs_first_login_onboarding') === 'true'
-  );
-
-  useEffect(() => {
-    const checkOnboarding = () => {
-      if (isSuperOrCollegeAdmin) {
-        sessionStorage.removeItem('idcs_first_login_onboarding');
-        setIsOnboardingLocked(false);
-      } else {
-        setIsOnboardingLocked(sessionStorage.getItem('idcs_first_login_onboarding') === 'true');
-      }
-    };
-    checkOnboarding();
-    window.addEventListener('idcs:onboarding-completed', checkOnboarding);
-    window.addEventListener('idcs:onboarding-started', checkOnboarding);
-    return () => {
-      window.removeEventListener('idcs:onboarding-completed', checkOnboarding);
-      window.removeEventListener('idcs:onboarding-started', checkOnboarding);
-    };
-  }, [isSuperOrCollegeAdmin]);
-
-  useEffect(() => {
-    if (user && !user.must_change_password) {
-      if (isSuperOrCollegeAdmin) {
-        sessionStorage.removeItem('idcs_first_login_onboarding');
-        setIsOnboardingLocked(false);
-        return;
-      }
-      const isOnboarding = sessionStorage.getItem('idcs_first_login_onboarding') === 'true';
-      if (isOnboarding && location.pathname !== '/profile') {
-        navigate('/profile?firstLogin=true', { replace: true });
-      }
-    }
-  }, [user, location.pathname, navigate, isOnboardingLocked, isSuperOrCollegeAdmin]);
 
   const canAccessCoePortal = (currentUser: Me | null) => {
     if (!currentUser) return false;
@@ -256,7 +206,6 @@ export default function App() {
           permissions: Array.isArray(r.permissions) ? r.permissions : [],
           profile_type: r.profile_type || null,
           profile: r.profile || null,
-          must_change_password: Boolean(r.must_change_password || localStorage.getItem('must_change_password') === 'true'),
         };
         seedUCState((r as any).under_construction || {});
         setUser(normalizedUser as Me);
@@ -282,7 +231,6 @@ export default function App() {
         permissions: Array.isArray(detail.permissions) ? detail.permissions : [],
         profile_type: detail.profile_type || null,
         profile: detail.profile || null,
-        must_change_password: Boolean(detail.must_change_password || localStorage.getItem('must_change_password') === 'true'),
       };
       seedUCState((detail as any).under_construction || {});
       setUser(normalizedUser as Me);
@@ -330,20 +278,9 @@ export default function App() {
           >
             {user?.must_change_password && (
               <ForcePasswordChangeModal
-                user={user}
-                onComplete={(navigateToProfile?: boolean) => {
+                onComplete={() => {
+                  // Refresh the user data after password change
                   setUser(prev => prev ? { ...prev, must_change_password: false } : prev);
-                  try {
-                    localStorage.removeItem('must_change_password');
-                  } catch {}
-                  if (navigateToProfile && !isSuperOrCollegeAdmin) {
-                    sessionStorage.setItem('idcs_first_login_onboarding', 'true');
-                    window.dispatchEvent(new CustomEvent('idcs:onboarding-started'));
-                    navigate('/profile?firstLogin=true');
-                  } else {
-                    sessionStorage.removeItem('idcs_first_login_onboarding');
-                    window.dispatchEvent(new CustomEvent('idcs:onboarding-completed'));
-                  }
                 }}
               />
             )}
@@ -361,11 +298,6 @@ export default function App() {
                 <Route
                   path="/colleges/:id"
                   element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<CollegeDetailPage user={user} />} />}
-                />
-                {/* College Details — Super Admin only, double-auth protected */}
-                <Route
-                  path="/colleges/:id/info"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegeInfoEditPage user={user} />} />}
                 />
                 <Route
                   path="/colleges/:id/users"

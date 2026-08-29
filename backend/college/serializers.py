@@ -61,19 +61,57 @@ class CollegeSerializer(serializers.ModelSerializer):
 
         college = super().create(validated_data)
 
-        # ── Ensure default roles exist system-wide for every new college ────
-        # STUDENT and STAFF are fixed base roles that must always be present
-        # so that the Roles & Permissions page shows them and users can be
-        # assigned immediately without any extra setup.
-        Role.objects.get_or_create(
+        # ── Ensure default global roles exist ────────────────────────────────
+        student_role, _ = Role.objects.get_or_create(
             name='STUDENT',
             defaults={'description': 'Default role for all enrolled students'},
         )
-        Role.objects.get_or_create(
+        staff_role, _ = Role.objects.get_or_create(
             name='STAFF',
             defaults={'description': 'Default role for all staff / faculty members'},
         )
 
+        # ── Seed per-college roles: STUDENT + STAFF always present ───────────
+        from .models import CollegeRole, CollegeFeature, FeatureCatalog
+        CollegeRole.objects.get_or_create(college=college, role=student_role)
+        CollegeRole.objects.get_or_create(college=college, role=staff_role)
+
+        # ── Activate features + derive roles from selected features ──────────
+        request = self.context.get('request')
+        feature_codes = []
+        if request:
+            # Accept features as list from JSON body or multi-part form
+            feature_codes = request.data.getlist('features') if hasattr(request.data, 'getlist') else request.data.get('features', [])
+            if isinstance(feature_codes, str):
+                feature_codes = [feature_codes]
+
+        if feature_codes:
+            from django.utils import timezone
+            now = timezone.now()
+            catalog_features = list(FeatureCatalog.objects.filter(code__in=feature_codes))
+
+            for feat in catalog_features:
+                CollegeFeature.objects.update_or_create(
+                    college=college, feature=feat,
+                    defaults={'is_enabled': True, 'enabled_at': now, 'disabled_at': None},
+                )
+
+            # Derive roles from the selected features' applicable_roles
+            derived_role_names = set()
+            for feat in catalog_features:
+                if feat.applicable_roles:
+                    for rn in feat.applicable_roles.split(','):
+                        rn = rn.strip().upper()
+                        if rn and rn != 'SUPER_ADMIN':
+                            derived_role_names.add(rn)
+
+            # Create CollegeRole entries for each derived role
+            for role_name in derived_role_names:
+                role_obj = Role.objects.filter(name__iexact=role_name).first()
+                if role_obj:
+                    CollegeRole.objects.get_or_create(college=college, role=role_obj)
+
+        # ── Provision college admin user ─────────────────────────────────────
         if username and email and password:
             user = User.objects.create_user(
                 username=username,
@@ -93,6 +131,8 @@ class CollegeSerializer(serializers.ModelSerializer):
                 defaults={'description': 'College administrator role'},
             )
             user.roles.add(admin_role)
+            # Also add ADMIN to this college's roles
+            CollegeRole.objects.get_or_create(college=college, role=admin_role)
 
         return college
 

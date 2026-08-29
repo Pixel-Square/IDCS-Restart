@@ -14,7 +14,21 @@ class RolesListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        qs = Role.objects.exclude(name__iexact='SUPER_ADMIN').values_list('name', flat=True)
+        college_id = getattr(request, 'college_id', None)
+
+        if college_id:
+            # College-scoped: only roles activated for this college
+            from college.models import CollegeRole
+            active_role_ids = list(
+                CollegeRole.objects.filter(college_id=college_id, is_active=True)
+                .values_list('role_id', flat=True)
+            )
+            qs = Role.objects.filter(id__in=active_role_ids).exclude(
+                name__iexact='SUPER_ADMIN'
+            ).values_list('name', flat=True)
+        else:
+            qs = Role.objects.exclude(name__iexact='SUPER_ADMIN').values_list('name', flat=True)
+
         # Role names may exist in mixed case (e.g. "HOD" and "hod") as separate
         # DB rows; dedupe after uppercasing so the frontend doesn't show
         # duplicate entries.

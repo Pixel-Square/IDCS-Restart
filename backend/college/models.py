@@ -154,3 +154,32 @@ class CollegeFeature(models.Model):
     def __str__(self):
         state = 'ON' if self.is_enabled else 'OFF'
         return f"{self.college.code} / {self.feature.code} = {state}"
+
+
+class CollegeRole(models.Model):
+    """Per-college role activation. Tracks which roles are active for a given college.
+
+    STUDENT and STAFF are always auto-created for every new college.
+    Additional roles are activated based on the features selected during
+    college creation (derived from FeatureCatalog.applicable_roles).
+
+    This model does NOT duplicate Role objects — it references the shared
+    global Role table and simply records which ones are visible / assignable
+    within each college's Roles & Permissions module.
+    """
+
+    college = models.ForeignKey(College, on_delete=models.CASCADE, related_name='college_roles')
+    role = models.ForeignKey('accounts.Role', on_delete=models.CASCADE, related_name='college_roles')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('college', 'role')
+        verbose_name = 'College Role'
+        verbose_name_plural = 'College Roles'
+        ordering = ['role__name']
+
+    def __str__(self):
+        state = 'ACTIVE' if self.is_active else 'INACTIVE'
+        return f"{self.college.code} / {self.role.name} = {state}"
+

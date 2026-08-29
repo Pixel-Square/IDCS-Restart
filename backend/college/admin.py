@@ -15,7 +15,7 @@ def _load_workbook(*args, **kwargs):
 
     return load_workbook(*args, **kwargs)
 
-from .models import College, FeatureCatalog, CollegeFeature
+from .models import College, FeatureCatalog, CollegeFeature, CollegeRole
 
 
 class CollegeUploadExcelForm(forms.Form):
@@ -372,3 +372,17 @@ class CollegeFeatureAdmin(admin.ModelAdmin):
     list_editable = ('is_enabled',)
     autocomplete_fields = ('college', 'feature')
     ordering = ('college__code', 'feature__sort_order')
+
+
+# ---------------------------------------------------------------------------
+# College Role
+# ---------------------------------------------------------------------------
+
+@admin.register(CollegeRole)
+class CollegeRoleAdmin(admin.ModelAdmin):
+    list_display = ('college', 'role', 'is_active', 'created_at')
+    list_filter = ('is_active', 'college', 'role')
+    search_fields = ('college__code', 'college__name', 'role__name')
+    list_editable = ('is_active',)
+    autocomplete_fields = ('college', 'role')
+    ordering = ('college__code', 'role__name')

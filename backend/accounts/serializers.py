@@ -159,7 +159,6 @@ class MeSerializer(serializers.Serializer):
     under_construction = serializers.SerializerMethodField()
     role_features = serializers.SerializerMethodField()
     is_superuser = serializers.BooleanField(read_only=True)
-    must_change_password = serializers.BooleanField(read_only=True)
 
     def get_role_features(self, obj):
         try:
@@ -320,8 +319,7 @@ class MeSerializer(serializers.Serializer):
                         'name': getattr(department, 'name', None),
                     } if department else None,
                     'status': sp.status,
-                    # Personal email & Parent / Guardian details
-                    'personal_email': getattr(sp, 'personal_email', '') or '',
+                    # Parent / Guardian details
                     'father_name': getattr(sp, 'father_name', '') or '',
                     'father_phone': getattr(sp, 'father_phone', '') or '',
                     'mother_name': getattr(sp, 'mother_name', '') or '',
@@ -680,5 +678,4 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
             'user_id': int(user.id),
             'name': (f"{getattr(user, 'first_name', '')} {getattr(user, 'last_name', '')}").strip() or str(getattr(user, 'username', '') or '').strip(),
             'roles': _compute_effective_role_names(user),
-            'must_change_password': bool(getattr(user, 'must_change_password', False)),
         }

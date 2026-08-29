@@ -59,7 +59,24 @@ class RolesManagementListCreateView(APIView):
     def get(self, request):
         role_feature_map = _build_role_feature_map()
 
-        roles = Role.objects.exclude(name__iexact='SUPER_ADMIN').order_by('name')
+        college_id = getattr(request, 'college_id', None)
+
+        if college_id:
+            # College-scoped: only roles activated for this college
+            from college.models import CollegeRole
+            active_role_ids = list(
+                CollegeRole.objects.filter(college_id=college_id, is_active=True)
+                .values_list('role_id', flat=True)
+            )
+            roles = (
+                Role.objects.filter(id__in=active_role_ids)
+                .exclude(name__iexact='SUPER_ADMIN')
+                .order_by('name')
+            )
+        else:
+            # Global view (SUPER_ADMIN without college header)
+            roles = Role.objects.exclude(name__iexact='SUPER_ADMIN').order_by('name')
+
         data = []
         for r in roles:
             features = role_feature_map.get(r.name.upper(), [])

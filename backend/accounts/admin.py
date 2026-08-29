@@ -862,6 +862,7 @@ class UserAdmin(DjangoUserAdmin):
 @admin.register(Role)
 class RoleAdmin(admin.ModelAdmin):
     list_display = ('name', 'description', 'get_features', 'get_permissions')
+    search_fields = ('name', 'description')
     filter_horizontal = ('features',)
     
     def get_features(self, obj):

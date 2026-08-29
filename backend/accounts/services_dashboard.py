@@ -94,8 +94,6 @@ def resolve_dashboard_capabilities(user) -> Dict:
     # not necessarily as accounts.Role. Expose them as effective roles so the
     # frontend can show HOD pages in the sidebar.
     dept_role_names = set()
-    has_active_mentor_mentees = False
-    has_active_advisee_sections = False
     try:
         # Skip deriving department/mentor/advisor roles for isolated admins
         if not is_admin_isolated:
@@ -116,6 +114,9 @@ def resolve_dashboard_capabilities(user) -> Dict:
                     dept_role_names.add('MENTOR')
                 if has_active_advisee_sections:
                     dept_role_names.add('ADVISOR')
+        else:
+            has_active_mentor_mentees = False
+            has_active_advisee_sections = False
     except Exception:
         dept_role_names = set()
         has_active_mentor_mentees = False

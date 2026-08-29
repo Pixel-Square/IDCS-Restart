@@ -3,7 +3,8 @@ from __future__ import annotations
 import io
 import itertools
 
-from django.db import transaction
+from django.db import transaction, IntegrityError
+from django.db.models.deletion import ProtectedError, RestrictedError
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions, filters, status
 from rest_framework.response import Response
@@ -92,6 +93,23 @@ class CollegeDetailView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsCollegeAdminOrSuperAdmin]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     queryset = College.objects.all()
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        try:
+            self.perform_destroy(instance)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except (ProtectedError, RestrictedError) as e:
+            protected_objs = list(getattr(e, 'protected_objects', []))
+            count = len(protected_objs)
+            model_names = sorted(set(obj._meta.verbose_name_plural.title() for obj in protected_objs[:10])) if protected_objs else []
+            model_str = f" ({', '.join(model_names)})" if model_names else ""
+            msg = f"Cannot delete college because it has {count} dependent protected record(s){model_str}. Please remove or reassign those records first, or deactivate the college."
+            return Response({'detail': msg}, status=status.HTTP_409_CONFLICT)
+        except IntegrityError as e:
+            return Response({'detail': f"Cannot delete college due to database constraint: {str(e)}"}, status=status.HTTP_409_CONFLICT)
+        except Exception as e:
+            return Response({'detail': f"Failed to delete college: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
 
 # ---------------------------------------------------------------------------
@@ -920,6 +938,20 @@ class CollegeFeatureToggleView(APIView):
         else:
             cf.disabled_at = now
         cf.save(update_fields=['is_enabled', 'enabled_at', 'disabled_at'])
+
+        # ── Auto-activate CollegeRole entries when a feature is turned ON ────
+        if enabled and feat.applicable_roles:
+            from accounts.models import Role
+            from .models import CollegeRole
+            for role_name in feat.applicable_roles.split(','):
+                role_name = role_name.strip().upper()
+                if role_name and role_name != 'SUPER_ADMIN':
+                    role_obj = Role.objects.filter(name__iexact=role_name).first()
+                    if role_obj:
+                        CollegeRole.objects.get_or_create(
+                            college=college, role=role_obj,
+                            defaults={'is_active': True},
+                        )
 
         return Response({
             'code': feat.code,

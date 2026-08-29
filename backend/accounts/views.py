@@ -999,57 +999,13 @@ class ProfileUpdateView(APIView):
                 except ValidationError:
                     return Response({'detail': 'Enter a valid personal email address.'}, status=status.HTTP_400_BAD_REQUEST)
 
-            student_profile = getattr(user, 'student_profile', None)
             staff_profile = getattr(user, 'staff_profile', None)
-            if student_profile is not None:
-                if str(getattr(student_profile, 'personal_email', '') or '') != normalized_personal_email:
-                    student_profile.personal_email = normalized_personal_email
-                    student_profile.save(update_fields=['personal_email'])
-            elif staff_profile is not None:
-                if str(getattr(staff_profile, 'personal_email', '') or '') != normalized_personal_email:
-                    staff_profile.personal_email = normalized_personal_email
-                    staff_profile.save(update_fields=['personal_email'])
-            else:
-                return Response({'detail': 'Personal email can be updated only for student or staff profiles.'}, status=status.HTTP_400_BAD_REQUEST)
+            if staff_profile is None:
+                return Response({'detail': 'Personal email can be updated only for staff profiles.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Update student-specific fields (Father, Mother, Address) if student profile exists
-        student_profile = getattr(user, 'student_profile', None)
-        if student_profile is not None:
-            student_updated = False
-            student_update_fields = []
-            
-            father_name = request.data.get('father_name')
-            if father_name is not None:
-                student_profile.father_name = str(father_name).strip()
-                student_updated = True
-                student_update_fields.append('father_name')
-                
-            father_phone = request.data.get('father_phone')
-            if father_phone is not None:
-                student_profile.father_phone = str(father_phone).strip()
-                student_updated = True
-                student_update_fields.append('father_phone')
-                
-            mother_name = request.data.get('mother_name')
-            if mother_name is not None:
-                student_profile.mother_name = str(mother_name).strip()
-                student_updated = True
-                student_update_fields.append('mother_name')
-                
-            mother_phone = request.data.get('mother_phone')
-            if mother_phone is not None:
-                student_profile.mother_phone = str(mother_phone).strip()
-                student_updated = True
-                student_update_fields.append('mother_phone')
-                
-            address = request.data.get('address')
-            if address is not None:
-                student_profile.address = str(address).strip()
-                student_updated = True
-                student_update_fields.append('address')
-                
-            if student_updated:
-                student_profile.save(update_fields=student_update_fields)
+            if str(getattr(staff_profile, 'personal_email', '') or '') != normalized_personal_email:
+                staff_profile.personal_email = normalized_personal_email
+                staff_profile.save(update_fields=['personal_email'])
 
         # Do not mark name/email as permanently edited; allow subsequent edits.
 
