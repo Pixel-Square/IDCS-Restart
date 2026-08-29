@@ -74,3 +74,10 @@ class CollegeScopedAdminSite(AdminSite):
             app for app in app_list
             if app['app_label'] not in TENANT_APP_LABELS
         ]
+
+    def index(self, request, extra_context=None):
+        from college.models import College
+        extra_context = extra_context or {}
+        # Fetch active colleges to display as tabs on the dashboard
+        extra_context['colleges'] = College.objects.filter(is_active=True).order_by('name')
+        return super().index(request, extra_context=extra_context)

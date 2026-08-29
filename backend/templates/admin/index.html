@@ -1,105 +1,216 @@
 {% extends "admin/base_site.html" %}
 {% load i18n static %}
 
+{% block extrastyle %}
+{{ block.super }}
+<style>
+  .college-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 3rem;
+  }
+  .college-card {
+    background: #fff;
+    border: 1px solid var(--kr-border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    text-align: center;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+    transition: all 0.2s ease;
+    text-decoration: none;
+    color: var(--kr-text);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+  }
+  .college-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    border-color: var(--kr-primary);
+  }
+  .college-avatar {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: var(--kr-primary-light);
+    color: var(--kr-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    font-weight: bold;
+  }
+  .college-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+  }
+  .system-admin-section {
+    background: #fff;
+    border: 1px solid var(--kr-border);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 2rem;
+  }
+  .system-admin-header {
+    padding: 1.25rem 1.5rem;
+    background: var(--kr-surface);
+    border-bottom: 1px solid var(--kr-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+  }
+  .system-admin-header h2 {
+    margin: 0;
+    font-size: 1.2rem;
+    color: var(--kr-text);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .system-admin-content {
+    padding: 1.5rem;
+    display: none;
+  }
+  .system-admin-content.open {
+    display: block;
+  }
+  .toggle-icon {
+    transition: transform 0.3s ease;
+  }
+  .toggle-icon.open {
+    transform: rotate(180deg);
+  }
+  .apps-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+    gap: 1.5rem;
+  }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="dashboard">
-  <div class="dashboard-header">
-    <h1 class="dashboard-title">{% trans "Dashboard" %}</h1>
-    <p class="dashboard-subtitle">{% trans "Welcome to KR DATABASE Administration" %}</p>
+  <div class="dashboard-header" style="margin-bottom: 2rem;">
+    <h1 class="dashboard-title">{% trans "Colleges Dashboard" %}</h1>
+    <p class="dashboard-subtitle">Select a college to manage its isolated database and modules.</p>
   </div>
 
-  <div class="dashboard-tools">
-    <input
-      id="admin-dashboard-search"
-      class="dashboard-search"
-      type="text"
-      placeholder="{% trans 'Search applications or models...' %}"
-      autocomplete="off"
-    />
+  <!-- Colleges Grid -->
+  {% if colleges %}
+  <div class="college-grid">
+    {% for college in colleges %}
+      <a href="/admin/college/college/{{ college.id }}/dashboard/" class="college-card">
+        <div class="college-avatar">
+          {{ college.code|slice:":2"|upper }}
+        </div>
+        <div class="college-name">{{ college.name }}</div>
+        <div style="font-size: 0.85rem; color: var(--kr-subtle); background: var(--kr-bg); padding: 0.25rem 0.75rem; border-radius: 99px;">
+          Code: {{ college.code }}
+        </div>
+      </a>
+    {% endfor %}
   </div>
-
-  <!-- Quick Stats -->
-  <div class="stats-grid">
-    <div class="stat-card">
-      <div class="stat-label">{% trans "Total Apps" %}</div>
-      <div class="stat-value" id="total-apps">{{ app_list|length }}</div>
-    </div>
-    <div class="stat-card success">
-      <div class="stat-label">{% trans "Active Users" %}</div>
-      <div class="stat-value" id="active-users">-</div>
-    </div>
-    <div class="stat-card warning">
-      <div class="stat-label">{% trans "Models" %}</div>
-      <div class="stat-value" id="total-models">-</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">{% trans "System Status" %}</div>
-      <div class="stat-value" style="font-size:1.2rem; color:var(--kr-success);">{% trans "Active" %}</div>
-    </div>
+  {% else %}
+  <div style="text-align: center; padding: 3rem; background: #fff; border-radius: 12px; border: 1px dashed var(--kr-border); margin-bottom: 3rem;">
+    <p style="color: var(--kr-subtle); margin-bottom: 1rem;">No active colleges found.</p>
+    <a href="/admin/college/college/add/" class="button" style="background: var(--kr-primary); color: #fff; padding: 0.5rem 1rem; border-radius: 6px; text-decoration: none;">Create College</a>
   </div>
+  {% endif %}
 
-  <!-- Apps & Models -->
-  <div class="app-section">
-    <h2 class="section-title">{% trans "Applications & Models" %}</h2>
-    <div class="app-cards" id="admin-app-cards">
-      {% for app in app_list %}
-        <div class="app-card" data-app-name="{{ app.name|lower }}">
-          <div class="app-card-header">
-            {{ app.name }}
-          </div>
-          <div class="app-card-body">
-            <ul class="model-list">
-              {% for model in app.models %}
-                <li data-admin-url="{{ model.admin_url }}" data-model-name="{{ model.name|lower }}">
-                  <div class="model-item">
-                    <div class="model-name">
-                      <a href="{{ model.admin_url }}">{{ model.name }}</a>
-                    </div>
-                    <div style="display:flex; align-items:center; gap:1rem;">
-                      <span class="model-count">0</span>
-                      <div class="model-actions">
-                        {% if model.add_url %}
-                          <a href="{{ model.add_url }}" title="{% trans 'Add' %}">+ {% trans "Add" %}</a>
-                        {% endif %}
+  <!-- System Administration Section (Global Apps) -->
+  <div class="system-admin-section">
+    <div class="system-admin-header" onclick="toggleSystemAdmin()">
+      <h2>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3m0 12l-4-4m4 4l4-4M2 17l.621 2.485A2 2 0 0 0 4.561 21h14.878a2 2 0 0 0 1.94-1.515L22 17"></path></svg>
+        {% trans "Global System Administration" %}
+      </h2>
+      <svg class="toggle-icon" id="systemToggleIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+    </div>
+    
+    <div class="system-admin-content" id="systemAdminContent">
+      <div class="dashboard-tools" style="margin-bottom: 1.5rem;">
+        <input
+          id="admin-dashboard-search"
+          class="dashboard-search"
+          style="width: 100%; padding: 0.75rem 1rem; border: 1px solid var(--kr-border); border-radius: 8px;"
+          type="text"
+          placeholder="{% trans 'Search system models...' %}"
+          autocomplete="off"
+        />
+      </div>
+
+      <div class="apps-container" id="admin-app-cards">
+        {% for app in app_list %}
+          <div class="app-card" data-app-name="{{ app.name|lower }}" style="background: #fff; border: 1px solid var(--kr-border); border-radius: 8px; overflow: hidden;">
+            <div class="app-card-header" style="background: var(--kr-surface); padding: 1rem; font-weight: 600; border-bottom: 1px solid var(--kr-border);">
+              {{ app.name }}
+            </div>
+            <div class="app-card-body" style="padding: 0;">
+              <ul class="model-list" style="list-style: none; margin: 0; padding: 0;">
+                {% for model in app.models %}
+                  <li data-admin-url="{{ model.admin_url }}" data-model-name="{{ model.name|lower }}" style="border-bottom: 1px solid var(--kr-border); padding: 0.75rem 1rem;">
+                    <div class="model-item" style="display: flex; justify-content: space-between; align-items: center;">
+                      <div class="model-name">
+                        <a href="{{ model.admin_url }}" style="color: var(--kr-text); text-decoration: none;">{{ model.name }}</a>
+                      </div>
+                      <div style="display:flex; align-items:center; gap:1rem;">
+                        <div class="model-actions">
+                          {% if model.add_url %}
+                            <a href="{{ model.add_url }}" title="{% trans 'Add' %}" style="color: var(--kr-primary); text-decoration: none; font-size: 0.9rem;">+ {% trans "Add" %}</a>
+                          {% endif %}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </li>
-              {% endfor %}
-            </ul>
+                  </li>
+                {% endfor %}
+              </ul>
+            </div>
           </div>
-        </div>
-      {% empty %}
-        <p>{% trans "No apps registered." %}</p>
-      {% endfor %}
+        {% empty %}
+          <p>{% trans "No system apps registered." %}</p>
+        {% endfor %}
+      </div>
+      <p id="admin-dashboard-no-results" style="display:none; margin-top:1rem; color:var(--kr-subtle);">
+        {% trans "No matching system applications or models." %}
+      </p>
     </div>
-    <p id="admin-dashboard-no-results" style="display:none; margin-top:1rem; color:var(--kr-subtle);">
-      {% trans "No matching applications or models." %}
-    </p>
   </div>
 
   <!-- Recent Actions -->
   {% load log %}
   {% get_admin_log 10 as admin_log for_user user %}
   {% if admin_log %}
-  <div class="recent-actions">
-    <h2>{% trans "Recent Actions" %}</h2>
-    <ul class="action-list">
+  <div class="recent-actions" style="margin-top: 3rem;">
+    <h2 style="font-size: 1.2rem; margin-bottom: 1rem;">{% trans "Recent Actions" %}</h2>
+    <ul class="action-list" style="list-style: none; padding: 0; background: #fff; border: 1px solid var(--kr-border); border-radius: 8px;">
       {% for entry in admin_log %}
-        <li>
+        <li style="padding: 0.75rem 1rem; border-bottom: 1px solid var(--kr-border); display: flex; gap: 0.5rem; align-items: center;">
           {% if entry.is_deletion %}
-            {{ entry.object_repr }}
+            <span style="color: var(--kr-danger);">{{ entry.object_repr }}</span>
           {% else %}
-            <a href="{{ entry.get_admin_url }}">{{ entry.object_repr }}</a>
+            <a href="{{ entry.get_admin_url }}" style="color: var(--kr-primary); text-decoration: none;">{{ entry.object_repr }}</a>
           {% endif %}
-          - {{ entry.change_message }} 
-          <small style="color:var(--kr-gray);">({{ entry.action_time|timesince }} {% trans "ago" %})</small>
+          <span style="color: var(--kr-text);">- {{ entry.change_message }}</span>
+          <small style="color:var(--kr-subtle); margin-left: auto;">({{ entry.action_time|timesince }} {% trans "ago" %})</small>
         </li>
       {% endfor %}
     </ul>
   </div>
   {% endif %}
 </div>
+
+<script>
+  function toggleSystemAdmin() {
+    const content = document.getElementById('systemAdminContent');
+    const icon = document.getElementById('systemToggleIcon');
+    content.classList.toggle('open');
+    icon.classList.toggle('open');
+  }
+</script>
 {% endblock %}
 
 {% block extrahead %}
