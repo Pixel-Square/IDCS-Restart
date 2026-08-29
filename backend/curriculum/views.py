@@ -108,9 +108,9 @@ class CurriculumFieldSchemaViewSet(viewsets.ModelViewSet):
         scope = self.request.query_params.get('scope')
         if scope:
             qs = qs.filter(scope__in=[scope, 'both'])
-        # Active only by default unless ?include_inactive=1
+        # Active only by default for list requests unless ?include_inactive=1
         include_inactive = str(self.request.query_params.get('include_inactive', '')).lower() in {'1', 'true'}
-        if not include_inactive:
+        if not include_inactive and self.action == 'list':
             qs = qs.filter(is_active=True)
         return qs.order_by('sort_order', 'key')
 
@@ -151,33 +151,80 @@ class CurriculumFieldSchemaViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='confirm-remove')
     def confirm_remove(self, request, pk=None):
-        """Department-level: remove a master-inherited field from dept view.
+        """Department-level or Master-level: remove/hide a field with password verification.
 
-        Body: { "password": "...", "department_id": 123 }
+        Body: { "password": "...", "department_id": 123 (optional) }
         Requires the requesting user's password for verification.
-        On success, adds the department to hidden_for_departments.
+        On success with department_id, adds the department to hidden_for_departments.
+        On success without department_id, sets is_active = False (master hide).
         """
         schema = self.get_object()
         password = request.data.get('password', '')
-        dept_id = request.data.get('department_id')
         if not password:
             return Response({'detail': 'Password is required.'}, status=status.HTTP_400_BAD_REQUEST)
-        if not dept_id:
-            return Response({'detail': 'department_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Verify password
         user = request.user
         if not user.check_password(password):
             return Response({'detail': 'Incorrect password.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            from academics.models import Department
-            dept = Department.objects.get(pk=dept_id)
-        except Exception:
-            return Response({'detail': 'Department not found.'}, status=status.HTTP_404_NOT_FOUND)
+        dept_id = request.data.get('department_id')
+        if dept_id:
+            if not schema.is_active:
+                return Response({'detail': 'Cannot hide a field that is globally hidden by the master curriculum.'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                from academics.models import Department
+                dept = Department.objects.get(pk=dept_id)
+            except Exception:
+                return Response({'detail': 'Department not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        schema.hidden_for_departments.add(dept)
-        return Response({'status': f'Field "{schema.key}" hidden for department {dept.code}.'})
+            schema.hidden_for_departments.add(dept)
+            return Response({'status': f'Field "{schema.key}" hidden for department {dept.code}.'})
+        else:
+            if not self._is_privileged():
+                return Response({'detail': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+            schema.is_active = False
+            schema.save(update_fields=['is_active', 'updated_at'])
+            return Response({'status': f'Field "{schema.label}" hidden globally.'})
+
+    @action(detail=True, methods=['post'], url_path='master-hide')
+    def master_hide(self, request, pk=None):
+        """Master-level: hide a field globally across master and department curriculums.
+
+        Body: { "password": "..." }
+        Requires the requesting user's password for verification.
+        On success, sets is_active = False.
+        """
+        if not self._is_privileged():
+            return Response({'detail': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+        
+        schema = self.get_object()
+        password = request.data.get('password', '')
+        if not password:
+            return Response({'detail': 'Password is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = request.user
+        if not user.check_password(password):
+            return Response({'detail': 'Incorrect password.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        schema.is_active = False
+        schema.save(update_fields=['is_active', 'updated_at'])
+        return Response({'status': f'Field "{schema.label}" hidden globally.'})
+
+    @action(detail=True, methods=['post'], url_path='master-show')
+    def master_show(self, request, pk=None):
+        """Master-level: restore a globally hidden field.
+
+        Body: {}
+        On success, sets is_active = True.
+        """
+        if not self._is_privileged():
+            return Response({'detail': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+        
+        schema = self.get_object()
+        schema.is_active = True
+        schema.save(update_fields=['is_active', 'updated_at'])
+        return Response({'status': f'Field "{schema.label}" restored globally.'})
 
     @action(detail=True, methods=['post'], url_path='dept-show')
     def dept_show(self, request, pk=None):
@@ -186,6 +233,9 @@ class CurriculumFieldSchemaViewSet(viewsets.ModelViewSet):
         Body: { "department_id": 123 }
         """
         schema = self.get_object()
+        if not schema.is_active:
+            return Response({'detail': 'Cannot restore a field that is globally hidden by the master curriculum.'}, status=status.HTTP_400_BAD_REQUEST)
+        
         dept_id = request.data.get('department_id')
         if not dept_id:
             return Response({'detail': 'department_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -373,6 +423,36 @@ class MasterImportView(APIView):
                         if cname:
                             instance = CurriculumMaster.objects.filter(regulation=reg, semester__number=sem_num, course_code__isnull=True, course_name__iexact=cname, college_id=current_college_id).first()
 
+                    legacy_keys = {
+                        'regulation', 'semester', 'course_code', 'course_name', 'category', 'class_type',
+                        'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
+                        'for_all_departments', 'editable', 'departments',
+                        'is_elective', 'qp_type', 'is_dept_core', 'total_hours'
+                    }
+
+                    dynamic_data = {}
+                    try:
+                        from curriculum.models import CurriculumFieldSchema
+                        schemas = {s.key: s.data_type for s in CurriculumFieldSchema.objects.filter(college_id=current_college_id, is_active=True)}
+                        for k, v in row.items():
+                            if k not in legacy_keys and k in schemas:
+                                dt = schemas.get(k)
+                                if dt and v is not None and str(v).strip() != '':
+                                    v = str(v).strip()
+                                    try:
+                                        if dt == 'int':
+                                            dynamic_data[k] = int(v)
+                                        elif dt == 'float':
+                                            dynamic_data[k] = float(v)
+                                        elif dt == 'bool':
+                                            dynamic_data[k] = v.lower() in ('true', '1', 'yes', 'y')
+                                        else:
+                                            dynamic_data[k] = v
+                                    except (ValueError, TypeError):
+                                        dynamic_data[k] = v
+                    except Exception:
+                        pass
+
                     vals = {
                         'regulation': reg,
                         'semester': semester_obj,
@@ -380,23 +460,34 @@ class MasterImportView(APIView):
                         'course_name': row.get('course_name') or None,
                         'category': row.get('category') or '',
                         'class_type': row.get('class_type') or 'THEORY',
-                        'l': int(row.get('l') or 0),
-                        't': int(row.get('t') or 0),
-                        'p': int(row.get('p') or 0),
-                        's': int(row.get('s') or 0),
-                        'c': int(row.get('c') or 0),
-                        'internal_mark': int(row.get('internal_mark') or 0),
-                        'external_mark': int(row.get('external_mark') or 0),
+                        'l': int(row.get('l') or 0) if row.get('l') else 0,
+                        't': int(row.get('t') or 0) if row.get('t') else 0,
+                        'p': int(row.get('p') or 0) if row.get('p') else 0,
+                        's': int(row.get('s') or 0) if row.get('s') else 0,
+                        'c': int(row.get('c') or 0) if row.get('c') else 0,
+                        'internal_mark': int(row.get('internal_mark') or 0) if row.get('internal_mark') else 0,
+                        'external_mark': int(row.get('external_mark') or 0) if row.get('external_mark') else 0,
                         'for_all_departments': (str(row.get('for_all_departments') or '').strip().lower() in ('1','true','yes')),
                         'editable': (str(row.get('editable') or '').strip().lower() in ('1','true','yes')),
                     }
+                    if 'qp_type' in row:
+                        vals['qp_type'] = row.get('qp_type') or 'QP1'
+                    if 'is_elective' in row:
+                        vals['is_elective'] = str(row.get('is_elective') or '').strip().lower() in ('1','true','yes','y')
+                    if 'is_dept_core' in row:
+                        vals['is_dept_core'] = str(row.get('is_dept_core') or '').strip().lower() in ('1','true','yes','y')
 
                     if instance:
+                        existing_dynamic = instance.dynamic_data or {}
+                        existing_dynamic.update(dynamic_data)
+                        vals['dynamic_data'] = existing_dynamic
+                        
                         for k, v in vals.items():
                             setattr(instance, k, v)
                         instance.save()
                         updated += 1
                     else:
+                        vals['dynamic_data'] = dynamic_data
                         instance = CurriculumMaster.objects.create(**vals)
                         created += 1
 

@@ -12,7 +12,9 @@ import {
   FieldDataType,
   FieldScope,
   confirmRemoveFieldForDept,
-  restoreFieldForDept
+  restoreFieldForDept,
+  hideMasterField,
+  restoreMasterField,
 } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
 import RemoveMasterFieldModal from './RemoveMasterFieldModal';
@@ -49,7 +51,16 @@ export default function FieldSchemaModal({ isOpen, onClose, onUpdated, departmen
       // Fetch all schemas including inactive so admins can see/restore hidden ones.
       const res = await fetchWithAuth('/api/curriculum/field-schemas/?include_inactive=1');
       const data = await res.json();
-      setSchemas(Array.isArray(data) ? data : (data.results || []));
+      const allSchemas = Array.isArray(data) ? data : (data.results || []);
+      const filteredSchemas = allSchemas.filter((s: CurriculumFieldSchema) => {
+        if (departmentId) {
+          if (!s.is_active) return false;
+          return s.scope === 'both' || s.scope === 'department';
+        } else {
+          return s.scope === 'both' || s.scope === 'master';
+        }
+      });
+      setSchemas(filteredSchemas);
     } catch (e) {
       console.error(e);
       showAlert('Failed to load schemas', 'error');
@@ -144,20 +155,29 @@ export default function FieldSchemaModal({ isOpen, onClose, onUpdated, departmen
     }
   };
 
-  const handleHideMasterField = async (password: string) => {
-    if (!hidingSchema || !departmentId) return;
-    await confirmRemoveFieldForDept(hidingSchema.id, departmentId, password);
-    showAlert('Master field removed from department.', 'success');
+  const handleHideField = async (password: string) => {
+    if (!hidingSchema) return;
+    if (departmentId) {
+      await confirmRemoveFieldForDept(hidingSchema.id, departmentId, password);
+      showAlert('Master field removed from department.', 'success');
+    } else {
+      await hideMasterField(hidingSchema.id, password);
+      showAlert('Field hidden globally.', 'success');
+    }
     await loadSchemas();
     onUpdated();
     setHidingSchema(null);
   };
 
-  const handleRestoreMasterField = async (id: number) => {
-    if (!departmentId) return;
+  const handleRestoreField = async (schema: CurriculumFieldSchema) => {
     try {
-      await restoreFieldForDept(id, departmentId);
-      showAlert('Master field restored.', 'success');
+      if (departmentId) {
+        await restoreFieldForDept(schema.id, departmentId);
+        showAlert('Master field restored.', 'success');
+      } else {
+        await restoreMasterField(schema.id);
+        showAlert('Field restored globally.', 'success');
+      }
       await loadSchemas();
       onUpdated();
     } catch (e: any) {
@@ -195,7 +215,7 @@ export default function FieldSchemaModal({ isOpen, onClose, onUpdated, departmen
                   <ShieldAlert className="w-5 h-5 text-blue-600 mt-0.5" />
                   <div className="text-sm text-blue-800">
                     <p className="font-semibold mb-1">About Curriculum Fields</p>
-                    <p><strong>Core fields</strong> are built into the system and can only be hidden (deactivated). <strong>Custom fields</strong> can be created and deleted.</p>
+                    <p><strong>Core fields</strong> are built into the system and can only be hidden with password authorization. <strong>Custom fields</strong> can be created and deleted.</p>
                   </div>
                 </div>
                 <button
@@ -254,10 +274,7 @@ export default function FieldSchemaModal({ isOpen, onClose, onUpdated, departmen
                           <input type="text" className="w-24 text-sm border-gray-300 rounded p-1.5 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Default" value={editForm.default_value} onChange={e => setEditForm({ ...editForm, default_value: e.target.value })} />
                         </td>
                         <td className="px-4 py-3 text-center">
-                          <label className="inline-flex items-center cursor-pointer">
-                            <input type="checkbox" className="sr-only peer" checked={editForm.is_active} onChange={e => setEditForm({ ...editForm, is_active: e.target.checked })} />
-                            <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-500"></div>
-                          </label>
+                          <span className="inline-flex px-2 py-0.5 text-xs font-semibold rounded-full bg-green-100 text-green-800">Active</span>
                         </td>
                         <td className="px-4 py-3 text-right">
                           <input type="number" className="w-16 text-sm border-gray-300 rounded p-1.5 focus:ring-2 focus:ring-indigo-500 outline-none text-right" value={editForm.sort_order} onChange={e => setEditForm({ ...editForm, sort_order: parseInt(e.target.value) || 0 })} />
@@ -274,115 +291,120 @@ export default function FieldSchemaModal({ isOpen, onClose, onUpdated, departmen
                         </td>
                       </tr>
                     )}
-                    {schemas.map(c => (
-                      <tr key={c.id} className={`${!c.is_active ? 'opacity-50 bg-gray-50' : 'hover:bg-gray-50'}`}>
-                        {editingId === c.id ? (
-                          <>
-                            <td className="px-4 py-3"><input type="text" disabled className="w-full text-sm border-gray-300 rounded p-1.5 bg-gray-100" value={editForm.key} title="Key cannot be edited after creation" /></td>
-                            <td className="px-4 py-3"><input type="text" className="w-full text-sm border-gray-300 rounded p-1.5 focus:ring-2 focus:ring-indigo-500 outline-none" value={editForm.label} onChange={e => setEditForm({ ...editForm, label: e.target.value })} /></td>
-                            <td className="px-4 py-3 space-y-2">
-                              <select className="w-full text-sm border-gray-300 rounded p-1.5 focus:ring-2 focus:ring-indigo-500 outline-none" value={editForm.data_type} onChange={e => setEditForm({ ...editForm, data_type: e.target.value as FieldDataType })}>
-                                <option value="text">Text</option>
-                                <option value="int">Integer</option>
-                                <option value="float">Float</option>
-                                <option value="bool">Boolean</option>
-                                <option value="select">Select (Dropdown)</option>
-                              </select>
-                              {editForm.data_type === 'select' && (
-                                <input type="text" className="w-full text-xs border-gray-300 rounded p-1.5 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Options, comma-separated" value={optionsStr} onChange={e => setOptionsStr(e.target.value)} />
-                              )}
-                            </td>
-                            <td className="px-4 py-3">
-                              <select className="w-full text-sm border-gray-300 rounded p-1.5 focus:ring-2 focus:ring-indigo-500 outline-none" value={editForm.scope} onChange={e => setEditForm({ ...editForm, scope: e.target.value as FieldScope })} disabled={!!departmentId}>
-                                <option value="both">Both (Master & Dept)</option>
-                                <option value="master">Master Only</option>
-                                <option value="department">Department Only</option>
-                              </select>
-                            </td>
-                            <td className="px-4 py-3">
-                              <input type="text" className="w-24 text-sm border-gray-300 rounded p-1.5 focus:ring-2 focus:ring-indigo-500 outline-none" value={editForm.default_value} onChange={e => setEditForm({ ...editForm, default_value: e.target.value })} />
-                            </td>
-                            <td className="px-4 py-3 text-center">
-                              <label className="inline-flex items-center cursor-pointer">
-                                <input type="checkbox" className="sr-only peer" checked={editForm.is_active} onChange={e => setEditForm({ ...editForm, is_active: e.target.checked })} />
-                                <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-500"></div>
-                              </label>
-                            </td>
-                            <td className="px-4 py-3 text-right">
-                              <input type="number" className="w-16 text-sm border-gray-300 rounded p-1.5 focus:ring-2 focus:ring-indigo-500 outline-none text-right" value={editForm.sort_order} onChange={e => setEditForm({ ...editForm, sort_order: parseInt(e.target.value) || 0 })} />
-                            </td>
-                            <td className="px-4 py-3 text-right">
-                              <div className="flex items-center justify-end gap-1">
-                                <button onClick={handleSave} className="p-1.5 text-green-600 hover:bg-green-100 rounded-lg transition-colors"><Check className="w-4 h-4" /></button>
-                                <button onClick={() => setEditingId(null)} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg transition-colors"><X className="w-4 h-4" /></button>
-                              </div>
-                            </td>
-                          </>
-                        ) : (
-                          <>
-                            <td className="px-4 py-3">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-mono font-medium text-gray-900">{c.key}</span>
-                                {c.is_core && <span className="text-[10px] uppercase font-bold text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded">Core</span>}
-                              </div>
-                            </td>
-                            <td className="px-4 py-3 text-sm text-gray-900 font-medium">{c.label}</td>
-                            <td className="px-4 py-3">
-                              <div className="text-sm text-gray-700 capitalize">{c.data_type}</div>
-                              {c.data_type === 'select' && c.options && c.options.length > 0 && (
-                                <div className="text-xs text-gray-500 mt-0.5 truncate max-w-[150px]" title={c.options.join(', ')}>
-                                  {c.options.join(', ')}
+                    {schemas.map(c => {
+                      const isHiddenForDept = departmentId && (c.hidden_for_department_ids || []).includes(departmentId);
+                      const isHiddenGlobally = !c.is_active;
+                      const isHidden = isHiddenGlobally || isHiddenForDept;
+
+                      return (
+                        <tr key={c.id} className={`${isHidden ? 'opacity-60 bg-gray-50' : 'hover:bg-gray-50'}`}>
+                          {editingId === c.id ? (
+                            <>
+                              <td className="px-4 py-3"><input type="text" disabled className="w-full text-sm border-gray-300 rounded p-1.5 bg-gray-100" value={editForm.key} title="Key cannot be edited after creation" /></td>
+                              <td className="px-4 py-3"><input type="text" className="w-full text-sm border-gray-300 rounded p-1.5 focus:ring-2 focus:ring-indigo-500 outline-none" value={editForm.label} onChange={e => setEditForm({ ...editForm, label: e.target.value })} /></td>
+                              <td className="px-4 py-3 space-y-2">
+                                <select className="w-full text-sm border-gray-300 rounded p-1.5 focus:ring-2 focus:ring-indigo-500 outline-none" value={editForm.data_type} onChange={e => setEditForm({ ...editForm, data_type: e.target.value as FieldDataType })}>
+                                  <option value="text">Text</option>
+                                  <option value="int">Integer</option>
+                                  <option value="float">Float</option>
+                                  <option value="bool">Boolean</option>
+                                  <option value="select">Select (Dropdown)</option>
+                                </select>
+                                {editForm.data_type === 'select' && (
+                                  <input type="text" className="w-full text-xs border-gray-300 rounded p-1.5 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Options, comma-separated" value={optionsStr} onChange={e => setOptionsStr(e.target.value)} />
+                                )}
+                              </td>
+                              <td className="px-4 py-3">
+                                <select className="w-full text-sm border-gray-300 rounded p-1.5 focus:ring-2 focus:ring-indigo-500 outline-none" value={editForm.scope} onChange={e => setEditForm({ ...editForm, scope: e.target.value as FieldScope })} disabled={!!departmentId}>
+                                  <option value="both">Both (Master & Dept)</option>
+                                  <option value="master">Master Only</option>
+                                  <option value="department">Department Only</option>
+                                </select>
+                              </td>
+                              <td className="px-4 py-3">
+                                <input type="text" className="w-24 text-sm border-gray-300 rounded p-1.5 focus:ring-2 focus:ring-indigo-500 outline-none" value={editForm.default_value} onChange={e => setEditForm({ ...editForm, default_value: e.target.value })} />
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                {isHiddenGlobally ? (
+                                  <span className="inline-flex px-2 py-0.5 text-xs font-semibold rounded-full bg-gray-100 text-gray-600">Hidden Globally</span>
+                                ) : isHiddenForDept ? (
+                                  <span className="inline-flex px-2 py-0.5 text-xs font-semibold rounded-full bg-amber-100 text-amber-800">Hidden in Dept</span>
+                                ) : (
+                                  <span className="inline-flex px-2 py-0.5 text-xs font-semibold rounded-full bg-green-100 text-green-800">Active</span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                <input type="number" className="w-16 text-sm border-gray-300 rounded p-1.5 focus:ring-2 focus:ring-indigo-500 outline-none text-right" value={editForm.sort_order} onChange={e => setEditForm({ ...editForm, sort_order: parseInt(e.target.value) || 0 })} />
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  <button onClick={handleSave} className="p-1.5 text-green-600 hover:bg-green-100 rounded-lg transition-colors"><Check className="w-4 h-4" /></button>
+                                  <button onClick={() => setEditingId(null)} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg transition-colors"><X className="w-4 h-4" /></button>
                                 </div>
-                              )}
-                            </td>
-                            <td className="px-4 py-3 text-sm text-gray-700 capitalize">{c.scope}</td>
-                            <td className="px-4 py-3 text-sm text-gray-500">{c.default_value || '-'}</td>
-                            <td className="px-4 py-3 text-center">
-                              {(() => {
-                                const isHiddenForDept = departmentId && (c.hidden_for_department_ids || []).includes(departmentId);
-                                if (!c.is_active) return <span className="inline-flex px-2 py-0.5 text-xs font-semibold rounded-full bg-gray-100 text-gray-600">Hidden Globally</span>;
-                                if (isHiddenForDept) return <span className="inline-flex px-2 py-0.5 text-xs font-semibold rounded-full bg-amber-100 text-amber-800">Hidden in Dept</span>;
-                                return <span className="inline-flex px-2 py-0.5 text-xs font-semibold rounded-full bg-green-100 text-green-800">Active</span>;
-                              })()}
-                            </td>
-                            <td className="px-4 py-3 text-right text-sm text-gray-500">{c.sort_order}</td>
-                            <td className="px-4 py-3 text-right">
-                              <div className="flex items-center justify-end gap-1">
-                                {!departmentId && (
-                                  <button onClick={() => handleReplicate(c.id)} disabled={replicatingId === c.id} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-50" title="Apply to existing rows">
-                                    <RefreshCw className={`w-4 h-4 ${replicatingId === c.id ? 'animate-spin' : ''}`} />
-                                  </button>
+                              </td>
+                            </>
+                          ) : (
+                            <>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-mono font-medium text-gray-900">{c.key}</span>
+                                  {c.is_core && <span className="text-[10px] uppercase font-bold text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded">Core</span>}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-900 font-medium">{c.label}</td>
+                              <td className="px-4 py-3">
+                                <div className="text-sm text-gray-700 capitalize">{c.data_type}</div>
+                                {c.data_type === 'select' && c.options && c.options.length > 0 && (
+                                  <div className="text-xs text-gray-500 mt-0.5 truncate max-w-[150px]" title={c.options.join(', ')}>
+                                    {c.options.join(', ')}
+                                  </div>
                                 )}
-                                {(!departmentId || c.scope === 'department') && (
-                                  <button onClick={() => handleEdit(c)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Edit">
-                                    <Edit2 className="w-4 h-4" />
-                                  </button>
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-700 capitalize">{c.scope}</td>
+                              <td className="px-4 py-3 text-sm text-gray-500">{c.default_value || '-'}</td>
+                              <td className="px-4 py-3 text-center">
+                                {isHiddenGlobally ? (
+                                  <span className="inline-flex px-2 py-0.5 text-xs font-semibold rounded-full bg-gray-100 text-gray-600">Hidden Globally</span>
+                                ) : isHiddenForDept ? (
+                                  <span className="inline-flex px-2 py-0.5 text-xs font-semibold rounded-full bg-amber-100 text-amber-800">Hidden in Dept</span>
+                                ) : (
+                                  <span className="inline-flex px-2 py-0.5 text-xs font-semibold rounded-full bg-green-100 text-green-800">Active</span>
                                 )}
-                                {c.can_delete && (!departmentId || c.scope === 'department') ? (
-                                  <button onClick={() => handleDelete(c)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors" title="Delete Field">
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                ) : (!c.can_delete && !departmentId) ? (
-                                  <button onClick={() => handleEdit(c)} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg transition-colors" title="Core field cannot be deleted. Edit to hide.">
-                                    <EyeOff className="w-4 h-4" />
-                                  </button>
-                                ) : (departmentId && c.scope !== 'department') ? (
-                                  (c.hidden_for_department_ids || []).includes(departmentId) ? (
-                                    <button onClick={() => handleRestoreMasterField(c.id)} className="px-2 py-1 text-xs font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors" title="Restore Field">
+                              </td>
+                              <td className="px-4 py-3 text-right text-sm text-gray-500">{c.sort_order}</td>
+                              <td className="px-4 py-3 text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  {!departmentId && (
+                                    <button onClick={() => handleReplicate(c.id)} disabled={replicatingId === c.id} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-50" title="Apply to existing rows">
+                                      <RefreshCw className={`w-4 h-4 ${replicatingId === c.id ? 'animate-spin' : ''}`} />
+                                    </button>
+                                  )}
+                                  {(!departmentId || c.scope === 'department') && (
+                                    <button onClick={() => handleEdit(c)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Edit">
+                                      <Edit2 className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                  {isHidden ? (
+                                    <button onClick={() => handleRestoreField(c)} className="px-2 py-1 text-xs font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors" title="Restore Field">
                                       Restore
                                     </button>
                                   ) : (
-                                    <button onClick={() => setHidingSchema(c)} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Remove Master Field from Department">
+                                    <button onClick={() => setHidingSchema(c)} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title={departmentId ? "Remove Master Field from Department" : "Hide Field Globally"}>
                                       <EyeOff className="w-4 h-4" />
                                     </button>
-                                  )
-                                ) : null}
-                              </div>
-                            </td>
-                          </>
-                        )}
-                      </tr>
-                    ))}
+                                  )}
+                                  {c.can_delete && (!departmentId || c.scope === 'department') && (
+                                    <button onClick={() => handleDelete(c)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors" title="Delete Field">
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </>
+                          )}
+                        </tr>
+                      );
+                    })}
                     {schemas.length === 0 && editingId !== 'new' && (
                       <tr>
                         <td colSpan={8} className="px-4 py-12 text-center text-sm text-gray-500">
@@ -405,8 +427,9 @@ export default function FieldSchemaModal({ isOpen, onClose, onUpdated, departmen
       <RemoveMasterFieldModal
         isOpen={hidingSchema !== null}
         fieldName={hidingSchema?.label || ''}
+        isMaster={!departmentId}
         onClose={() => setHidingSchema(null)}
-        onConfirm={handleHideMasterField}
+        onConfirm={handleHideField}
       />
     </div>
   );

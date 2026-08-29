@@ -4,6 +4,7 @@ import { AlertTriangle, Lock, X, Loader2 } from 'lucide-react';
 interface Props {
   isOpen: boolean;
   fieldName: string;
+  isMaster?: boolean;
   onClose: () => void;
   onConfirm: (password: string) => Promise<void>;
 }
@@ -11,6 +12,7 @@ interface Props {
 export default function RemoveMasterFieldModal({
   isOpen,
   fieldName,
+  isMaster,
   onClose,
   onConfirm,
 }: Props) {
@@ -73,9 +75,9 @@ export default function RemoveMasterFieldModal({
             <AlertTriangle className="w-6 h-6" />
           </div>
           <div className="flex-1">
-            <h3 className="text-lg font-bold text-gray-900">Remove Master Field</h3>
+            <h3 className="text-lg font-bold text-gray-900">{isMaster ? 'Hide Master Field' : 'Remove Master Field'}</h3>
             <p className="text-xs text-amber-700 mt-1">
-              You are about to hide <span className="font-semibold">{fieldName}</span> from this department.
+              You are about to hide <span className="font-semibold">{fieldName}</span> {isMaster ? 'globally from master and department curriculums' : 'from this department'}.
             </p>
           </div>
           <button

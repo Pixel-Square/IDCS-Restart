@@ -8,6 +8,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions, filters, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from .models import College, FeatureCatalog, CollegeFeature
 from .serializers import CollegeSerializer, CollegeUserSerializer, CollegeFeatureSerializer
@@ -60,6 +61,7 @@ class CollegeListCreateView(generics.ListCreateAPIView):
     """List all colleges or create a new one. Accessible to super admins, and college admins see only theirs."""
     serializer_class = CollegeSerializer
     permission_classes = [IsCollegeAdminOrSuperAdmin]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['code', 'name', 'short_name', 'city']
     ordering_fields = ['code', 'name', 'city', 'created_at']
@@ -88,6 +90,7 @@ class CollegeDetailView(generics.RetrieveUpdateDestroyAPIView):
     """Retrieve, update or delete a college. Requires SUPER_ADMIN."""
     serializer_class = CollegeSerializer
     permission_classes = [IsCollegeAdminOrSuperAdmin]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     queryset = College.objects.all()
 
 
@@ -1812,3 +1815,122 @@ def list_all_colleges(request):
         for c in colleges
     ]
     return Response({'results': results, 'total': len(results)})
+
+
+# ---------------------------------------------------------------------------
+# College Details — Super Admin only, double-auth on every write
+# ---------------------------------------------------------------------------
+
+
+class CollegeDetailsView(APIView):
+    """
+    GET  /api/college/colleges/<id>/details/
+        Returns full college data including logo_url and banner_url.
+        Accessible to SUPER_ADMIN only.
+
+    PATCH /api/college/colleges/<id>/details/
+        Updates any college field.  Requires the super admin to supply their
+        own password in the ``sa_password`` field of the multipart/JSON body.
+        Any attempt without correct password is rejected 403.
+        Accessible to SUPER_ADMIN only.
+    """
+    permission_classes = [IsSuperAdminOrSuperuser]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get(self, request, pk):
+        college = get_object_or_404(College, pk=pk)
+        from .serializers import CollegeSerializer
+        ser = CollegeSerializer(college, context={'request': request})
+        data = dict(ser.data)
+        # Ensure resolution specs are included so UI can show hints
+        data['logo_resolution'] = f"{College.LOGO_WIDTH}×{College.LOGO_HEIGHT} px"
+        data['banner_resolution'] = f"{College.BANNER_WIDTH}×{College.BANNER_HEIGHT} px"
+        return Response(data)
+
+    def patch(self, request, pk):
+        college = get_object_or_404(College, pk=pk)
+
+        # ── Double authentication ───────────────────────────────────────────
+        sa_password = str(
+            request.data.get('sa_password') or
+            request.POST.get('sa_password') or
+            ''
+        ).strip()
+        if not sa_password:
+            return Response(
+                {'detail': 'Super admin password is required to modify college details.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if not request.user.check_password(sa_password):
+            return Response(
+                {'detail': 'Incorrect super admin password. Changes not saved.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        # ───────────────────────────────────────────────────────────────────
+
+        # Build mutable data dict excluding the password field
+        mutable = {k: v for k, v in request.data.items() if k != 'sa_password'}
+
+        # Handle file uploads
+        logo_file = request.FILES.get('logo')
+        banner_file = request.FILES.get('banner')
+
+        # Validate image dimensions before saving
+        if logo_file:
+            try:
+                from PIL import Image as PILImage
+                img = PILImage.open(logo_file)
+                w, h = img.size
+                if (w, h) != (College.LOGO_WIDTH, College.LOGO_HEIGHT):
+                    return Response(
+                        {'detail': f'Logo must be exactly {College.LOGO_WIDTH}×{College.LOGO_HEIGHT} px. '
+                                   f'Uploaded image is {w}×{h} px.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                logo_file.seek(0)
+            except ImportError:
+                pass  # Pillow not available; skip check
+
+        if banner_file:
+            try:
+                from PIL import Image as PILImage
+                img = PILImage.open(banner_file)
+                w, h = img.size
+                if (w, h) != (College.BANNER_WIDTH, College.BANNER_HEIGHT):
+                    return Response(
+                        {'detail': f'Banner must be exactly {College.BANNER_WIDTH}×{College.BANNER_HEIGHT} px. '
+                                   f'Uploaded image is {w}×{h} px.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                banner_file.seek(0)
+            except ImportError:
+                pass
+
+        # Partially update the college
+        from .serializers import CollegeSerializer
+        files_data = {}
+        if logo_file:
+            files_data['logo'] = logo_file
+        if banner_file:
+            files_data['banner'] = banner_file
+
+        # Merge text fields with file fields for serializer
+        combined = {**mutable, **files_data}
+
+        ser = CollegeSerializer(
+            college,
+            data=combined,
+            partial=True,
+            context={'request': request},
+        )
+        if not ser.is_valid():
+            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        ser.save()
+        # Re-serialize with fresh data to return updated URLs
+        fresh = CollegeSerializer(college, context={'request': request})
+        result = dict(fresh.data)
+        result['logo_resolution'] = f"{College.LOGO_WIDTH}×{College.LOGO_HEIGHT} px"
+        result['banner_resolution'] = f"{College.BANNER_WIDTH}×{College.BANNER_HEIGHT} px"
+        return Response(result)
+

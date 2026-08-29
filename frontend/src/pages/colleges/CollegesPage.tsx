@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
-import { Building2, Plus, Search, Edit2, Trash2, X, Check, Globe, Phone, Mail, MapPin, Calendar, Link, ChevronRight } from 'lucide-react';
+import { Building2, Plus, Search, Edit2, Trash2, X, Check, Globe, Phone, Mail, MapPin, Calendar, ChevronRight, Image as ImageIcon, Upload } from 'lucide-react';
 import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
 
 interface College {
@@ -19,6 +19,8 @@ interface College {
   website: string;
   established_year: number | null;
   logo: string;
+  logo_url?: string | null;
+  banner_url?: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -60,6 +62,11 @@ export default function CollegesPage() {
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  // Image file state for create/edit modal
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [bannerFile, setBannerFile] = useState<File | null>(null);
+  const logoInputRef = useRef<HTMLInputElement>(null);
+  const bannerInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
 
   const fetchColleges = useCallback(async () => {
@@ -82,6 +89,8 @@ export default function CollegesPage() {
   const openCreate = () => {
     setEditTarget(null);
     setForm(emptyForm);
+    setLogoFile(null);
+    setBannerFile(null);
     setFormError(null);
     setShowModal(true);
   };
@@ -101,12 +110,14 @@ export default function CollegesPage() {
       email: col.email,
       website: col.website,
       established_year: col.established_year,
-      logo: col.logo,
+      logo: col.logo_url || col.logo || '',
       is_active: col.is_active,
       admin_username: '',
       admin_email: '',
       admin_password: '',
     });
+    setLogoFile(null);
+    setBannerFile(null);
     setFormError(null);
     setShowModal(true);
   };
@@ -131,11 +142,25 @@ export default function CollegesPage() {
         ? `/api/college/colleges/${editTarget.id}/`
         : '/api/college/colleges/';
       const method = editTarget ? 'PUT' : 'POST';
-      const res = await fetchWithAuth(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      });
+
+      let res: Response;
+      if (logoFile || bannerFile) {
+        // Use multipart FormData when files are attached
+        const fd = new FormData();
+        Object.entries(form).forEach(([k, v]) => {
+          if (v !== null && v !== undefined) fd.append(k, String(v));
+        });
+        if (logoFile) fd.append('logo', logoFile);
+        if (bannerFile) fd.append('banner', bannerFile);
+        res = await fetchWithAuth(url, { method, body: fd });
+      } else {
+        res = await fetchWithAuth(url, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(form),
+        });
+      }
+
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         const msg = Object.values(errData).flat().join(' ') || 'Save failed';
@@ -222,8 +247,8 @@ export default function CollegesPage() {
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="p-2 bg-blue-50 rounded-lg flex-shrink-0">
-                    {col.logo ? (
-                      <img src={col.logo} alt={col.code} className="w-8 h-8 object-contain rounded" />
+                    {(col.logo_url || col.logo) ? (
+                      <img src={col.logo_url || col.logo} alt={col.code} className="w-8 h-8 object-contain rounded" />
                     ) : (
                       <Building2 className="w-6 h-6 text-blue-500" />
                     )}
@@ -415,8 +440,8 @@ export default function CollegesPage() {
                 </div>
               </div>
 
-              {/* Website, Est Year, Logo */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {/* Website, Est Year */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="sm:col-span-1">
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Website</label>
                   <input id="college-form-website" name="website" type="url" value={form.website} onChange={handleChange} placeholder="https://..." className="w-full px-3 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
@@ -425,10 +450,85 @@ export default function CollegesPage() {
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Established Year</label>
                   <input id="college-form-year" name="established_year" type="number" value={form.established_year ?? ''} onChange={handleChange} placeholder="e.g. 1998" min={1800} max={new Date().getFullYear()} className="w-full px-3 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
                 </div>
+              </div>
+
+              {/* Logo & Banner upload */}
+              <div className="space-y-4 p-4 bg-purple-50 border border-purple-100 rounded-xl">
+                <h3 className="text-sm font-semibold text-purple-900 flex items-center gap-2">
+                  <ImageIcon className="w-4 h-4" /> Media Assets
+                </h3>
+                <p className="text-xs text-purple-700">
+                  You can also upload / change logo and banner from the <strong>College Details</strong> module after creating the college (Super Admin only).
+                </p>
+
+                {/* Logo */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Logo</label>
-                  <input id="college-form-logo" name="logo" value={form.logo} onChange={handleChange} placeholder="Path or URL to logo" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
-                  <p className="text-xs text-gray-400 mt-1">Path or URL to logo image</p>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Logo <span className="text-amber-600 font-normal">(must be 180×180 px)</span></label>
+                  <div className="flex items-center gap-3">
+                    {(logoFile || form.logo) && (
+                      <div className="w-10 h-10 border border-gray-200 rounded-lg overflow-hidden bg-white flex-shrink-0">
+                        <img
+                          src={logoFile ? URL.createObjectURL(logoFile) : form.logo}
+                          alt="Logo preview"
+                          className="w-full h-full object-contain"
+                        />
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => logoInputRef.current?.click()}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-100 hover:bg-purple-200 rounded-lg transition-colors"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      {logoFile ? logoFile.name : 'Upload Logo (180×180 px)'}
+                    </button>
+                    {logoFile && (
+                      <button type="button" onClick={() => setLogoFile(null)} className="text-gray-400 hover:text-red-500">
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    ref={logoInputRef}
+                    id="college-form-logo"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) setLogoFile(f); e.target.value = ''; }}
+                  />
+                </div>
+
+                {/* Banner */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Banner <span className="text-amber-600 font-normal">(must be 1200×400 px)</span></label>
+                  <div className="flex items-center gap-3">
+                    {bannerFile && (
+                      <div className="w-24 h-8 border border-gray-200 rounded overflow-hidden bg-white flex-shrink-0">
+                        <img src={URL.createObjectURL(bannerFile)} alt="Banner preview" className="w-full h-full object-cover" />
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => bannerInputRef.current?.click()}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-100 hover:bg-purple-200 rounded-lg transition-colors"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      {bannerFile ? bannerFile.name : 'Upload Banner (1200×400 px)'}
+                    </button>
+                    {bannerFile && (
+                      <button type="button" onClick={() => setBannerFile(null)} className="text-gray-400 hover:text-red-500">
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    ref={bannerInputRef}
+                    id="college-form-banner"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) setBannerFile(f); e.target.value = ''; }}
+                  />
                 </div>
               </div>
 

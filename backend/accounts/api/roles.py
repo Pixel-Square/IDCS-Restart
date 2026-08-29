@@ -14,7 +14,7 @@ class RolesListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        qs = Role.objects.all().values_list('name', flat=True)
+        qs = Role.objects.exclude(name__iexact='SUPER_ADMIN').values_list('name', flat=True)
         # Role names may exist in mixed case (e.g. "HOD" and "hod") as separate
         # DB rows; dedupe after uppercasing so the frontend doesn't show
         # duplicate entries.

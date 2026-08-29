@@ -6,6 +6,7 @@ import CurriculumLayout from './CurriculumLayout';
 
 import { BookOpen, Download, Upload, Edit, RefreshCw, Copy, Trash2, Building2, ArrowLeft, Settings2 } from 'lucide-react';
 import FieldSchemaModal from '../../components/curriculum/FieldSchemaModal';
+import CurriculumDownloadModal from '../../components/curriculum/CurriculumDownloadModal';
 import { showAlert, showConfirm } from '../../utils/dialog';
 import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
 
@@ -23,6 +24,7 @@ export default function MasterList() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isColumnConfigOpen, setIsColumnConfigOpen] = useState(false);
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const [batchYears, setBatchYears] = useState<any[]>([]);
   const [selectedBatch, setSelectedBatch] = useState<number | null>(null);
@@ -188,26 +190,7 @@ export default function MasterList() {
     return s;
   }
 
-  function handleDownloadVisible() {
-    const rows = data.filter(m => (!selectedReg || m.regulation === selectedReg) && (!selectedSem || m.semester === selectedSem) && m.editable === true);
-    if (!rows.length) { showAlert('No editable subjects in current view', 'warning'); return }
-    const headers = ['regulation','semester','course_code','course_name','category','class_type','l','t','p','s','c','internal_mark','external_mark','for_all_departments','editable','departments'];
-    const lines = [headers.join(',')];
-    for (const m of rows) {
-      const deps = (m.for_all_departments ? '' : (m.departments_display || []).map((d:any)=>d.short_name || d.shortname || d.code || d.name).join(','));
-      const vals = [m.regulation, m.semester, m.course_code || '', m.course_name || '', m.category || '', m.class_type || '', m.l ?? 0, m.t ?? 0, m.p ?? 0, m.s ?? 0, m.c ?? 0, m.internal_mark ?? '', m.external_mark ?? '', m.for_all_departments ? 'True' : 'False', m.editable ? 'True' : 'False', deps];
-      lines.push(vals.map(csvEscape).join(','));
-    }
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `department_curriculum_editable_${selectedReg || 'all'}_${selectedSem || 'all'}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  }
+
 
   async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>){
     const file = e.target.files && e.target.files[0];
@@ -369,7 +352,11 @@ export default function MasterList() {
     }
   }, [loc, navigate]);
 
-
+  // Derived schema logic
+  const mappedSchemas = fieldSchemas.filter(c => c.key !== 'course_name' && c.key !== 'is_elective');
+  const isFieldActive = (key: string) => fieldSchemas.some(c => c.key === key);
+  const showCourseName = isFieldActive('course_name');
+  const showElective = isFieldActive('is_elective');
 
   if (loading) return (
     <CurriculumLayout>
@@ -442,7 +429,7 @@ export default function MasterList() {
               return null;
             })()}
             <button
-              onClick={() => handleDownloadVisible()}
+              onClick={() => setIsDownloadModalOpen(true)}
               className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-all duration-200 shadow-sm hover:shadow-md"
             >
               <Download className="w-4 h-4" />
@@ -534,9 +521,13 @@ export default function MasterList() {
                 <tr>
                   <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Code</th>
                   <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Batch</th>
-                  <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Course</th>
-                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Elective</th>
-                  {fieldSchemas.filter(c => c.key !== 'course_name' && c.key !== 'is_elective').map(c => (
+                  {showCourseName && (
+                    <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Course</th>
+                  )}
+                  {showElective && (
+                    <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Elective</th>
+                  )}
+                  {mappedSchemas.map(c => (
                     <th key={c.key} className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">{c.label}</th>
                   ))}
                   <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Depts</th>
@@ -560,12 +551,16 @@ export default function MasterList() {
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800">{m.batch.name}</span>
                         ) : <span className="text-gray-300">—</span>}
                       </td>
-                      <td className="px-3 py-3 text-sm text-gray-900 font-medium min-w-[200px]">{(m.dynamic_data || {}).course_name ?? m.course_name ?? '-'}</td>
-                      <td className="px-3 py-3 text-sm text-center whitespace-nowrap">
-                        {m.is_elective ? <span className="text-green-700 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}
-                      </td>
-                      {fieldSchemas.filter(c => c.key !== 'course_name' && c.key !== 'is_elective').map(c => {
-                        const rawVal = (m.dynamic_data || {})[c.key];
+                      {showCourseName && (
+                        <td className="px-3 py-3 text-sm text-gray-900 font-medium min-w-[200px]">{(m.dynamic_data || {}).course_name ?? m.course_name ?? '-'}</td>
+                      )}
+                      {showElective && (
+                        <td className="px-3 py-3 text-sm text-center whitespace-nowrap">
+                          {m.is_elective ? <span className="text-green-700 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}
+                        </td>
+                      )}
+                      {mappedSchemas.map(c => {
+                        const rawVal = c.is_core ? (m as any)[c.key] : (m.dynamic_data || {})[c.key];
                         let display: React.ReactNode = '-';
                         if (rawVal !== null && rawVal !== undefined && rawVal !== '') {
                           if (c.data_type === 'bool') {
@@ -636,7 +631,7 @@ export default function MasterList() {
                 {filteredData.length > 0 && (
                   <tr>
                     <td colSpan={4} className="px-3 py-3 text-right font-bold text-gray-900">Total</td>
-                    <td colSpan={fieldSchemas.filter(c => c.key !== 'course_name' && c.key !== 'is_elective').length} className="bg-gray-50"></td>
+                    <td colSpan={mappedSchemas.length} className="bg-gray-50"></td>
                     <td colSpan={3} className="bg-gray-50"></td>
                   </tr>
                 )}
@@ -726,6 +721,15 @@ export default function MasterList() {
               .catch(() => setFieldSchemas([]));
           });
         }} 
+      />
+
+      <CurriculumDownloadModal
+        isOpen={isDownloadModalOpen}
+        onClose={() => setIsDownloadModalOpen(false)}
+        data={data}
+        schemas={fieldSchemas}
+        batchYears={batchYears}
+        type="master"
       />
 
     </CurriculumLayout>

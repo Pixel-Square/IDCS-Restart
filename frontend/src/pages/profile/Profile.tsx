@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getMe, requestMobileOtp, verifyMobileOtp, removeMobileNumber, changePassword, getCachedMe } from '../../services/auth';
-import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2, Key, Eye, EyeOff, Edit2, Save, X, Camera, CreditCard, XCircle, Home, Users, GraduationCap, BookOpen } from 'lucide-react';
+import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2, Key, Eye, EyeOff, Edit2, Save, X, Camera, CreditCard, XCircle, Home, Users, GraduationCap, BookOpen, Sparkles } from 'lucide-react';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import { ModalPortal } from '../../components/ModalPortal';
 import logo from '../../assets/idcs-logo.png';
@@ -139,6 +140,58 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   const profileMobile = useMemo(() => normalizeMobileForUi((user as any)?.profile?.mobile_number), [user]);
   const profileMobileVerified = useMemo(() => Boolean((user as any)?.profile?.mobile_verified), [user]);
 
+  const isProfileComplete = useMemo(() => {
+    if (!user) return false;
+    const personalEmail = String((user as any)?.profile?.personal_email || '').trim();
+    const mobileNumber = String((user as any)?.profile?.mobile_number || '').trim();
+    const mobileVerified = Boolean((user as any)?.profile?.mobile_verified);
+    
+    if (!personalEmail) return false;
+    if (!mobileNumber) return false;
+    if (!mobileVerified) return false;
+
+    if (user.profile_type === 'STUDENT') {
+      const fName = String((user as any)?.profile?.father_name || '').trim();
+      const fPhone = String((user as any)?.profile?.father_phone || '').trim();
+      const mName = String((user as any)?.profile?.mother_name || '').trim();
+      const mPhone = String((user as any)?.profile?.mother_phone || '').trim();
+      const addr = String((user as any)?.profile?.address || '').trim();
+
+      if (!fName || !fPhone || !mName || !mPhone || !addr) {
+        return false;
+      }
+    }
+    return true;
+  }, [user]);
+
+  const missingProfileFields = useMemo(() => {
+    if (!user) return [];
+    const missing: string[] = [];
+    const personalEmail = String((user as any)?.profile?.personal_email || '').trim();
+    const mobileNumber = String((user as any)?.profile?.mobile_number || '').trim();
+    const mobileVerified = Boolean((user as any)?.profile?.mobile_verified);
+
+    if (!personalEmail) missing.push("Personal Mail");
+    if (!mobileNumber) {
+      missing.push("Mobile Number");
+    } else if (!mobileVerified) {
+      missing.push("Mobile Verification (OTP)");
+    }
+
+    if (user.profile_type === 'STUDENT') {
+      const fName = String((user as any)?.profile?.father_name || '').trim();
+      const fPhone = String((user as any)?.profile?.father_phone || '').trim();
+      const mName = String((user as any)?.profile?.mother_name || '').trim();
+      const mPhone = String((user as any)?.profile?.mother_phone || '').trim();
+      const addr = String((user as any)?.profile?.address || '').trim();
+
+      if (!fName || !fPhone || !mName || !mPhone || !addr) {
+        missing.push("Parent & Address Details");
+      }
+    }
+    return missing;
+  }, [user]);
+
   const [mobileDraft, setMobileDraft] = useState('');
   const [mobileEditing, setMobileEditing] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
@@ -217,6 +270,52 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const avatarDragPointerIdRef = useRef<number | null>(null);
   const avatarDragStartRef = useRef<{ clientX: number; clientY: number; x: number; y: number } | null>(null);
+
+  const navigate = useNavigate();
+  const [isOnboarding, setIsOnboarding] = useState(false);
+
+  const isSuperOrCollegeAdmin = useMemo(() => {
+    if (!user) return false;
+    if ((user as any).is_superuser) return true;
+    const roles = Array.isArray(user.roles)
+      ? user.roles.map((r: any) => String(typeof r === 'string' ? r : r?.name || '').toUpperCase())
+      : [];
+    const role = String((user as any).role || '').toUpperCase();
+    return (
+      roles.includes('SUPER_ADMIN') ||
+      roles.includes('SUPERADMIN') ||
+      roles.includes('ADMIN') ||
+      roles.includes('COLLEGE_ADMIN') ||
+      roles.includes('COLLEGE ADMIN') ||
+      role === 'SUPER_ADMIN' ||
+      role === 'SUPERADMIN' ||
+      role === 'ADMIN' ||
+      role === 'COLLEGE_ADMIN'
+    );
+  }, [user]);
+
+  useEffect(() => {
+    if (isSuperOrCollegeAdmin) {
+      setIsOnboarding(false);
+      try {
+        sessionStorage.removeItem('idcs_first_login_onboarding');
+        const url = new URL(window.location.href);
+        if (url.searchParams.has('firstLogin')) {
+          url.searchParams.delete('firstLogin');
+          window.history.replaceState({}, '', url.toString());
+        }
+      } catch {}
+      return;
+    }
+    try {
+      const searchParams = new URLSearchParams(window.location.search);
+      const isFirstLoginParam = searchParams.get('firstLogin') === 'true';
+      const isSessionOnboarding = sessionStorage.getItem('idcs_first_login_onboarding') === 'true';
+      if (isFirstLoginParam || isSessionOnboarding) {
+        setIsOnboarding(true);
+      }
+    } catch {}
+  }, [user, isSuperOrCollegeAdmin]);
 
   function getBaseAvatarScale(natural: AvatarNatural): number {
     return Math.max(
@@ -1062,6 +1161,60 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   return (
     <DashboardLayout>
       <div className="px-4 sm:px-6 lg:px-8 pb-6 space-y-6">
+        {/* Onboarding Quest Banner */}
+        {isOnboarding && (
+          <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-red-500 rounded-3xl p-6 text-white shadow-2xl relative overflow-hidden border-2 border-amber-300 transform transition-all duration-300">
+            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 relative z-10">
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center flex-shrink-0 text-amber-200 shadow-inner">
+                  <Sparkles className="w-8 h-8 animate-bounce" />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="px-3 py-0.5 bg-white text-slate-900 font-extrabold text-xs rounded-full uppercase tracking-wider shadow">
+                      Step 2 of 2: Profile Quest 🎯
+                    </span>
+                    <span className="text-xs text-amber-100 font-medium">First-Time Setup Required</span>
+                  </div>
+                  <h2 className="text-xl font-extrabold tracking-tight">Complete Your Basic Profile Details</h2>
+                  <p className="text-sm text-amber-100 max-w-2xl leading-relaxed">
+                    Great start! Please verify and fill in your basic details below (such as Mobile Number OTP verification, Personal Email, and Contact/Parent Details) so your college administration can keep your records up to date.
+                  </p>
+                </div>
+              </div>
+              {isProfileComplete ? (
+                <button
+                  onClick={() => {
+                    setIsOnboarding(false);
+                    try {
+                      sessionStorage.removeItem('idcs_first_login_onboarding');
+                      window.dispatchEvent(new CustomEvent('idcs:onboarding-completed'));
+                      const url = new URL(window.location.href);
+                      url.searchParams.delete('firstLogin');
+                      window.history.replaceState({}, '', url.toString());
+                    } catch {}
+                    navigate('/dashboard');
+                  }}
+                  className="px-5 py-3 bg-white text-slate-900 font-extrabold rounded-2xl text-xs hover:bg-amber-300 transition-all shadow-xl flex items-center gap-2 flex-shrink-0 cursor-pointer hover:scale-105 active:scale-95"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>Complete & Finish Onboarding</span>
+                </button>
+              ) : (
+                <div className="flex flex-col items-start md:items-end gap-2 bg-black/25 backdrop-blur-md px-4 py-3 rounded-2xl border border-white/10 flex-shrink-0 min-w-[200px]">
+                  <div className="flex items-center gap-1.5 text-xs text-amber-200 font-bold">
+                    <span className="w-2 h-2 bg-amber-400 rounded-full animate-ping" />
+                    <span>Onboarding Locked 🔒</span>
+                  </div>
+                  <div className="text-[11px] text-amber-100/90 font-medium md:text-right max-w-[280px]">
+                    Remaining: <span className="font-bold underline text-amber-300">{missingProfileFields.join(', ')}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Profile Header Card */}
         <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-6 sm:p-8 shadow-md">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">

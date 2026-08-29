@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
-import { Building2, ArrowLeft, Users, Settings2, ChevronRight, MapPin, Phone, Mail, Globe, Calendar, Landmark, Layers, ScrollText, BookOpen, FileText, ShieldCheck } from 'lucide-react';
+import { Building2, ArrowLeft, Users, Settings2, ChevronRight, MapPin, Phone, Mail, Globe, Calendar, Landmark, Layers, ScrollText, BookOpen, FileText, ShieldCheck, Shield } from 'lucide-react';
 
 interface College {
   id: number;
@@ -116,7 +116,22 @@ export default function CollegeDetailPage({ user }: { user?: any }) {
     (user.permissions || []).map((p: string) => p.toLowerCase()).includes('college.change_collegefeature')
   );
 
+  const isSuperAdmin = user && (
+    (user.roles || []).map((r: string) => r.toUpperCase()).includes('SUPER_ADMIN') ||
+    Boolean((user as any).is_superuser)
+  );
+
   const sections = [
+    // Super admin-only: College Details module (double-auth protected)
+    ...(isSuperAdmin ? [{
+      key: 'college-details',
+      title: 'College Details',
+      description: 'Edit institutional details, upload college logo and banner. All changes require Super Admin password re-verification.',
+      icon: Shield,
+      color: 'red',
+      stat: 'Super Admin only',
+      to: `/colleges/${college.id}/info`,
+    }] : []),
     {
       key: 'users',
       title: 'Users',
@@ -218,6 +233,10 @@ export default function CollegeDetailPage({ user }: { user?: any }) {
     green:  { bg: 'bg-white', iconBg: 'bg-green-100',  iconText: 'text-green-600',  hoverBorder: 'hover:border-green-300',  statBg: 'bg-green-50',  statText: 'text-green-700' },
     rose:   { bg: 'bg-white', iconBg: 'bg-rose-100',   iconText: 'text-rose-600',   hoverBorder: 'hover:border-rose-300',   statBg: 'bg-rose-50',   statText: 'text-rose-700' },
     slate:  { bg: 'bg-white', iconBg: 'bg-slate-100',  iconText: 'text-slate-600',  hoverBorder: 'hover:border-slate-300',  statBg: 'bg-slate-50',  statText: 'text-slate-700' },
+    red:    { bg: 'bg-white', iconBg: 'bg-red-100',    iconText: 'text-red-600',    hoverBorder: 'hover:border-red-300',    statBg: 'bg-red-50',    statText: 'text-red-700' },
+    pink:   { bg: 'bg-white', iconBg: 'bg-pink-100',   iconText: 'text-pink-600',   hoverBorder: 'hover:border-pink-300',   statBg: 'bg-pink-50',   statText: 'text-pink-700' },
+    emerald:{ bg: 'bg-white', iconBg: 'bg-emerald-100',iconText: 'text-emerald-600',hoverBorder: 'hover:border-emerald-300',statBg: 'bg-emerald-50',statText: 'text-emerald-700' },
+
   };
 
   return (

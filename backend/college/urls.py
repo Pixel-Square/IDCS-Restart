@@ -25,11 +25,13 @@ from .views import (
     DepartmentHodView,
     search_colleges,
     list_all_colleges,
+    CollegeDetailsView,
 )
 
 urlpatterns = [
     path('colleges/', CollegeListCreateView.as_view(), name='college-list-create'),
     path('colleges/<int:pk>/', CollegeDetailView.as_view(), name='college-detail'),
+    path('colleges/<int:pk>/details/', CollegeDetailsView.as_view(), name='college-details'),
     path('colleges/<int:pk>/users/', CollegeUsersListView.as_view(), name='college-users-list'),
     path('colleges/<int:pk>/users/import-template/', CollegeUserImportTemplateView.as_view(), name='college-users-import-template'),
     path('colleges/<int:pk>/users/import/', CollegeUserImportView.as_view(), name='college-users-import'),

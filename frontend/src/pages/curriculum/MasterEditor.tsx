@@ -7,25 +7,6 @@ import fetchWithAuth from '../../services/fetchAuth';
 import { BookOpen, Save, X as CancelIcon, ArrowLeft } from 'lucide-react';
 import { showAlert } from '../../utils/dialog';
 
-const MASTER_FORM_FIELD_KEYS = new Set([
-  'course_name',
-  'class_type',
-  'category',
-  'is_elective',
-  'is_dept_core',
-  'l',
-  't',
-  'p',
-  's',
-  'c',
-  'internal_mark',
-  'external_mark',
-  'total_mark',
-  'qp_type',
-  'mnemonic',
-  'question_paper_type',
-  'total_hours',
-]);
 
 function coerceSchemaDefault(schema: CurriculumFieldSchema) {
   const raw = schema.default_value;
@@ -69,9 +50,15 @@ export default function MasterEditor() {
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
 
   const activeFieldSchemas = useMemo(
-    () => fieldSchemas.filter((schema) => schema.is_active && (schema.scope === 'both' || schema.scope === 'master') && !MASTER_FORM_FIELD_KEYS.has(schema.key)),
+    // Use is_core to distinguish backend hardcoded fields (is_core=true) from
+    // user-created custom fields (is_core=false). This is the authoritative flag
+    // and avoids the fragile key-name exclusion list that could hide valid custom fields.
+    () => fieldSchemas.filter((schema) => !schema.is_core && schema.is_active && (schema.scope === 'both' || schema.scope === 'master')),
     [fieldSchemas],
   );
+
+  const isFieldActive = (key: string) => fieldSchemas.length === 0 || fieldSchemas.some(s => s.key === key);
+
 
   useEffect(() => {
     if (effectiveId && effectiveId !== 'new') {
@@ -143,7 +130,7 @@ export default function MasterEditor() {
       if (!form.regulation) throw new Error('Regulation is required');
       if (!form.semester_id && (!form.semester || form.semester <= 0)) throw new Error('Semester is required');
       // course_code is optional now
-      if (!form.course_name) throw new Error('Course Name is required');
+      if (isFieldActive('course_name') && !form.course_name) throw new Error('Course Name is required');
       if ((form.internal_mark !== '' && form.internal_mark != null && form.internal_mark < 0) || (form.external_mark !== '' && form.external_mark != null && form.external_mark < 0)) throw new Error('Marks cannot be negative');
 
       // Prepare payload; use selected department ids array
@@ -282,124 +269,146 @@ export default function MasterEditor() {
                 placeholder="Optional" 
               />
             </div>
-            <div>
-              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Course Name</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-                value={form.course_name || ''} 
-                onChange={e => setForm({...form, course_name: e.target.value})} 
-                required 
-              />
-            </div>
+            {isFieldActive('course_name') && (
+              <div>
+                <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Course Name</label>
+                <input 
+                  className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
+                  value={form.course_name || ''} 
+                  onChange={e => setForm({...form, course_name: e.target.value})} 
+                  required 
+                />
+              </div>
+            )}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">CAT</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-                value={form.category || ''} 
-                onChange={e => setForm({...form, category: e.target.value})} 
-                placeholder="e.g. CORE" 
-              />
-            </div>
-            <div>
-              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Class Type</label>
-              <select 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-                value={form.class_type || 'THEORY'} 
-                onChange={e => setForm({...form, class_type: e.target.value})} 
-              >
-                {CLASS_TYPES.map(type => (
-                  <option key={type.value} value={type.value}>{type.label}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">QP Type</label>
-              <select 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-                value={form.qp_type || 'QP1'} 
-                onChange={e => setForm({...form, qp_type: e.target.value})} 
-              >
-                {QP_TYPES.map(type => (
-                  <option key={type.value} value={type.value}>{type.label}</option>
-                ))}
-              </select>
-            </div>
+            {isFieldActive('category') && (
+              <div>
+                <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">CAT</label>
+                <input 
+                  className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
+                  value={form.category || ''} 
+                  onChange={e => setForm({...form, category: e.target.value})} 
+                  placeholder="e.g. CORE" 
+                />
+              </div>
+            )}
+            {isFieldActive('class_type') && (
+              <div>
+                <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Class Type</label>
+                <select 
+                  className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
+                  value={form.class_type || 'THEORY'} 
+                  onChange={e => setForm({...form, class_type: e.target.value})} 
+                >
+                  {CLASS_TYPES.map(type => (
+                    <option key={type.value} value={type.value}>{type.label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {isFieldActive('qp_type') && (
+              <div>
+                <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">QP Type</label>
+                <select 
+                  className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
+                  value={form.qp_type || 'QP1'} 
+                  onChange={e => setForm({...form, qp_type: e.target.value})} 
+                >
+                  {QP_TYPES.map(type => (
+                    <option key={type.value} value={type.value}>{type.label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-            <div>
-              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">L</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
-                type="number" 
-                min={0} 
-                value={form.l || 0} 
-                onChange={e => setForm({...form, l: Number(e.target.value)})} 
-              />
-            </div>
-            <div>
-              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">T</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
-                type="number" 
-                min={0} 
-                value={form.t || 0} 
-                onChange={e => setForm({...form, t: Number(e.target.value)})} 
-              />
-            </div>
-            <div>
-              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">P</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
-                type="number" 
-                min={0} 
-                value={form.p || 0} 
-                onChange={e => setForm({...form, p: Number(e.target.value)})} 
-              />
-            </div>
-            <div>
-              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">S</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
-                type="number" 
-                min={0} 
-                value={form.s || 0} 
-                onChange={e => setForm({...form, s: Number(e.target.value)})} 
-              />
-            </div>
-            <div>
-              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">C</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
-                type="number" 
-                min={0} 
-                value={form.c || 0} 
-                onChange={e => setForm({...form, c: Number(e.target.value)})} 
-              />
-            </div>
+            {isFieldActive('l') && (
+              <div>
+                <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">L</label>
+                <input 
+                  className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
+                  type="number" 
+                  min={0} 
+                  value={form.l || 0} 
+                  onChange={e => setForm({...form, l: Number(e.target.value)})} 
+                />
+              </div>
+            )}
+            {isFieldActive('t') && (
+              <div>
+                <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">T</label>
+                <input 
+                  className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
+                  type="number" 
+                  min={0} 
+                  value={form.t || 0} 
+                  onChange={e => setForm({...form, t: Number(e.target.value)})} 
+                />
+              </div>
+            )}
+            {isFieldActive('p') && (
+              <div>
+                <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">P</label>
+                <input 
+                  className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
+                  type="number" 
+                  min={0} 
+                  value={form.p || 0} 
+                  onChange={e => setForm({...form, p: Number(e.target.value)})} 
+                />
+              </div>
+            )}
+            {isFieldActive('s') && (
+              <div>
+                <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">S</label>
+                <input 
+                  className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
+                  type="number" 
+                  min={0} 
+                  value={form.s || 0} 
+                  onChange={e => setForm({...form, s: Number(e.target.value)})} 
+                />
+              </div>
+            )}
+            {isFieldActive('c') && (
+              <div>
+                <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">C</label>
+                <input 
+                  className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
+                  type="number" 
+                  min={0} 
+                  value={form.c || 0} 
+                  onChange={e => setForm({...form, c: Number(e.target.value)})} 
+                />
+              </div>
+            )}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Internal Mark</label>
-              <input
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
-                type="number"
-                min={0}
-                value={form.internal_mark ?? ''}
-                onChange={e => setForm({...form, internal_mark: e.target.value === '' ? '' : Number(e.target.value)})}
-              />
-            </div>
-            <div>
-              <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">External Mark</label>
-              <input
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
-                type="number"
-                min={0}
-                value={form.external_mark || ''}
-                onChange={e => setForm({...form, external_mark: e.target.value === '' ? '' : Number(e.target.value)})}
-              />
-            </div>
+            {isFieldActive('internal_mark') && (
+              <div>
+                <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Internal Mark</label>
+                <input
+                  className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  type="number"
+                  min={0}
+                  value={form.internal_mark ?? ''}
+                  onChange={e => setForm({...form, internal_mark: e.target.value === '' ? '' : Number(e.target.value)})}
+                />
+              </div>
+            )}
+            {isFieldActive('external_mark') && (
+              <div>
+                <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">External Mark</label>
+                <input
+                  className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  type="number"
+                  min={0}
+                  value={form.external_mark || ''}
+                  onChange={e => setForm({...form, external_mark: e.target.value === '' ? '' : Number(e.target.value)})}
+                />
+              </div>
+            )}
           </div>
 
           {activeFieldSchemas.length > 0 && (
@@ -518,16 +527,18 @@ export default function MasterEditor() {
               />
               <label htmlFor="editable" className="text-xs sm:text-sm font-semibold text-indigo-900">Editable</label>
             </div>
-            <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
-              <input 
-                type="checkbox" 
-                checked={!!form.is_elective} 
-                onChange={e => setForm({...form, is_elective: e.target.checked})} 
-                id="is_elective" 
-                className="w-3.5 h-3.5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
-              />
-              <label htmlFor="is_elective" className="text-xs sm:text-sm font-semibold text-indigo-900">Is Elective</label>
-            </div>
+            {isFieldActive('is_elective') && (
+              <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
+                <input 
+                  type="checkbox" 
+                  checked={!!form.is_elective} 
+                  onChange={e => setForm({...form, is_elective: e.target.checked})} 
+                  id="is_elective" 
+                  className="w-3.5 h-3.5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                />
+                <label htmlFor="is_elective" className="text-xs sm:text-sm font-semibold text-indigo-900">Is Elective</label>
+              </div>
+            )}
           </div>
           {savedMessage && (
             <div className="bg-green-100 text-green-800 px-3 py-1.5 rounded-lg font-semibold text-sm inline-block">{savedMessage}</div>

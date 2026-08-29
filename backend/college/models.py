@@ -1,4 +1,5 @@
 from django.db import models
+from django.core.exceptions import ValidationError
 
 
 class College(models.Model):
@@ -24,16 +25,77 @@ class College(models.Model):
     website = models.URLField(blank=True)
 
     established_year = models.PositiveSmallIntegerField(null=True, blank=True)
-    logo = models.CharField(max_length=255, blank=True, help_text='Path or URL to logo image')
+
+    # ── Media assets ────────────────────────────────────────────────────────
+    # Logo: strict fixed resolution 180×180 px (square) for consistent use
+    # in mark sheets, report headers, certificates, etc.
+    logo = models.ImageField(
+        upload_to='college_media/logos/',
+        blank=True,
+        null=True,
+        help_text='College logo — must be exactly 180×180 px (PNG/JPG/WEBP)',
+    )
+    # Banner: strict fixed resolution 1200×400 px (3:1 landscape) for use
+    # in report headers, letter-heads, portals, etc.
+    banner = models.ImageField(
+        upload_to='college_media/banners/',
+        blank=True,
+        null=True,
+        help_text='College banner — must be exactly 1200×400 px (PNG/JPG/WEBP)',
+    )
 
     is_active = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # ── Resolution constants (used in validation & docs) ───────────────────
+    LOGO_WIDTH = 180
+    LOGO_HEIGHT = 180
+    BANNER_WIDTH = 1200
+    BANNER_HEIGHT = 400
+
     class Meta:
         verbose_name = 'College'
         verbose_name_plural = 'Colleges'
+
+    def clean(self):
+        """Validate image dimensions strictly to ensure template consistency."""
+        super().clean()
+        try:
+            from PIL import Image as PILImage
+        except ImportError:
+            return  # Pillow not installed; skip dimension check
+
+        if self.logo and hasattr(self.logo, 'file'):
+            try:
+                self.logo.file.seek(0)
+                img = PILImage.open(self.logo.file)
+                w, h = img.size
+                if (w, h) != (self.LOGO_WIDTH, self.LOGO_HEIGHT):
+                    raise ValidationError(
+                        {'logo': f'Logo must be exactly {self.LOGO_WIDTH}×{self.LOGO_HEIGHT} px. '
+                                 f'Uploaded image is {w}×{h} px.'}
+                    )
+            except ValidationError:
+                raise
+            except Exception:
+                pass
+
+        if self.banner and hasattr(self.banner, 'file'):
+            try:
+                self.banner.file.seek(0)
+                img = PILImage.open(self.banner.file)
+                w, h = img.size
+                if (w, h) != (self.BANNER_WIDTH, self.BANNER_HEIGHT):
+                    raise ValidationError(
+                        {'banner': f'Banner must be exactly {self.BANNER_WIDTH}×{self.BANNER_HEIGHT} px. '
+                                   f'Uploaded image is {w}×{h} px.'}
+                    )
+            except ValidationError:
+                raise
+            except Exception:
+                pass
 
     def __str__(self):
         return f"{self.code} - {self.short_name or self.name}"

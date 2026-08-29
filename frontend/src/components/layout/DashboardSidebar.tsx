@@ -107,8 +107,33 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [applicationsNav, setApplicationsNav] = useState<ApplicationsNavResponse | null>(null);
 
-  const permsForHook = (data?.permissions || []).map((p) => String(p || '').toLowerCase());
   const rolesForHook = (data?.roles || []).map((r) => String(r || '').toUpperCase());
+  const isSuperOrCollegeAdmin = Boolean(
+    (data as any)?.is_superuser ||
+    rolesForHook.some(r => ['SUPER_ADMIN', 'SUPERADMIN', 'ADMIN', 'COLLEGE_ADMIN', 'COLLEGE ADMIN'].includes(r))
+  );
+
+  const [isOnboardingLocked, setIsOnboardingLocked] = useState<boolean>(false);
+
+  useEffect(() => {
+    const syncOnboarding = () => {
+      if (isSuperOrCollegeAdmin) {
+        sessionStorage.removeItem('idcs_first_login_onboarding');
+        setIsOnboardingLocked(false);
+      } else {
+        setIsOnboardingLocked(sessionStorage.getItem('idcs_first_login_onboarding') === 'true');
+      }
+    };
+    syncOnboarding();
+    window.addEventListener('idcs:onboarding-started', syncOnboarding);
+    window.addEventListener('idcs:onboarding-completed', syncOnboarding);
+    return () => {
+      window.removeEventListener('idcs:onboarding-started', syncOnboarding);
+      window.removeEventListener('idcs:onboarding-completed', syncOnboarding);
+    };
+  }, [isSuperOrCollegeAdmin]);
+
+  const permsForHook = (data?.permissions || []).map((p) => String(p || '').toLowerCase());
   const isIqacForBadge = rolesForHook.includes('IQAC');
   const isHodOrIqac = rolesForHook.includes('HOD') || rolesForHook.includes('IQAC');
   const { count: attendanceNotifCount } = useAttendanceNotificationCount(isHodOrIqac);
@@ -404,7 +429,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (cf('curriculum_dept') && (rf('curriculum_dept') || (entry.department_curriculum && (permsLower.some(p => p.includes('curriculum')) || entry.department_curriculum)))) items.push({ key: 'department_curriculum', label: 'Department Curriculum', to: '/curriculum/department' });
   if (cf('curriculum_master') && (rf('curriculum_master') || permsLower.includes('curriculum.import_elective_choices'))) items.push({ key: 'elective_import', label: 'Elective Import', to: '/curriculum/elective-import' });
 
-  if (permsLower.includes('curriculum.manage_elective_poll') || permsLower.includes('curriculum.choose_elective') || permsLower.includes('curriculum.hod_elective_manage') || rolesUpper.includes('IQAC') || entry.elective_poll) items.push({ key: 'elective_poll', label: 'Elective Poll', to: '/curriculum/elective-poll' });
+  if (cf('elective_poll') && (permsLower.includes('curriculum.manage_elective_poll') || permsLower.includes('curriculum.choose_elective') || permsLower.includes('curriculum.hod_elective_manage') || rolesUpper.includes('IQAC') || entry.elective_poll)) items.push({ key: 'elective_poll', label: 'Elective Poll', to: '/curriculum/elective-poll' });
 
   // HOD pages: require HOD role or explicit permission
   const canAccessTeachingAssign = entry.hod_teaching && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.assign_teaching'));
@@ -470,17 +495,19 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   // LMS page visibility via lms.page.* permissions
   if (
-    permsLower.includes('lms.page.student') ||
-    permsLower.includes('lms.page.staff') ||
-    permsLower.includes('lms.page.hod') ||
-    permsLower.includes('lms.page.ahod') ||
-    permsLower.includes('lms.page.iqac') ||
-    rolesUpper.includes('STUDENT') ||
-    rolesUpper.includes('STAFF') ||
-    rolesUpper.includes('FACULTY') ||
-    rolesUpper.includes('HOD') ||
-    rolesUpper.includes('AHOD') ||
-    rolesUpper.includes('IQAC')
+    cf('lms') && (
+      permsLower.includes('lms.page.student') ||
+      permsLower.includes('lms.page.staff') ||
+      permsLower.includes('lms.page.hod') ||
+      permsLower.includes('lms.page.ahod') ||
+      permsLower.includes('lms.page.iqac') ||
+      rolesUpper.includes('STUDENT') ||
+      rolesUpper.includes('STAFF') ||
+      rolesUpper.includes('FACULTY') ||
+      rolesUpper.includes('HOD') ||
+      rolesUpper.includes('AHOD') ||
+      rolesUpper.includes('IQAC')
+    )
   ) {
     items.push({ key: 'lms', label: 'LMS', to: '/lms' });
   }
@@ -501,19 +528,19 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'assigned_subjects', label: 'Assigned Subjects', to: '/staff/assigned-subjects' });
   }
 
-  if (flags.is_student) {
+  if (flags.is_student && cf('certificates_student')) {
     items.push({ key: 'certificates_upload', label: 'My Certificates', to: '/student/certificates' });
   }
 
-  if (flags.can_review_certificates || permsLower.includes('certificates.review') || rolesUpper.includes('MENTOR') || Boolean(entry.certificates_review)) {
+  if (cf('certificates_review') && (flags.can_review_certificates || permsLower.includes('certificates.review') || rolesUpper.includes('MENTOR') || Boolean(entry.certificates_review))) {
     items.push({ key: 'certificates_review', label: 'Certificate Reviews', to: '/certificates/review' });
   }
 
-  if (flags.can_view_certificate_achievements || permsLower.includes('certificates.view_mentee_achievements') || permsLower.includes('certificates.view_advisee_achievements') || permsLower.includes('certificates.view_department_achievements') || permsLower.includes('certificates.view_all_achievements')) {
+  if (cf('certificates_review') && (flags.can_view_certificate_achievements || permsLower.includes('certificates.view_mentee_achievements') || permsLower.includes('certificates.view_advisee_achievements') || permsLower.includes('certificates.view_department_achievements') || permsLower.includes('certificates.view_all_achievements'))) {
     items.push({ key: 'certificates_achievements', label: 'Achievements', to: '/certificates/achievements' });
   }
 
-  if (rolesUpper.includes('IQAC') && (flags.can_view_achievement_reports || permsLower.includes('certificates.export_reports'))) {
+  if (cf('certificates_reports') && rolesUpper.includes('IQAC') && (flags.can_view_achievement_reports || permsLower.includes('certificates.export_reports'))) {
     items.push({ key: 'certificates_reports', label: 'Achievement Reports', to: '/iqac/achievement-reports' });
   }
   if (cf('my_calendar') && rf('my_calendar')) {
@@ -591,7 +618,8 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'idscan_gatescan', label: 'GateScan', to: '/idscan/gatescan' });
     items.push({ key: 'idscan_fingerprint', label: 'Fingerprint Enroll', to: '/idscan/fingerprint' });
   }
-  if (!isSecurity && applicationsNav?.show_applications && !items.some((item) => item.key === 'applications_home')) {
+  const canSeeApplications = flags.is_student ? cf('applications_student') : cf('applications_staff');
+  if (canSeeApplications && !isSecurity && applicationsNav?.show_applications && !items.some((item) => item.key === 'applications_home')) {
     items.push({ key: 'applications_home', label: 'My Applications', to: '/applications' });
   }
   const canAccessApplicationsInbox =
@@ -640,8 +668,10 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'requests_hub', label: 'Requests', to: '/requests' });
   }
 
-  // Add Token Raise for all users at the end (no permission check needed)
-  items.push({ key: 'queries', label: 'Raise Token ', to: '/queries' });
+  // Raise Token / Support Queries (gated by college feature 'queries')
+  if (cf('queries')) {
+    items.push({ key: 'queries', label: 'Raise Token ', to: '/queries' });
+  }
 
   return (
     <>
@@ -711,6 +741,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                     to={i.to}
                     className={`flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200 ${active || groupActive ? 'bg-blue-600 text-white shadow-md' : 'text-gray-700 hover:bg-blue-50 hover:text-blue-600'} ${collapsed ? 'lg:justify-center lg:px-2' : ''}`}
                     onClick={(e) => {
+                      if (isOnboardingLocked && i.to !== '/profile') {
+                        e.preventDefault();
+                        window.alert('🔒 Mandatory Profile Onboarding Active!\n\nPlease complete your basic profile details on the Profile page to unlock all other modules.');
+                        return;
+                      }
                       if (isHodGroup) {
                         e.preventDefault();
                         setExpanded({ hod_event_management: !expanded.hod_event_management });

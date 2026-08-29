@@ -4,10 +4,11 @@ import CurriculumLayout from './CurriculumLayout';
 import { updateDeptRow, approveDeptRow, createElective, fetchElectives, fetchBatchYears, propagateDeptRow, deleteCurriculumDepartment, fetchElectiveChoices, DeptRow, fetchDeptRows } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
 import { useParams, Link } from 'react-router-dom';
-import { Edit, Check, X, Save, RefreshCw, Copy, Trash2, Building2, ArrowLeft, Settings2 } from 'lucide-react';
+import { Edit, Check, X, Save, RefreshCw, Copy, Trash2, Building2, ArrowLeft, Settings2, Download } from 'lucide-react';
 import { showAlert, showConfirm } from '../../utils/dialog';
 import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
 import FieldSchemaModal from '../../components/curriculum/FieldSchemaModal';
+import CurriculumDownloadModal from '../../components/curriculum/CurriculumDownloadModal';
 
 type Department = { id: number; code: string; name: string; short_name?: string };
 type QPType = { id: number; code: string; label: string };
@@ -53,6 +54,7 @@ export default function DeptList() {
   const [batchYears, setBatchYears] = useState<any[]>([]);
   const [fieldSchemas, setFieldSchemas] = useState<any[]>([]);
   const [isFieldModalOpen, setIsFieldModalOpen] = useState(false);
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
   const [selectedBatch, setSelectedBatch] = useState<number | null>(null);
   const [propagateSection, setPropagateSection] = useState(false);
   const [propagateSectionTargets, setPropagateSecTargets] = useState<number[]>([]);
@@ -502,8 +504,17 @@ export default function DeptList() {
     c.is_active && 
     (c.scope === 'both' || c.scope === 'department') && 
     !(c.hidden_for_department_ids || []).includes(currentDept || 0) &&
-    !['course_name', 'category', 'class_type', 'is_elective'].includes(c.key)
+    !['course_name', 'is_elective'].includes(c.key)
   );
+
+  const isFieldActive = (key: string) => fieldSchemas.some(c => 
+    c.key === key && 
+    c.is_active && 
+    (c.scope === 'both' || c.scope === 'department') && 
+    !(c.hidden_for_department_ids || []).includes(currentDept || 0)
+  );
+  const showCourseName = isFieldActive('course_name');
+  const showElective = isFieldActive('is_elective');
 
   return (
     <CurriculumLayout>
@@ -629,7 +640,7 @@ export default function DeptList() {
           </div>
         ) : null}
         <div className="flex items-center justify-between mb-4">
-          <div>
+          <div className="flex gap-2">
             {currentDept && (
               <button
                 onClick={() => setIsFieldModalOpen(true)}
@@ -639,6 +650,13 @@ export default function DeptList() {
                 Manage Dept Fields
               </button>
             )}
+            <button
+              onClick={() => setIsDownloadModalOpen(true)}
+              className="flex items-center gap-2 px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors text-sm font-medium"
+            >
+              <Download className="w-4 h-4" />
+              Download
+            </button>
           </div>
           <div className="flex items-center gap-2">
             {editAll ? (
@@ -658,12 +676,13 @@ export default function DeptList() {
           <thead className="bg-gradient-to-r from-gray-50 to-indigo-50">
             <tr>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Code</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Mnemonic</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Batch</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap min-w-[200px]">Course</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">CAT</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Class</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Elective</th>
+              {showCourseName && (
+                <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap min-w-[200px]">Course</th>
+              )}
+              {showElective && (
+                <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Elective</th>
+              )}
               {activeSchemas.map(c => (
                 <th key={c.key} className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">{c.label}</th>
               ))}
@@ -687,43 +706,28 @@ export default function DeptList() {
                         {batchYears.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                       </select>
                     </td>
-                    <td className="px-3 py-2">
-                      <textarea
-                        value={(r.dynamic_data || {}).course_name ?? r.course_name ?? ''}
-                        onChange={e => updateRowValue(r.id, { dynamic_data: { ...(r.dynamic_data || {}), course_name: e.target.value } })}
-                        className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
-                        style={{ minHeight: '32px' }}
-                        placeholder="Course Name"
-                        rows={1}
-                        onInput={e => {
-                          const ta = e.target as HTMLTextAreaElement;
-                          ta.style.height = '32px';
-                          ta.style.height = ta.scrollHeight + 'px';
-                        }}
-                      />
-                    </td>
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      <input
-                        value={(r.dynamic_data || {}).category ?? r.category ?? ''}
-                        onChange={e => updateRowValue(r.id, { dynamic_data: { ...(r.dynamic_data || {}), category: e.target.value } })}
-                        className="w-full min-w-[140px] px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
-                      />
-                    </td>
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      <select
-                        value={(r.dynamic_data || {}).class_type ?? r.class_type ?? 'THEORY'}
-                        onChange={e => updateRowValue(r.id, { dynamic_data: { ...(r.dynamic_data || {}), class_type: e.target.value } })}
-                        className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
-                        style={{ minWidth: 90 }}
-                      >
-                        {CLASS_TYPES.map((ct) => (
-                          <option key={ct.value} value={ct.value}>{ct.label}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="px-3 py-2 text-center whitespace-nowrap">
-                      <input type="checkbox" checked={!!r.is_elective} onChange={e => updateRowValue(r.id, { is_elective: e.target.checked })} className="w-4 h-4" />
-                    </td>
+                    {showCourseName && (
+                      <td className="px-3 py-2">
+                        <textarea
+                          value={(r.dynamic_data || {}).course_name ?? r.course_name ?? ''}
+                          onChange={e => updateRowValue(r.id, { dynamic_data: { ...(r.dynamic_data || {}), course_name: e.target.value } })}
+                          className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+                          style={{ minHeight: '32px' }}
+                          placeholder="Course Name"
+                          rows={1}
+                          onInput={e => {
+                            const ta = e.target as HTMLTextAreaElement;
+                            ta.style.height = '32px';
+                            ta.style.height = ta.scrollHeight + 'px';
+                          }}
+                        />
+                      </td>
+                    )}
+                    {showElective && (
+                      <td className="px-3 py-2 text-center whitespace-nowrap">
+                        <input type="checkbox" checked={!!r.is_elective} onChange={e => updateRowValue(r.id, { is_elective: e.target.checked })} className="w-4 h-4" />
+                      </td>
+                    )}
                     {activeSchemas.map(c => (
                       <td key={c.key} className="px-3 py-2 whitespace-nowrap">
                         {c.data_type === 'bool' ? (
@@ -781,12 +785,14 @@ export default function DeptList() {
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800">{r.batch.name}</span>
                       ) : <span className="text-gray-300">—</span>}
                     </td>
-                    <td className="px-3 py-2.5 text-sm text-gray-900 font-medium">{(r.dynamic_data || {}).course_name ?? r.course_name ?? '-'}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{(r.dynamic_data || {}).category ?? r.category ?? '-'}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{(r.dynamic_data || {}).class_type ?? r.class_type ?? '-'}</td>
-                    <td className="px-3 py-2.5 text-center whitespace-nowrap text-sm">{r.is_elective ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
+                    {showCourseName && (
+                      <td className="px-3 py-2.5 text-sm text-gray-900 font-medium">{(r.dynamic_data || {}).course_name ?? r.course_name ?? '-'}</td>
+                    )}
+                    {showElective && (
+                      <td className="px-3 py-2.5 text-center whitespace-nowrap text-sm">{r.is_elective ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
+                    )}
                     {activeSchemas.map(c => {
-                      const rawVal = (r.dynamic_data || {})[c.key];
+                      const rawVal = c.is_core ? (r as any)[c.key] : (r.dynamic_data || {})[c.key];
                       let display: React.ReactNode = '-';
                       if (rawVal !== null && rawVal !== undefined && rawVal !== '') {
                         if (c.data_type === 'bool') {
@@ -870,9 +876,21 @@ export default function DeptList() {
       <ConfirmPasswordDeleteModal
         isOpen={deleteTarget !== null}
         itemName={deleteTarget ? (deleteTarget.course_name || deleteTarget.course_code || 'this subject') : ''}
-        itemType="Department Curriculum Subject"
-        onClose={() => setDeleteTarget(null)}
+        itemType="Curriculum Subject"
+        warningText={deleteLinkedCount !== null ? (deleteLinkedCount > 0 ? `This elective has ${deleteLinkedCount} existing student selection(s). Deleting it will also remove those choices permanently.` : undefined) : 'Checking for linked student choices...'}
+        onClose={() => { setDeleteTarget(null); setDeleteLinkedCount(null); }}
         onConfirm={handleDeleteDeptRow}
+        loading={deleteLoading}
+      />
+
+      <CurriculumDownloadModal
+        isOpen={isDownloadModalOpen}
+        onClose={() => setIsDownloadModalOpen(false)}
+        data={rows}
+        schemas={fieldSchemas}
+        batchYears={batchYears}
+        departments={allDepartments}
+        type="department"
       />
 
       {/* Elective options section */}

@@ -530,6 +530,14 @@ class StudentProfile(models.Model):
     rfid_uid = models.CharField(max_length=32, blank=True, default='', db_index=True,
                                 help_text='RFID card UID (e.g. 539EA5BB) assigned by the physical scanner.')
 
+    # Personal email and parent/guardian contact details (for onboarding & verification)
+    personal_email = models.EmailField(max_length=254, blank=True, default='')
+    father_name = models.CharField(max_length=128, blank=True, default='', help_text="Father's full name.")
+    father_phone = models.CharField(max_length=20, blank=True, default='', help_text="Father's phone number.")
+    mother_name = models.CharField(max_length=128, blank=True, default='', help_text="Mother's full name.")
+    mother_phone = models.CharField(max_length=20, blank=True, default='', help_text="Mother's phone number.")
+    address = models.TextField(max_length=500, blank=True, default='', help_text="Permanent residential address.")
+
     def __str__(self):
         return f"Student {self.reg_no} ({self.user.username})"
 

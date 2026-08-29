@@ -750,6 +750,28 @@ export async function restoreFieldForDept(schemaId: number, departmentId: number
   if (!res.ok) throw new Error(await res.text());
 }
 
+/** Master hides a field globally (requires password). */
+export async function hideMasterField(schemaId: number, password: string): Promise<void> {
+  const res = await fetchWithAuth(`/api/curriculum/field-schemas/${schemaId}/master-hide/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || 'Hiding field failed');
+  }
+}
+
+/** Master restores a globally hidden field. */
+export async function restoreMasterField(schemaId: number): Promise<void> {
+  const res = await fetchWithAuth(`/api/curriculum/field-schemas/${schemaId}/master-show/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
 /** Trigger replication of a field to all existing rows. */
 export async function replicateField(schemaId: number): Promise<{ status: string; dept_rows_processed: number; master_rows_processed: number }> {
   const res = await fetchWithAuth(`/api/curriculum/field-schemas/${schemaId}/replicate/`, { method: 'POST' });

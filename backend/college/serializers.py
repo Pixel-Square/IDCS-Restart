@@ -7,6 +7,8 @@ class CollegeSerializer(serializers.ModelSerializer):
     admin_username = serializers.CharField(write_only=True, required=False, allow_blank=True)
     admin_email = serializers.EmailField(write_only=True, required=False, allow_blank=True)
     admin_password = serializers.CharField(write_only=True, required=False, allow_blank=True, style={'input_type': 'password'})
+    logo_url = serializers.SerializerMethodField(read_only=True)
+    banner_url = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = College
@@ -14,11 +16,33 @@ class CollegeSerializer(serializers.ModelSerializer):
             'id', 'code', 'name', 'short_name',
             'address', 'city', 'state', 'country', 'postal_code',
             'phone', 'email', 'website',
-            'established_year', 'logo', 'is_active',
+            'established_year', 'logo', 'banner', 'logo_url', 'banner_url', 'is_active',
             'created_at', 'updated_at',
             'admin_username', 'admin_email', 'admin_password',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'logo_url', 'banner_url']
+
+    def get_logo_url(self, obj):
+        if obj.logo:
+            try:
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(obj.logo.url)
+                return obj.logo.url
+            except Exception:
+                return str(obj.logo)
+        return None
+
+    def get_banner_url(self, obj):
+        if obj.banner:
+            try:
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(obj.banner.url)
+                return obj.banner.url
+            except Exception:
+                return str(obj.banner)
+        return None
 
     def validate(self, data):
         username = data.get('admin_username')
@@ -37,6 +61,19 @@ class CollegeSerializer(serializers.ModelSerializer):
 
         college = super().create(validated_data)
 
+        # ── Ensure default roles exist system-wide for every new college ────
+        # STUDENT and STAFF are fixed base roles that must always be present
+        # so that the Roles & Permissions page shows them and users can be
+        # assigned immediately without any extra setup.
+        Role.objects.get_or_create(
+            name='STUDENT',
+            defaults={'description': 'Default role for all enrolled students'},
+        )
+        Role.objects.get_or_create(
+            name='STAFF',
+            defaults={'description': 'Default role for all staff / faculty members'},
+        )
+
         if username and email and password:
             user = User.objects.create_user(
                 username=username,
@@ -51,9 +88,10 @@ class CollegeSerializer(serializers.ModelSerializer):
                 staff_id=f"ADMIN-{college.code or college.id}-{username}",
                 status='ACTIVE'
             )
-            admin_role = Role.objects.filter(name__iexact='ADMIN').first()
-            if not admin_role:
-                admin_role = Role.objects.create(name='ADMIN')
+            admin_role, _ = Role.objects.get_or_create(
+                name='ADMIN',
+                defaults={'description': 'College administrator role'},
+            )
             user.roles.add(admin_role)
 
         return college
