@@ -113,6 +113,32 @@ class CollegeDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 
 # ---------------------------------------------------------------------------
+# College Tier — Update
+# ---------------------------------------------------------------------------
+
+class CollegeTierUpdateView(APIView):
+    """PATCH /api/college/colleges/<id>/tier/
+    Update the subscription tier of a college. Body: { "tier": "PRO" }
+    Only SUPER_ADMIN or superusers may call this endpoint.
+    """
+    permission_classes = [IsSuperAdminOrSuperuser]
+
+    VALID_TIERS = {'BASIC', 'PRO', 'PREMIUM'}
+
+    def patch(self, request, pk):
+        college = get_object_or_404(College, pk=pk)
+        tier = (request.data.get('tier') or '').strip().upper()
+        if tier not in self.VALID_TIERS:
+            return Response(
+                {'detail': f'Invalid tier "{tier}". Must be one of: {", ".join(sorted(self.VALID_TIERS))}.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        college.tier = tier
+        college.save(update_fields=['tier'])
+        return Response({'id': college.pk, 'code': college.code, 'tier': college.tier})
+
+
+# ---------------------------------------------------------------------------
 # College Users — List
 # ---------------------------------------------------------------------------
 
@@ -123,6 +149,7 @@ class CollegeUsersListView(APIView):
       search     — filter by name, email, reg_no, staff_id
       role       — filter by role name (e.g. STUDENT, FACULTY, SUPER_ADMIN)
       page       — page number (default 1)
+
       page_size  — results per page (default 50, max 200)
 
     Response shape:
@@ -903,7 +930,11 @@ class CollegeFeaturesListView(APIView):
                 cf.save(update_fields=['is_enabled', 'enabled_at', 'disabled_at'])
             updated += 1
 
-        return Response({'updated': updated})
+        # ── Sync CollegeRole entries to match the new feature state ─────────
+        from .utils import sync_college_roles
+        role_result = sync_college_roles(college)
+
+        return Response({'updated': updated, 'roles': role_result})
 
 
 # ---------------------------------------------------------------------------
@@ -939,24 +970,15 @@ class CollegeFeatureToggleView(APIView):
             cf.disabled_at = now
         cf.save(update_fields=['is_enabled', 'enabled_at', 'disabled_at'])
 
-        # ── Auto-activate CollegeRole entries when a feature is turned ON ────
-        if enabled and feat.applicable_roles:
-            from accounts.models import Role
-            from .models import CollegeRole
-            for role_name in feat.applicable_roles.split(','):
-                role_name = role_name.strip().upper()
-                if role_name and role_name != 'SUPER_ADMIN':
-                    role_obj = Role.objects.filter(name__iexact=role_name).first()
-                    if role_obj:
-                        CollegeRole.objects.get_or_create(
-                            college=college, role=role_obj,
-                            defaults={'is_active': True},
-                        )
+        # ── Sync CollegeRole entries to match the new feature state ─────────
+        from .utils import sync_college_roles
+        role_result = sync_college_roles(college)
 
         return Response({
             'code': feat.code,
             'name': feat.name,
             'is_enabled': cf.is_enabled,
+            'roles': role_result,
         })
 
 
@@ -1902,6 +1924,9 @@ class CollegeDetailsView(APIView):
 
         # Build mutable data dict excluding the password field
         mutable = {k: v for k, v in request.data.items() if k != 'sa_password'}
+
+        if 'established_year' in mutable and mutable['established_year'] == '':
+            mutable['established_year'] = None
 
         # Handle file uploads
         logo_file = request.FILES.get('logo')

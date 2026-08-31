@@ -126,6 +126,7 @@ import AchievementsPage from './pages/certificates/AchievementsPage';
 import AchievementsReportPage from './pages/certificates/AchievementsReportPage';
 import CollegesPage from './pages/colleges/CollegesPage';
 import CollegeDetailPage from './pages/colleges/CollegeDetailPage';
+import CollegeInfoEditPage from './pages/colleges/CollegeInfoEditPage';
 import CollegeUsersPage from './pages/colleges/CollegeUsersPage';
 import CollegeFeaturesPage from './pages/colleges/CollegeFeaturesPage';
 import RolesPage from './pages/roles/RolesPage';
@@ -298,6 +299,10 @@ export default function App() {
                 <Route
                   path="/colleges/:id"
                   element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<CollegeDetailPage user={user} />} />}
+                />
+                <Route
+                  path="/colleges/:id/info"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegeInfoEditPage user={user} />} />}
                 />
                 <Route
                   path="/colleges/:id/users"

@@ -17,6 +17,7 @@ class CollegeSerializer(serializers.ModelSerializer):
             'address', 'city', 'state', 'country', 'postal_code',
             'phone', 'email', 'website',
             'established_year', 'logo', 'banner', 'logo_url', 'banner_url', 'is_active',
+            'tier',
             'created_at', 'updated_at',
             'admin_username', 'admin_email', 'admin_password',
         ]
@@ -76,7 +77,7 @@ class CollegeSerializer(serializers.ModelSerializer):
         CollegeRole.objects.get_or_create(college=college, role=student_role)
         CollegeRole.objects.get_or_create(college=college, role=staff_role)
 
-        # ── Activate features + derive roles from selected features ──────────
+        # ── Activate features selected during college creation ───────────────
         request = self.context.get('request')
         feature_codes = []
         if request:
@@ -96,20 +97,9 @@ class CollegeSerializer(serializers.ModelSerializer):
                     defaults={'is_enabled': True, 'enabled_at': now, 'disabled_at': None},
                 )
 
-            # Derive roles from the selected features' applicable_roles
-            derived_role_names = set()
-            for feat in catalog_features:
-                if feat.applicable_roles:
-                    for rn in feat.applicable_roles.split(','):
-                        rn = rn.strip().upper()
-                        if rn and rn != 'SUPER_ADMIN':
-                            derived_role_names.add(rn)
-
-            # Create CollegeRole entries for each derived role
-            for role_name in derived_role_names:
-                role_obj = Role.objects.filter(name__iexact=role_name).first()
-                if role_obj:
-                    CollegeRole.objects.get_or_create(college=college, role=role_obj)
+        # ── Sync CollegeRole entries based on enabled features ────────────────
+        from .utils import sync_college_roles
+        sync_college_roles(college)
 
         # ── Provision college admin user ─────────────────────────────────────
         if username and email and password:
@@ -135,6 +125,7 @@ class CollegeSerializer(serializers.ModelSerializer):
             CollegeRole.objects.get_or_create(college=college, role=admin_role)
 
         return college
+
 
     def update(self, instance, validated_data):
         username = validated_data.pop('admin_username', None)

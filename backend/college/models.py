@@ -10,6 +10,15 @@ class College(models.Model):
     and active flag.
     """
 
+    TIER_BASIC = 'BASIC'
+    TIER_PRO = 'PRO'
+    TIER_PREMIUM = 'PREMIUM'
+    TIER_CHOICES = [
+        (TIER_BASIC, 'Basic'),
+        (TIER_PRO, 'Pro'),
+        (TIER_PREMIUM, 'Premium'),
+    ]
+
     code = models.CharField(max_length=32, unique=True, help_text='Short college code (e.g. IDCS)')
     name = models.CharField(max_length=255)
     short_name = models.CharField(max_length=64, blank=True, help_text='Optional short display name')
@@ -45,6 +54,13 @@ class College(models.Model):
     )
 
     is_active = models.BooleanField(default=True)
+
+    tier = models.CharField(
+        max_length=16,
+        choices=TIER_CHOICES,
+        default=TIER_BASIC,
+        help_text='Subscription tier for this college: BASIC, PRO, or PREMIUM',
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

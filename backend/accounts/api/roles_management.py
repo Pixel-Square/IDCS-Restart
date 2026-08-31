@@ -122,6 +122,17 @@ class RolesManagementListCreateView(APIView):
                     feat.applicable_roles = ','.join(existing)
                     feat.save(update_fields=['applicable_roles'])
 
+        # ── Auto-map the new role to the requesting college ────────────────
+        college_id = getattr(request, 'college_id', None)
+        if college_id:
+            from college.models import CollegeRole as CR, College
+            college = College.objects.filter(pk=college_id).first()
+            if college:
+                CR.objects.get_or_create(
+                    college=college, role=role,
+                    defaults={'is_active': True},
+                )
+
         # Refresh feature list using the same logic as GET
         role_feature_map = _build_role_feature_map()
         return Response({
@@ -133,6 +144,7 @@ class RolesManagementListCreateView(APIView):
                 RolePermission.objects.filter(role=role).values_list('permission__code', flat=True)
             ),
         }, status=201)
+
 
 
 class RoleDetailView(APIView):

@@ -29,6 +29,7 @@ interface College {
   logo_url?: string | null;
   banner_url?: string | null;
   is_active: boolean;
+  tier?: 'BASIC' | 'PRO' | 'PREMIUM';
   created_at: string;
   updated_at: string;
   admin_username?: string;
@@ -299,6 +300,15 @@ export default function CollegesPage() {
                       <span className={`text-xs font-medium px-2 py-0.5 rounded-md ${col.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
                         {col.is_active ? 'Active' : 'Inactive'}
                       </span>
+                      {col.tier && (
+                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-md border ${
+                          col.tier === 'PREMIUM' ? 'bg-amber-100 text-amber-700 border-amber-200' :
+                          col.tier === 'PRO' ? 'bg-purple-100 text-purple-700 border-purple-200' :
+                          'bg-blue-50 text-blue-600 border-blue-200'
+                        }`}>
+                          {col.tier === 'PREMIUM' ? '⭐ Premium' : col.tier === 'PRO' ? '⚡ Pro' : '🛡 Basic'}
+                        </span>
+                      )}
                     </div>
                     <h3 className="font-semibold text-gray-900 mt-1 text-sm leading-tight truncate" title={col.name}>{col.name}</h3>
                     {col.short_name && <p className="text-xs text-gray-400 truncate">{col.short_name}</p>}

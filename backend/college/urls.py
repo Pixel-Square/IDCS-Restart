@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     CollegeListCreateView,
     CollegeDetailView,
+    CollegeTierUpdateView,
     CollegeUsersListView,
     CollegeUserImportTemplateView,
     CollegeUserImportView,
@@ -31,6 +32,7 @@ from .views import (
 urlpatterns = [
     path('colleges/', CollegeListCreateView.as_view(), name='college-list-create'),
     path('colleges/<int:pk>/', CollegeDetailView.as_view(), name='college-detail'),
+    path('colleges/<int:pk>/tier/', CollegeTierUpdateView.as_view(), name='college-tier-update'),
     path('colleges/<int:pk>/details/', CollegeDetailsView.as_view(), name='college-details'),
     path('colleges/<int:pk>/users/', CollegeUsersListView.as_view(), name='college-users-list'),
     path('colleges/<int:pk>/users/import-template/', CollegeUserImportTemplateView.as_view(), name='college-users-import-template'),
