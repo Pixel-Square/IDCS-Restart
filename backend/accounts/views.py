@@ -11,7 +11,10 @@ from .serializers import (
     UserQuerySerializer,
     UserQueryListSerializer,
 )
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework.throttling import ScopedRateThrottle
+from rest_framework_simplejwt.tokens import RefreshToken
+from erp.authentication import set_auth_cookies, clear_auth_cookies
 from django.utils import timezone
 from datetime import timedelta
 import re
@@ -52,11 +55,80 @@ User = get_user_model()
 class CustomTokenObtainPairView(TokenObtainPairView):
     # Uses identifier-based serializer (identifier may be email, student reg_no, or staff staff_id)
     serializer_class = IdentifierTokenObtainPairSerializer
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'login'
+
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+        if getattr(response, 'status_code', 200) == 200:
+            # Emit httpOnly cookies in addition to the JSON body so the SPA can
+            # migrate off localStorage without a breaking change.
+            set_auth_cookies(
+                response,
+                access=response.data.get('access'),
+                refresh=response.data.get('refresh'),
+            )
+        return response
+
+
+class CookieTokenRefreshView(TokenRefreshView):
+    """Refresh endpoint that also accepts the refresh token via httpOnly cookie
+    and re-issues cookies on success (works for cookie-only clients)."""
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'refresh'
+
+    def post(self, request, *args, **kwargs):
+        data = request.data
+        if not data.get('refresh'):
+            cookie_name = getattr(settings, 'JWT_REFRESH_COOKIE_NAME', 'refresh_token')
+            cookie = request.COOKIES.get(cookie_name, '')
+            if cookie:
+                # TokenRefreshView reads request.data; write the cookie value
+                # back so the serializer sees it. QueryDict is immutable, so
+                # always operate on a mutable copy.
+                data = data.copy() if hasattr(data, 'copy') else dict(data)
+                data['refresh'] = cookie
+                request._full_data = data
+
+        response = super().post(request, *args, **kwargs)
+        if getattr(response, 'status_code', 200) == 200:
+            set_auth_cookies(
+                response,
+                access=response.data.get('access'),
+                refresh=response.data.get('refresh'),
+            )
+        return response
+
+
+class LogoutView(APIView):
+    """Blacklist the refresh token (if provided) and clear auth cookies."""
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request):
+        refresh_token = (request.data or {}).get('refresh') or request.COOKIES.get(
+            getattr(settings, 'JWT_REFRESH_COOKIE_NAME', 'refresh_token'), ''
+        )
+        if refresh_token:
+            try:
+                RefreshToken(refresh_token).blacklist()
+            except Exception:
+                # Token may already be expired/blacklisted — logout still succeeds.
+                pass
+        response = Response({'detail': 'Logged out.'}, status=status.HTTP_205_RESET_CONTENT)
+        clear_auth_cookies(response)
+        return response
 
 
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
-    permission_classes = (permissions.AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'register'
+
+    def get_permissions(self):
+        # Admin-managed provisioning by default; opt-in to open registration.
+        if getattr(settings, 'ENABLE_OPEN_REGISTRATION', False):
+            return [permissions.AllowAny()]
+        return [permissions.IsAdminUser()]
 
 
 class MeView(APIView):
@@ -207,6 +279,8 @@ class MobileOtpRequestView(APIView):
     # Bypass authentication completely to avoid 401 errors from expired tokens
     authentication_classes = []
     permission_classes = (permissions.AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'otp'
 
     def post(self, request):
         """Proxy OTP request to Node.js WhatsApp service."""
@@ -314,6 +388,8 @@ class NotificationTemplateApiView(APIView):
 class MobileOtpVerifyView(APIView):
     # Require authentication for verification to link the verified mobile to user account
     permission_classes = (permissions.IsAuthenticated,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'otp'
 
     def post(self, request):
         """Proxy OTP verification to Node.js WhatsApp service and update user profile."""
@@ -696,7 +772,9 @@ def _resolve_user_mobile_for_reset(user) -> str:
 
 
 class ForgotPasswordRequestOtpView(APIView):
-    """Request OTP via email or mobile for forgot-password flow."""
+    """Request OTP via email or mobile for forgo
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'otp't-password flow."""
     authentication_classes = []
     permission_classes = (permissions.AllowAny,)
 
@@ -790,6 +868,8 @@ class ForgotPasswordVerifyOtpView(APIView):
     """Verify OTP and return one-time reset token."""
     authentication_classes = []
     permission_classes = (permissions.AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'otp'
 
     def post(self, request):
         payload = request.data or {}
@@ -856,6 +936,8 @@ class ForgotPasswordResetView(APIView):
     """Reset password using one-time token returned after OTP verification."""
     authentication_classes = []
     permission_classes = (permissions.AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'otp'
 
     def post(self, request):
         payload = request.data or {}

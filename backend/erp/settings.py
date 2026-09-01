@@ -91,6 +91,8 @@ INSTALLED_APPS = [
 INSTALLED_APPS.append('staff_requests')
 INSTALLED_APPS.append('staff_salary')
 INSTALLED_APPS.append('django_celery_results')
+# Refresh-token blacklist so rotated/revoked refresh tokens can't be replayed.
+INSTALLED_APPS.append('rest_framework_simplejwt.token_blacklist')
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -214,7 +216,22 @@ CELERY_TASK_SOFT_TIME_LIMIT = 300   # 5 min soft kill → raises SoftTimeLimitEx
 CELERY_TASK_TIME_LIMIT = 360        # 6 min hard kill
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True  # suppress Celery 6.0 deprecation warning
 
-AUTH_PASSWORD_VALIDATORS = []
+# Enforce real password policy. Open registration used to allow "123456".
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        'OPTIONS': {'min_length': int(os.getenv('PASSWORD_MIN_LENGTH', '8'))},
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+    },
+]
 
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'Asia/Kolkata'
@@ -259,8 +276,24 @@ AUTHENTICATION_BACKENDS = [
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        # Header (Bearer) auth with httpOnly-cookie fallback — protects against
+        # token theft via XSS while staying compatible with existing clients.
+        'erp.authentication.JWTCookieAuthentication',
     ),
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': os.getenv('THROTTLE_ANON_RATE', '100/min'),
+        'user': os.getenv('THROTTLE_USER_RATE', '1000/min'),
+        # Scoped rates for the most abuse-prone endpoints.
+        'login': os.getenv('THROTTLE_LOGIN_RATE', '10/min'),
+        'refresh': os.getenv('THROTTLE_REFRESH_RATE', '30/min'),
+        'otp': os.getenv('THROTTLE_OTP_RATE', '5/min'),
+        'register': os.getenv('THROTTLE_REGISTER_RATE', '5/hour'),
+        'biometric_ingest': os.getenv('THROTTLE_BIOMETRIC_RATE', '120/min'),
+    },
     'EXCEPTION_HANDLER': 'curriculum.views.custom_exception_handler',
 }
 
@@ -270,14 +303,64 @@ SLOW_REQUEST_LOG_MS = int(os.getenv('SLOW_REQUEST_LOG_MS', '1200'))
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.getenv('ACCESS_TOKEN_MINUTES', '60'))),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(hours=int(os.getenv('REFRESH_TOKEN_HOURS', '12'))),
     'AUTH_HEADER_TYPES': ('Bearer',),
+    # Rotate the refresh token on every refresh and blacklist the old one so a
+    # leaked refresh token is single-use and revocable.
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': True,
 }
+
+# --- JWT httpOnly cookie settings (secure default) -----------------------------
+# Token endpoints (token/, token/refresh/, logout/) additionally set these
+# cookies so a future cookie-only client never touches localStorage.
+JWT_ACCESS_COOKIE_NAME = os.getenv('JWT_ACCESS_COOKIE_NAME', 'access_token')
+JWT_REFRESH_COOKIE_NAME = os.getenv('JWT_REFRESH_COOKIE_NAME', 'refresh_token')
+JWT_COOKIE_SECURE = os.getenv('JWT_COOKIE_SECURE', '0' if DEBUG else '1') == '1'
+JWT_COOKIE_HTTPONLY = os.getenv('JWT_COOKIE_HTTPONLY', '1') == '1'
+JWT_COOKIE_SAMESITE = os.getenv('JWT_COOKIE_SAMESITE', 'Lax')
+JWT_COOKIE_PATH = os.getenv('JWT_COOKIE_PATH', '/')
+JWT_COOKIE_DOMAIN = os.getenv('JWT_COOKIE_DOMAIN', '')
 
 # Staff biometric realtime ingestion security.
 # If this is set, callers to /api/staff-attendance/biometric/realtime/
 # must provide header: X-Biometric-Key: <value>
 STAFF_BIOMETRIC_INGEST_KEY = os.getenv('STAFF_BIOMETRIC_INGEST_KEY', '').strip()
+
+# Harden attendance integrity: in production this key MUST be set and strong.
+# Without it the endpoint degrades to "any authenticated user", which allows
+# forged punches for arbitrary staff ids.
+if not DEBUG and len(STAFF_BIOMETRIC_INGEST_KEY) < 24:
+    raise RuntimeError(
+        'STAFF_BIOMETRIC_INGEST_KEY is not set (or is too short) for production. '
+        'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))" '
+        'and add it to backend/.env before starting the server.'
+    )
+
+# --- Open registration policy ------------------------------------------------
+# Registration is admin-managed by default. Set ENABLE_OPEN_REGISTRATION=1 only
+# if you intentionally want public self-service account creation.
+ENABLE_OPEN_REGISTRATION = os.getenv('ENABLE_OPEN_REGISTRATION', '0') == '1'
+
+# --- Super admin isolation ---------------------------------------------------
+# The super-admin account's login is gated by a separate access key (sent as
+# `sa_key` in the token request). Configure it in production; if empty the
+# account cannot authenticate (fail closed).
+SUPER_ADMIN_EMAIL = os.getenv('SUPER_ADMIN_EMAIL', 'admin@example.com')
+SUPER_ADMIN_ACCESS_KEY = os.getenv('SUPER_ADMIN_ACCESS_KEY', '').strip()
+
+# --- Protected media serving --------------------------------------------------
+# Production must route /media/ through erp.media_views.ProtectedMediaView
+# (nginx proxy + X-Accel-Redirect). Prefixes listed here remain anonymous;
+# everything else requires authentication or a signed URL.
+USE_X_ACCEL_REDIRECT = os.getenv('USE_X_ACCEL_REDIRECT', '0' if DEBUG else '1') == '1'
+PUBLIC_MEDIA_PREFIXES = [
+    p.strip() for p in os.getenv(
+        'PUBLIC_MEDIA_PREFIXES',
+        'profile_images/,announcements/covers/,announcements/themes/,event_posters/',
+    ).split(',') if p.strip()
+]
 
 # API key for machine-to-machine reads from reporting API endpoints.
 # Callers can pass it in header X-Reporting-Api-Key (preferred) or X-API-Key.

@@ -1,0 +1,13 @@
+[Unit]
+Description=IDCS PostgreSQL backup (pg_dump + verify + off-site rsync)
+After=postgresql.service network.target
+
+[Service]
+Type=oneshot
+User=iqac
+Group=www-data
+WorkingDirectory=/home/iqac/IDCS-Restart
+# Credentials are read from backend/.env by the script; no secrets here.
+ExecStart=/home/iqac/IDCS-Restart/tools/backup_db.sh
+# Off-site target (rsync). Leave empty to keep only local backups.
+# Environment=OFFSITE_RSYNC_TARGET=user@backup-host:/srv/backups/idcs/

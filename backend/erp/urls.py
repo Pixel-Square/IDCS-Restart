@@ -80,3 +80,12 @@ if 'runserver' in sys.argv or settings.DEBUG:
     urlpatterns += [
         path('admin/dashboard-data/', admin_views.admin_counts, name='admin-dashboard-data'),
     ]
+
+# Protected media serving. In production (DEBUG=False, gunicorn) this is the
+# ONLY /media/ route: nginx proxies /media/ here and we authorize + hand off
+# the file via X-Accel-Redirect. In development the runserver routes added
+# above take precedence, so files still stream directly.
+from erp.media_views import ProtectedMediaView  # noqa: E402
+urlpatterns += [
+    re_path(r'^media/(?P<path>.*)$', ProtectedMediaView.as_view(), name='protected-media'),
+]

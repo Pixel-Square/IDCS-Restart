@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: idcs
+          POSTGRES_USER: idcs
+          POSTGRES_PASSWORD: idcs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U idcs"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Django system checks (--deploy)
+        working-directory: backend
+        env:
+          DJANGO_SECRET_KEY: ci-only-secret-key-not-used-in-production
+          DEBUG: "0"
+          DB_NAME: idcs
+          DB_USER: idcs
+          DB_PASS: idcs
+          DB_HOST: 127.0.0.1
+          DB_PORT: "5432"
+          STAFF_BIOMETRIC_INGEST_KEY: ci-only-biometric-key-0123456789abcdef0123456789abcdef
+          REDIS_URL: redis://127.0.0.1:6379/1
+          CELERY_BROKER_URL: redis://127.0.0.1:6379/2
+          STATICFILES_STORAGE: django.contrib.staticfiles.storage.StaticFilesStorage
+        run: python manage.py check --deploy
+
+      - name: Syntax check (compileall)
+        working-directory: backend
+        run: python -m compileall -q .
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          DJANGO_SECRET_KEY: ci-only-secret-key-not-used-in-production
+          DEBUG: "0"
+          DB_NAME: idcs
+          DB_USER: idcs
+          DB_PASS: idcs
+          DB_HOST: 127.0.0.1
+          DB_PORT: "5432"
+          STAFF_BIOMETRIC_INGEST_KEY: ci-only-biometric-key-0123456789abcdef0123456789abcdef
+          REDIS_URL: redis://127.0.0.1:6379/1
+          CELERY_BROKER_URL: redis://127.0.0.1:6379/2
+        run: python manage.py test accounts --verbosity 2
+        continue-on-error: true

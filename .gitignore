@@ -35,6 +35,9 @@ script.py
 reset_*.py
 *.patch
 
+# Keep real test suites (files inside a tests/ directory)
+!**/tests/test_*.py
+
 # Backend-specific temp files
 backend/test_*.py
 backend/check_*.py

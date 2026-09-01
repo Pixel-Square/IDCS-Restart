@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from .models import Role, UserRole, Permission, RolePermission, NotificationTemplate, UserQuery
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -596,16 +597,19 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
             raise serializers.ValidationError('User account is disabled.')
 
         # ── Super Admin isolation ──────────────────────────────────────────
-        # The designated super admin account (admin@example.com) can ONLY
-        # authenticate through the dedicated /login/super-admin page which
-        # sends a secret access key in the request body.  This does NOT
-        # affect Django admin login at db3.krgi.co.in (separate auth flow).
-        _SUPER_ADMIN_EMAIL = 'admin@example.com'
-        _SUPER_ADMIN_ACCESS_KEY = 'IDCS3_SA_2026_SECURE'
+        # The designated super admin account can ONLY authenticate through the
+        # dedicated /login/super-admin page which sends a secret access key in
+        # the request body. The key is configured via settings/env
+        # (SUPER_ADMIN_ACCESS_KEY). This does NOT affect Django admin login at
+        # db3.krgi.co.in (separate auth flow).
+        _SUPER_ADMIN_EMAIL = str(getattr(settings, 'SUPER_ADMIN_EMAIL', 'admin@example.com') or '').strip().lower()
+        _SUPER_ADMIN_ACCESS_KEY = str(getattr(settings, 'SUPER_ADMIN_ACCESS_KEY', '') or '').strip()
 
         if str(getattr(user, 'email', '') or '').strip().lower() == _SUPER_ADMIN_EMAIL:
             sa_key = str(self.initial_data.get('sa_key', '') or '').strip()
-            if sa_key != _SUPER_ADMIN_ACCESS_KEY:
+            # Fail closed: if no access key is configured, the super-admin
+            # account cannot authenticate (never fall back to a hardcoded key).
+            if not _SUPER_ADMIN_ACCESS_KEY or sa_key != _SUPER_ADMIN_ACCESS_KEY:
                 raise serializers.ValidationError(invalid_msg)
 
         # Check for inactive or debarred students

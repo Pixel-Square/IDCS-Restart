@@ -8,6 +8,8 @@ from .views import (
     RegisterView, 
     MeView, 
     CustomTokenObtainPairView, 
+    CookieTokenRefreshView,
+    LogoutView,
     MobileOtpRequestView, 
     MobileOtpVerifyView, 
     MobileRemoveView,
@@ -33,7 +35,6 @@ from .views import (
     UCStateView,
     LoginLockdownView,
 )
-from rest_framework_simplejwt.views import TokenRefreshView
 from .api.dashboard import DashboardView
 from .api.roles import RolesListView
 from .api.roles_management import RolesManagementListCreateView, RoleDetailView, PermissionsListView, FeaturesListView
@@ -54,7 +55,8 @@ urlpatterns = [
     path('profile-image-update-requests/review/', ProfileImageUpdateRequestReviewView.as_view(), name='profile_image_update_requests_review_list'),
     path('profile-image-update-requests/<int:request_id>/review/', ProfileImageUpdateRequestReviewView.as_view(), name='profile_image_update_request_review'),
     path('token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('token/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
+    path('logout/', LogoutView.as_view(), name='logout'),
     
     # Superuser impersonation
     path('impersonate/', SuperuserImpersonateView.as_view(), name='superuser_impersonate'),
