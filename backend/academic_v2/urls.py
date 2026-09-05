@@ -41,6 +41,7 @@ from .views import (
     faculty_exam_marks,
     faculty_exam_cqi_draft,
     faculty_exam_cqi_published,
+    faculty_exam_cqi_publish,
     faculty_exam_publish,
     faculty_exam_request_edit,
     faculty_exam_confirm_mark_manager,
@@ -124,6 +125,7 @@ urlpatterns = [
     path('exams/<uuid:exam_id>/marks/', faculty_exam_marks, name='faculty-exam-marks'),
     path('exams/<uuid:exam_id>/cqi-draft/', faculty_exam_cqi_draft, name='faculty-exam-cqi-draft'),
     path('exams/<uuid:exam_id>/cqi-published/', faculty_exam_cqi_published, name='faculty-exam-cqi-published'),
+    path('exams/<uuid:exam_id>/cqi-publish/', faculty_exam_cqi_publish, name='faculty-exam-cqi-publish'),
     path('exams/<uuid:exam_id>/publish/', faculty_exam_publish, name='faculty-exam-publish'),
     path('exams/<uuid:exam_id>/request-edit/', faculty_exam_request_edit, name='faculty-exam-request-edit'),
     path('exams/<uuid:exam_id>/confirm-mark-manager/', faculty_exam_confirm_mark_manager, name='faculty-exam-confirm-mark-manager'),
@@ -219,8 +221,13 @@ from .academic_performance_views import (
     FacultyWiseAnalyticsView,
     ClassAdvisorDeepDiveView,
     RangeAnalysisView,
-    ComparisonPerformanceAnalyticsView
+    ComparisonPerformanceAnalyticsView,
+    StudentCurriculumMarksView,
+    StudentAnalysisChartsView,
 )
+from department_analysis_view import DepartmentAnalysisView
+from .subject_analysis_views import SubjectWiseAnalysisView
+
 
 urlpatterns += [
     path('performance/dashboards/', PublishedDashboardsListView.as_view(), name='academic-performance-dashboards'),
@@ -232,4 +239,10 @@ urlpatterns += [
     path('performance/class-advisor/<str:section_id>/', ClassAdvisorDeepDiveView.as_view(), name='academic-performance-class-advisor'),
     path('performance/range-analysis/', RangeAnalysisView.as_view(), name='academic-performance-range-analysis'),
     path('performance/comparison-analytics/', ComparisonPerformanceAnalyticsView.as_view(), name='academic-performance-comparison-analytics'),
+    path('performance/student-curriculum-marks/', StudentCurriculumMarksView.as_view(), name='academic-performance-student-curriculum-marks'),
+    path('performance/student-analysis-charts/<str:student_id>/', StudentAnalysisChartsView.as_view(), name='academic-performance-student-analysis-charts-detail'),
+    path('performance/student-analysis-charts/', StudentAnalysisChartsView.as_view(), name='academic-performance-student-analysis-charts'),
+    path('performance/department-analysis/', DepartmentAnalysisView.as_view(), name='academic-performance-department-analysis'),
+    path('performance/subject-wise/', SubjectWiseAnalysisView.as_view(), name='academic-performance-subject-wise'),
 ]
+

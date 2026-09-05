@@ -91,27 +91,27 @@ export default function CollegeOverview({ data, onDepartmentClick }: Props) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {depts.map((d: any) => (
-                <tr key={d.dept_code} onClick={() => onDepartmentClick(d.id, d.dept_name)} className="hover:bg-blue-50 cursor-pointer transition-colors group">
-                  <td className="p-4">
-                    <div className="font-bold text-blue-700 group-hover:text-blue-800 flex items-center gap-2">
-                      {d.dept_name}
-                      <span className="opacity-0 group-hover:opacity-100 text-blue-500 text-xs">Drill down &rarr;</span>
-                    </div>
-                  </td>
-                  <td className="p-4 font-semibold">{d.total_students}</td>
-                  <td className="p-4 font-semibold">{d.pass_rate_pct}%</td>
-                  <td className="p-4 font-semibold">{d.avg_marks_pct}%</td>
-                  <td className="p-4 font-semibold">
-                    {d.attendance !== null && d.attendance !== undefined ? `${d.attendance}%` : 'N/A'}
-                  </td>
-                </tr>
-              ))}
-              {depts.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="p-8 text-center text-slate-500 font-medium">No department data available.</td>
-                </tr>
-              )}
+               {depts.map((d: any) => (
+                 <tr key={d.dept_code} onClick={() => onDepartmentClick(d.dept_code, d.dept_name)} className="hover:bg-blue-50 cursor-pointer transition-colors group">
+                   <td className="p-4">
+                     <div className="font-bold text-blue-700 group-hover:text-blue-800 flex items-center gap-2">
+                       {d.dept_name}
+                       <span className="opacity-0 group-hover:opacity-100 text-blue-500 text-xs">Drill down →</span>
+                     </div>
+                   </td>
+                   <td className="p-4 font-semibold">{d.total_students}</td>
+                   <td className="p-4 font-semibold">{d.pass_rate_pct}%</td>
+                   <td className="p-4 font-semibold">{d.avg_marks_pct}%</td>
+                   <td className="p-4 font-semibold">
+                     {d.attendance !== null && d.attendance !== undefined ? `${d.attendance}%` : 'N/A'}
+                   </td>
+                 </tr>
+               ))}
+               {depts.length === 0 && (
+                 <tr>
+                   <td colSpan={5} className="p-8 text-center text-slate-500 font-medium">No department data available.</td>
+                 </tr>
+               )}
             </tbody>
           </table>
         </div>

@@ -1,4 +1,6 @@
 import { fetchDynamicOptions } from '../../services/academicVisuals';
+import ErrorBoundary from './components/ErrorBoundary';
+import BreadcrumbNavigation, { BreadcrumbLevel } from './components/BreadcrumbNavigation';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   BarChart3,
@@ -47,20 +49,25 @@ import {
   searchStudents,
   compareStudents,
   fetchFacultyWiseAnalytics,
+  fetchFacultyAnalysis,
   fetchClassAdvisorDeepDive,
-  fetchRangeAnalysis,
   fetchComparisonAnalytics,
   fetchStudentCurriculumMarks,
   fetchStudentAnalysisCharts,
+  fetchDepartmentAnalysis,
+  fetchSubjectAnalysis,
+  SubjectAnalysisResponse,
   PerformanceAnalyticsResponse,
   StudentProgressReportResponse,
   FacultyWiseRow,
   ClassAdvisorDeepDiveResponse,
-  RangeAnalysisResponse,
   ComparisonAnalyticsResponse,
   StudentCurriculumMarksResponse,
-  StudentAnalysisChartsResponse
+  StudentAnalysisChartsResponse,
+  DepartmentAnalysisResponse,
+  FacultyAnalysisResponse
 } from '../../services/academicPerformance';
+import SubjectWiseAnalysis from './components/SubjectWiseAnalysis';
 import {
   DashboardDefinition,
   DashboardQueryResult,
@@ -71,10 +78,30 @@ import {
 // Assessment options are discovered from the database via the analytics
 // response (filter_options.exam_types / assessments). No hardcoded list.
 
+// Dashboards removed from the view switcher (navigation-only removal — the
+// underlying APIs/views are untouched).
+const REMOVED_DASHBOARD_NAMES = new Set<string>([
+  'Performance Range Analysis',
+  'New Academic Analytics Dashboard',
+  'Student Academic Performance Dashboard',
+]);
+
+enum HierarchyLevel {
+  COLLEGE = 'college',
+  DEPARTMENT = 'department',
+  FACULTY = 'faculty',
+  SUBJECT = 'subject'
+}
+
 export default function AcademicPerformancePage() {
   const [data, setData] = useState<PerformanceAnalyticsResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string>('');
+  const [hierarchyLevel, setHierarchyLevel] = useState<HierarchyLevel>(HierarchyLevel.COLLEGE);
+  // Breadcrumb navigation path state
+  const [breadcrumbPath, setBreadcrumbPath] = useState<BreadcrumbLevel[]>([
+    { id: 'college', label: 'College', type: 'COLLEGE' },
+  ]);
 
   // Published Dashboards Switcher
   const [publishedDashboards, setPublishedDashboards] = useState<DashboardDefinition[]>([]);
@@ -135,10 +162,14 @@ export default function AcademicPerformancePage() {
   const [selectedDeptName, setSelectedDeptName] = useState<string>('');
   const [selectedSection, setSelectedSection] = useState<string>('');
   const [selectedExamType, setSelectedExamType] = useState<string>('');
+  const [selectedSubject, setSelectedSubject] = useState<string>('');
+  const [subjectSearchQuery, setSubjectSearchQuery] = useState<string>('');
 
   // When a batch is selected, auto-pick the semester(s) that actually exist for that
   // batch in the database (batch_semesters comes from the backend response).
   useEffect(() => {
+    // Load data on component mount
+    loadInitialData();
     if (!selectedYear) return;
     const sems = data?.filter_options?.batch_semesters?.[selectedYear];
     if (sems && sems.length > 0) {
@@ -169,9 +200,27 @@ export default function AcademicPerformancePage() {
   const [studentChartsLoading, setStudentChartsLoading] = useState(false);
   const [studentChartsData, setStudentChartsData] = useState<StudentAnalysisChartsResponse | null>(null);
 
-  const [rangeLoading, setRangeLoading] = useState(false);
-  const [rangeData, setRangeData] = useState<RangeAnalysisResponse | null>(null);
-  const [selectedRangeSubject, setSelectedRangeSubject] = useState<string>('');
+  // Department Drill Down — opens a real, DB-backed Department Analysis view that
+  // preserves the current Academic Year / Semester / Assessment / Section filters.
+  const [deptDrilldown, setDeptDrilldown] = useState<{ code: string; name: string } | null>(null);
+  const [drilldownData, setDrilldownData] = useState<DepartmentAnalysisResponse | null>(null);
+  const [drilldownLoading, setDrilldownLoading] = useState(false);
+  const [drilldownError, setDrilldownError] = useState('');
+
+  // Faculty-wise Analysis layer (College → Department → Faculty)
+  const [facultyRows, setFacultyRows] = useState<FacultyWiseRow[]>([]);
+  const [facultyRowsLoading, setFacultyRowsLoading] = useState(false);
+  const [facultyDrill, setFacultyDrill] = useState<{ id: string; name: string } | null>(null);
+  const [facultyDetail, setFacultyDetail] = useState<FacultyAnalysisResponse | null>(null);
+
+  // Subject drill-down: College → Department → Faculty → Subject (SPA state only)
+  const [subjectDrill, setSubjectDrill] = useState<{ code: string; name: string } | null>(null);
+  const [subjectDetail, setSubjectDetail] = useState<SubjectAnalysisResponse | null>(null);
+  const [subjectLoading, setSubjectLoading] = useState(false);
+  const [subjectError, setSubjectError] = useState('');
+  const [subjectSectionFilter, setSubjectSectionFilter] = useState('');
+  const [facultyDetailLoading, setFacultyDetailLoading] = useState(false);
+  const [facultyDetailError, setFacultyDetailError] = useState('');
 
   // Custom Dashboard Query Results (for Published Dashboards from Visual Admin)
   const [customVisualResults, setCustomVisualResults] = useState<Record<string, DashboardQueryResult>>({});
@@ -189,6 +238,24 @@ export default function AcademicPerformancePage() {
     }
     loadOptions();
   }, []);
+
+  // Dependent-filter options for Individual Student Analysis. Refetched with
+  // the current Academic Year / Semester / Department so Sections, Semesters
+  // and Subjects are derived from the REAL student cohort + curriculum
+  // (Academic Year → Semester → Department → Section → Subject).
+  const [cohortOptions, setCohortOptions] = useState<any>(null);
+  useEffect(() => {
+    if (activeTab !== 'student') return;
+    let cancelled = false;
+    fetchDynamicOptions({ year: selectedYear, sem: selectedSem, dept: selectedDept })
+      .then(res => { if (!cancelled) setCohortOptions(res); })
+      .catch(err => {
+        console.error('Failed to load cohort filter options:', err);
+        if (!cancelled) setCohortOptions(null);
+      });
+    // cleanup function
+    return () => { cancelled = true; };
+  }, [activeTab, selectedYear, selectedSem, selectedDept]);
 
 
 
@@ -242,24 +309,122 @@ export default function AcademicPerformancePage() {
     loadInitialData();
   }, [selectedYear, selectedSem, selectedDept, selectedSection, selectedExamType]);
 
-  // Dynamic section options come straight from the backend response (department/batch/sem aware)
-  const sectionOptions: string[] = data?.filter_options?.sections || [];
-  const assessmentOptions: string[] = data?.filter_options?.exam_types || data?.filter_options?.assessments || [];
-  const batchList: string[] = data?.filter_options?.batches || dynamicOptions?.batches || [];
-  const semesterList: Array<number | string> = data?.filter_options?.semesters || [];
+  // Dynamic section & subject options come straight from backend
+  const sectionOptions: string[] = React.useMemo(() => {
+    // Cohort-derived sections win on the Individual Student Analysis view:
+    // they are recalculated from REAL students for the selected year/sem/dept.
+    if (activeTab === 'student' && cohortOptions?.sections && cohortOptions.sections.length > 0) {
+      return cohortOptions.sections;
+    }
+    if (data?.filter_options?.sections && data.filter_options.sections.length > 0) {
+      return data.filter_options.sections;
+    }
+    return dynamicOptions?.sections || [];
+  }, [activeTab, cohortOptions?.sections, data?.filter_options?.sections, dynamicOptions?.sections]);
 
-    // Reset all college-level filters back to default and restore the College view.
+  const assessmentOptions: string[] = React.useMemo(() => {
+    const list = data?.filter_options?.exam_types || data?.filter_options?.assessments || dynamicOptions?.assessmentTypes || [];
+    const defaults = ['CIA 1', 'CIA 2', 'SSA 1', 'SSA 2', 'Review 1', 'Review 2', 'Formative 1', 'Formative 2', 'Model Exam', 'Lab Exam', 'Final Internal', 'Semester Exam'];
+    return Array.from(new Set([...list, ...defaults]));
+  }, [data?.filter_options, dynamicOptions]);
+
+  const batchList: string[] = data?.filter_options?.batches || dynamicOptions?.academicYears || dynamicOptions?.batches || [];
+  const semesterList: Array<number | string> = React.useMemo(() => {
+    if (activeTab === 'student' && cohortOptions?.semesters && cohortOptions.semesters.length > 0) {
+      return cohortOptions.semesters;
+    }
+    return data?.filter_options?.semesters || dynamicOptions?.semesters || [1, 2, 3, 4, 5, 6, 7, 8];
+  }, [activeTab, cohortOptions?.semesters, data?.filter_options?.semesters, dynamicOptions?.semesters]);
+
+  // Full (unsearched) subject list for the current context — used to validate
+  // the selected subject so typing in the subject search box never clears a
+  // still-valid selection.
+  const contextSubjects = React.useMemo(() => {
+    let list: Array<{ id: string; code: string; name: string; departments?: string[] }> = dynamicOptions?.subjects || [];
+    if (activeTab === 'student' && cohortOptions?.subjects && cohortOptions.subjects.length > 0) {
+      list = cohortOptions.subjects;
+    }
+    if (studentCurriculumData?.subjects && studentCurriculumData.subjects.length > 0) {
+      list = studentCurriculumData.subjects;
+    }
+    if (selectedDept && activeTab !== 'student') {
+      list = list.filter((s: any) => {
+        if (!s.departments || s.departments.length === 0) return true;
+        return s.departments.some((d: string) => d.toLowerCase() === selectedDept.toLowerCase());
+      });
+    }
+    return list;
+  }, [activeTab, cohortOptions?.subjects, dynamicOptions?.subjects, studentCurriculumData?.subjects, selectedDept]);
+
+  const availableSubjects = React.useMemo(() => {
+    let list = contextSubjects;
+    if (subjectSearchQuery.trim()) {
+      const q = subjectSearchQuery.toLowerCase();
+      list = list.filter((s: any) =>
+        (s.code && s.code.toLowerCase().includes(q)) ||
+        (s.name && s.name.toLowerCase().includes(q))
+      );
+    }
+    return list;
+  }, [contextSubjects, subjectSearchQuery]);
+
+  // Filter cascade: whenever a parent filter changes, clear any child selection
+  // that is no longer valid for the new context (Academic Year → Semester →
+  // Department → Section → Subject). Cohort options come from the REAL student
+  // cohort, so a previously valid section/subject may no longer exist.
+  useEffect(() => {
+    // Academic Year changed → Section and Subject become stale (the auto-pick
+    // effect above already recalculates Semester for the new year).
+    setSelectedSection('');
+    setSelectedSubject('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedYear]);
+
+  useEffect(() => {
+    // Semester changed → Section and Subject become stale.
+    setSelectedSection('');
+    setSelectedSubject('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSem]);
+
+  // Dependent Filter Reset: Reset Section if selectedSection is not valid for
+  // the recalculated cohort context (year/sem/dept).
+  useEffect(() => {
+    if (!selectedSection) return;
+    if (activeTab === 'student' && sectionOptions.length === 0) return;
+    if (sectionOptions.length > 0 && !sectionOptions.some(s => s.toLowerCase() === selectedSection.toLowerCase())) {
+      setSelectedSection('');
+    }
+  }, [selectedDept, sectionOptions, selectedSection, activeTab]);
+
+  // Dependent Filter Reset: Reset Subject if selectedSubject is not valid for
+  // the recalculated cohort context.
+  useEffect(() => {
+    if (!selectedSubject) return;
+    if (activeTab === 'student' && contextSubjects.length === 0) return;
+    if (contextSubjects.length > 0 && !contextSubjects.some(s =>
+      String(s.id) === String(selectedSubject) || s.code === selectedSubject
+    )) {
+      setSelectedSubject('');
+    }
+  }, [selectedDept, contextSubjects, selectedSubject, activeTab]);
+
+  // Reset all college-level filters back to default
   const handleResetFilters = () => {
     setSelectedYear('');
     setSelectedSem('');
-    setSelectedDept('');
-    setSelectedDeptName('');
+    if (!data?.user_context?.lock_department) {
+      setSelectedDept('');
+      setSelectedDeptName('');
+    }
     setSelectedSection('');
     setSelectedExamType('');
-    // Always return to the pure College-level view (KPI cards + Department-wise table),
-    // regardless of role — never back into a Department/Faculty drill-down.
-    setActiveTab('');
-    setActiveDashboardId('overall_overview');
+    setSelectedSubject('');
+    setSubjectSearchQuery('');
+    setStudentSearchQuery('');
+    // Return to the College-level overview and drop any open department view
+    // without reloading the browser page.
+    goCollegeOverview();
   };
 
   // Navigate to the College-level overview (used by breadcrumb + reset).
@@ -267,9 +432,58 @@ export default function AcademicPerformancePage() {
     setSelectedDept('');
     setSelectedDeptName('');
     setSelectedSection('');
+    setSelectedSubject('');
+    setDeptDrilldown(null);
+    setDrilldownData(null);
+    setDrilldownError('');
+    setFacultyDrill(null);
+    setFacultyDetail(null);
+    setFacultyDetailError('');
+    setSubjectDrill(null);
+    setSubjectDetail(null);
+    setSubjectError('');
+    setSubjectSectionFilter('');
+    setHierarchyLevel(HierarchyLevel.COLLEGE);
     setActiveTab('');
     setActiveDashboardId('overall_overview');
+    // Fall back to the college-level analytics dataset.
+    loadInitialData();
   };
+
+  const handleBreadcrumbNavigate = (index: number) => {
+    const target = breadcrumbPath[index];
+    if (target.type === 'COLLEGE') {
+      goCollegeOverview();
+    } else if (target.type === 'DEPARTMENT') {
+      closeFacultyDrilldown();
+      setBreadcrumbPath(prev => prev.slice(0, index + 1));
+    } else if (target.type === 'FACULTY') {
+      closeSubjectDrilldown();
+      setBreadcrumbPath(prev => prev.slice(0, index + 1));
+    }
+  };
+
+  // Reset drilldowns when core filters change to avoid stale data
+  useEffect(() => {
+    // Only reset if we are drilled down
+    if (hierarchyLevel !== HierarchyLevel.COLLEGE) {
+      goCollegeOverview();
+    }
+  }, [selectedYear, selectedSem, selectedSection, selectedExamType, selectedDept]);
+
+  const navigateUp = () => {
+    if (hierarchyLevel === HierarchyLevel.SUBJECT) {
+      closeSubjectDrilldown();
+    } else if (hierarchyLevel === HierarchyLevel.FACULTY) {
+      closeFacultyDrilldown();
+    } else if (hierarchyLevel === HierarchyLevel.DEPARTMENT) {
+      closeDepartmentDrilldown();
+    }
+    // Remove last breadcrumb level when navigating up
+    setBreadcrumbPath(prev => prev.slice(0, -1));
+  };
+
+
 
   // Load Faculty Wise when tab is switched
   useEffect(() => {
@@ -294,29 +508,30 @@ export default function AcademicPerformancePage() {
     }
   }, [activeTab, data?.user_context]);
 
-  // Load Range Analysis when tab is switched
-  useEffect(() => {
-    if (activeTab === 'range') {
-      fetchRangeAnalysis().then(res => setRangeData(res));
-    }
-  }, [activeTab]);
-
   // Load Student Curriculum Marks when tab is switched or filters change
+  const [studentCurriculumError, setStudentCurriculumError] = useState<string>('');
   useEffect(() => {
     if (activeTab === 'student') {
       setStudentCurriculumLoading(true);
+      setStudentCurriculumError('');
       fetchStudentCurriculumMarks({
         year: selectedYear,
         sem: selectedSem,
         dept: selectedDept,
-        exam: selectedExamType,
+        section: selectedSection,
+        exam: selectedExamType || 'All Assessments',
+        subject: selectedSubject,
         q: studentSearchQuery
       })
         .then(res => setStudentCurriculumData(res))
+        .catch(err => {
+          console.error(err);
+          setStudentCurriculumData(null);
+          setStudentCurriculumError('Unable to load student analysis data. Please try again.');
+        })
         .finally(() => setStudentCurriculumLoading(false));
     }
-  }, [activeTab, selectedYear, selectedSem, selectedDept, selectedExamType, studentSearchQuery]);
-
+  }, [activeTab, selectedYear, selectedSem, selectedDept, selectedSection, selectedExamType, selectedSubject, studentSearchQuery]);
 
   const [isStudentChartsModalOpen, setIsStudentChartsModalOpen] = useState(false);
 
@@ -324,7 +539,7 @@ export default function AcademicPerformancePage() {
     setStudentChartsLoading(true);
     setIsStudentChartsModalOpen(true);
     try {
-      const data = await fetchStudentAnalysisCharts(studentId, selectedExamType);
+      const data = await fetchStudentAnalysisCharts(studentId, selectedExamType || 'All Assessments', selectedSubject);
       setStudentChartsData(data);
     } catch (e) {
       console.error('Failed to load student charts', e);
@@ -350,10 +565,6 @@ export default function AcademicPerformancePage() {
     }
     if (dashId === 'advisor_deepdive') {
       setActiveTab('advisor');
-      return;
-    }
-    if (dashId === 'range_analysis') {
-      setActiveTab('range');
       return;
     }
 
@@ -401,6 +612,131 @@ export default function AcademicPerformancePage() {
     }
   };
 
+  // Open Department Drill Down — the department is added to the current filter
+  // context while preserving the selected Year / Semester / Assessment / Section.
+  const openDepartmentDrilldown = async (deptCode: string, deptName: string) => {
+    setHierarchyLevel(HierarchyLevel.DEPARTMENT);
+    // Set department context and initialize loading states
+    setDeptDrilldown({ code: deptCode, name: deptName });
+    setDrilldownLoading(true);
+    setDrilldownError('');
+    setFacultyRowsLoading(true);
+    setFacultyRows([]);
+    // Push breadcrumb for department level
+    setBreadcrumbPath(prev => [...prev, { id: deptCode, label: deptName, type: 'DEPARTMENT' }]);
+
+      try {
+        const [res, facRows] = await Promise.all([
+          fetchDepartmentAnalysis({
+            dept: deptCode,
+            year: selectedYear,
+            sem: selectedSem,
+            exam: selectedExamType || undefined,
+            section: selectedSection || undefined,
+          }),
+          fetchFacultyWiseAnalytics(deptCode),
+        ]);
+        setDrilldownData(res);
+        setFacultyRows(facRows || []);
+      } catch {
+        setDrilldownError('Unable to load department analysis. Please try again.');
+      } finally {
+        setDrilldownLoading(false);
+        setFacultyRowsLoading(false);
+      }
+  };
+
+  const closeDepartmentDrilldown = () => {
+    setHierarchyLevel(HierarchyLevel.COLLEGE);
+    setDeptDrilldown(null);
+    setDrilldownData(null);
+    setDrilldownError('');
+    setFacultyDrill(null);
+    setFacultyDetail(null);
+    setFacultyDetailError('');
+    setFacultyRows([]);
+    // Clearing the department also clears faculty/subject drill state.
+    setSubjectDrill(null);
+    setSubjectDetail(null);
+    setSubjectError('');
+    setSubjectSectionFilter('');
+  };
+
+  // Faculty drill-down: College → Department → Faculty (SPA state only)
+  const openFacultyDrilldown = async (facultyId: string, facultyName: string) => {
+    setHierarchyLevel(HierarchyLevel.FACULTY);
+    setFacultyDrill({ id: facultyId, name: facultyName });
+    setBreadcrumbPath(prev => [...prev, { id: facultyId, label: facultyName, type: 'FACULTY' }]);
+    setFacultyDetailLoading(true);
+    setFacultyDetailError('');
+    setFacultyDetail(null);
+    try {
+      const res = await fetchFacultyAnalysis({
+        faculty: facultyId,
+        dept: deptDrilldown?.code || selectedDept || undefined,
+        year: selectedYear || undefined,
+        sem: selectedSem || undefined,
+        section: selectedSection || undefined,
+        exam: selectedExamType || undefined,
+      });
+      setFacultyDetail(res);
+    } catch {
+      setFacultyDetailError('Unable to load faculty analysis. Please try again.');
+    } finally {
+      setFacultyDetailLoading(false);
+    }
+  };
+
+  const closeFacultyDrilldown = () => {
+    setHierarchyLevel(HierarchyLevel.DEPARTMENT);
+    setFacultyDrill(null);
+    setFacultyDetail(null);
+    setFacultyDetailError('');
+    // Going up from Faculty must clear lower-level subject state.
+    setSubjectDrill(null);
+    setSubjectDetail(null);
+    setSubjectError('');
+    setSubjectSectionFilter('');
+  };
+
+  // Subject drill-down: opens the DB-backed Subject Analysis within the
+  // department modal, preserving the current academic filter context.
+  const openSubjectDrilldown = async (subjectCode: string, subjectName: string) => {
+    setHierarchyLevel(HierarchyLevel.SUBJECT);
+    setSubjectDrill({ code: subjectCode, name: subjectName });
+    setBreadcrumbPath(prev => [...prev, { id: subjectCode, label: subjectName, type: 'SUBJECT' }]);
+    setSubjectLoading(true);
+    setSubjectError('');
+    setSubjectDetail(null);
+    setSubjectSectionFilter('');
+    try {
+      const res = await fetchSubjectAnalysis({
+        subject: subjectCode,
+        faculty: facultyDrill?.id,
+        dept: deptDrilldown?.code || selectedDept || undefined,
+        year: selectedYear || undefined,
+        sem: selectedSem || undefined,
+        section: selectedSection || undefined,
+        exam: selectedExamType || undefined,
+      });
+      setSubjectDetail(res);
+    } catch {
+      setSubjectError('Unable to load subject analysis. Please try again.');
+    } finally {
+      setSubjectLoading(false);
+    }
+  };
+
+  const closeSubjectDrilldown = () => {
+    setHierarchyLevel(HierarchyLevel.FACULTY);
+    setSubjectDrill(null);
+    setSubjectDetail(null);
+    setSubjectError('');
+    setSubjectSectionFilter('');
+  };
+
+
+
 
 
   const sortedDepts = [...(data?.dept_comparison || [])].sort((a, b) => b.pass_rate_pct - a.pass_rate_pct);
@@ -412,99 +748,70 @@ export default function AcademicPerformancePage() {
   const departmentOptions = comparisonResponse?.departments_list || [];
   const batchOptions = comparisonResponse?.batches_list || [];
 
-  return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 pb-16">
-      {/* Top Banner Header */}
-      <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white py-7 px-6 shadow-md">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-blue-500/20 backdrop-blur-md rounded-xl border border-blue-400/30">
-                <BarChart3 className="w-8 h-8 text-blue-300" />
+return (
+  <ErrorBoundary>
+    <div className="min-h-screen bg-[#f8fafc] text-slate-800 pb-16 font-sans">
+      {/* 🌟 Premium Hero Header */}
+      <div className="relative overflow-hidden bg-gradient-to-br from-indigo-950 via-[#1e1b4b] to-purple-900 text-white shadow-2xl">
+        {/* Dynamic Background Elements */}
+        <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none">
+          <div className="absolute -top-[20%] -right-[10%] w-[50%] h-[150%] rounded-full bg-gradient-to-l from-purple-500/20 to-transparent blur-[120px] animate-pulse"></div>
+          <div className="absolute -bottom-[20%] -left-[10%] w-[50%] h-[150%] rounded-full bg-gradient-to-r from-blue-500/20 to-transparent blur-[120px] opacity-70"></div>
+          <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '32px 32px' }}></div>
+        </div>
+
+        <div className="max-w-7xl mx-auto px-6 py-10 relative z-10">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+            
+            {/* Title Section */}
+            <div className="flex items-center gap-5 group">
+              <div className="p-3.5 bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 shadow-xl group-hover:scale-105 transition-transform duration-500">
+                <BarChart3 className="w-8 h-8 text-blue-300 drop-shadow-[0_0_8px_rgba(147,197,253,0.5)]" />
               </div>
               <div>
-                <div className="flex items-center gap-2">
-                  <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
+                <div className="flex items-center gap-3">
+                  <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-blue-100 to-purple-200 drop-shadow-sm">
                     Academic Performance & Analytics
                   </h1>
-                  <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
-                    Role-Based Scoped Boundary
+                  <span className="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-gradient-to-r from-emerald-400 to-teal-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)] border border-white/20">
+                    Live Role Boundary
                   </span>
                 </div>
-                <p className="text-slate-300 text-xs mt-1">
-                  Hierarchical real-time performance evaluation for Principal, HOD, Faculty, Class Advisors, and Students
+                <p className="text-indigo-200/80 text-sm mt-1.5 font-medium tracking-wide">
+                  Hierarchical real-time performance evaluation for Institutional Excellence
                 </p>
               </div>
             </div>
-          </div>
 
-          <div className="flex items-center gap-3">
-            <button
-              onClick={loadInitialData}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-sm font-medium backdrop-blur-md border border-white/20 transition-all shadow-sm"
-            >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh Analytics
-            </button>
+            {/* Actions */}
+            <div className="flex items-center gap-3">
+              <button
+                onClick={loadInitialData}
+                className="group relative inline-flex items-center gap-2 px-5 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-sm font-bold backdrop-blur-md border border-white/20 transition-all shadow-[0_4px_12px_rgba(0,0,0,0.1)] hover:shadow-[0_4px_16px_rgba(255,255,255,0.1)] overflow-hidden"
+              >
+                <div className="absolute inset-0 w-0 bg-gradient-to-r from-blue-500/30 to-purple-500/30 transition-all duration-300 ease-out group-hover:w-full"></div>
+                <RefreshCw className={`w-4 h-4 relative z-10 ${loading ? 'animate-spin text-blue-300' : 'text-indigo-200 group-hover:rotate-180 transition-transform duration-500'}`} />
+                <span className="relative z-10">Refresh Analytics</span>
+              </button>
+            </div>
           </div>
         </div>
-      </div>
-      {/* Interactive Hierarchy Breadcrumb Navigation */}
-      <div className="bg-slate-900/90 text-slate-300 py-2.5 px-6 border-t border-blue-500/20 text-xs font-semibold">
-        <div className="max-w-7xl mx-auto flex items-center gap-2 overflow-x-auto">
-                    <button 
-            onClick={goCollegeOverview}
-            className="hover:text-white transition-colors flex items-center gap-1.5 text-blue-400 font-bold"
-          >
-            <Building2 className="w-3.5 h-3.5" /> College
-          </button>
-          {selectedDept && (
-            <>
-              <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
-              <button 
-                onClick={() => {
-                  setSelectedSection('');
-                  setActiveTab('hod');
-                  setActiveDashboardId('overall_overview');
-                }}
-                className={`hover:text-white transition-colors ${activeTab === 'hod' ? 'text-white font-bold' : 'text-slate-300'}`}
+
+        {/* 🌟 Interactive Hierarchy Breadcrumb Navigation */}
+        <div className="bg-black/20 backdrop-blur-md border-t border-white/10 shadow-inner">
+          <div className="max-w-7xl mx-auto flex items-center gap-4 overflow-x-auto px-6 py-3">
+            {hierarchyLevel !== HierarchyLevel.COLLEGE && (
+              <button
+                onClick={navigateUp}
+                className="hover:text-white transition-all flex items-center gap-1.5 text-indigo-300 font-bold text-xs bg-white/5 hover:bg-white/10 px-3 py-1.5 rounded-lg border border-transparent hover:border-white/10"
               >
-                {selectedDeptName || selectedDept}
+                <ArrowRight className="w-3.5 h-3.5 rotate-180" /> Back
               </button>
-            </>
-          )}
-          {(activeTab === 'faculty' || activeTab === 'hod') && (
-            <>
-              <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
-              <span className="text-white font-bold">Faculty Analysis</span>
-            </>
-          )}
-          {activeTab === 'advisor' && (
-            <>
-              <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
-              <span className="text-white font-bold">Advisor / Section Deep-Dive</span>
-            </>
-          )}
-          {activeTab === 'student' && (
-            <>
-              <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
-              <span className="text-white font-bold">Student Analysis</span>
-            </>
-          )}
-          {activeTab === 'range' && (
-            <>
-              <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
-              <span className="text-white font-bold">Performance Range Analysis</span>
-            </>
-          )}
-          {activeTab === 'custom_dash' && (
-            <>
-              <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
-              <span className="text-white font-bold">
-                {publishedDashboards.find(d => d.id === activeDashboardId)?.name || 'Custom Dashboard'}
-              </span>
-            </>
-          )}
+            )}
+            <div className="text-white/90">
+              <BreadcrumbNavigation path={breadcrumbPath} onNavigate={handleBreadcrumbNavigate} />
+            </div>
+          </div>
         </div>
       </div>
 
@@ -517,13 +824,13 @@ export default function AcademicPerformancePage() {
               <span>Filters:</span>
             </div>
 
-            {/* Batch Filter */}
+            {/* Academic Year Filter */}
             <select
               value={selectedYear}
               onChange={(e) => setSelectedYear(e.target.value)}
               className="px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
             >
-              <option value="">All Batches</option>
+              <option value="">All Academic Years</option>
               {(batchList || []).map((yr: string) => (
                 <option key={yr} value={yr}>{yr}</option>
               ))}
@@ -551,6 +858,7 @@ export default function AcademicPerformancePage() {
                 onChange={(e) => {
                   setSelectedDept(e.target.value);
                   setSelectedSection('');
+                  setSelectedSubject('');
                 }}
                 className={`px-3 py-1.5 text-xs font-semibold border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none ${
                   data?.user_context?.lock_department
@@ -561,7 +869,7 @@ export default function AcademicPerformancePage() {
                 <option value="">All Departments</option>
                 {(dynamicOptions?.departments || []).map((d: any) => (
                   <option key={d.code} value={d.code}>
-                    {d.name}
+                    {d.label || d.name}
                   </option>
                 ))}
               </select>
@@ -584,7 +892,7 @@ export default function AcademicPerformancePage() {
               ))}
             </select>
 
-            {/* Exam Type Filter */}
+            {/* Assessment Filter */}
             <select
               value={selectedExamType}
               onChange={(e) => setSelectedExamType(e.target.value)}
@@ -598,12 +906,36 @@ export default function AcademicPerformancePage() {
               ))}
             </select>
 
+            {/* Subject Filter & Search */}
+            <div className="flex items-center gap-1.5">
+              <select
+                value={selectedSubject}
+                onChange={(e) => setSelectedSubject(e.target.value)}
+                className="px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none max-w-[200px] truncate"
+              >
+                <option value="">All Subjects</option>
+                {availableSubjects.map((sub: any) => (
+                  <option key={sub.id || sub.code} value={sub.code || sub.id}>
+                    {sub.code}{sub.name && sub.name !== sub.code ? ` - ${sub.name}` : ''}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="text"
+                placeholder="Search subject..."
+                value={subjectSearchQuery}
+                onChange={(e) => setSubjectSearchQuery(e.target.value)}
+                className="px-2.5 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none w-32"
+                title="Search subject by code or name"
+              />
+            </div>
+
             {/* Reset Filters */}
             <button
               type="button"
               onClick={handleResetFilters}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 hover:bg-rose-100 rounded-lg transition-colors ml-1"
-              title="Clear all filters and return to the College overview"
+              title="Clear all filters and return to default state"
             >
               <RefreshCw className="w-3.5 h-3.5" /> Reset Filters
             </button>
@@ -661,17 +993,6 @@ export default function AcademicPerformancePage() {
               )}
               <button
                 type="button"
-                onClick={() => handleSelectDashboard('range_analysis')}
-                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                  activeDashboardId === 'range_analysis'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
-                }`}
-              >
-                Performance Range Analysis
-              </button>
-              <button
-                type="button"
                 onClick={() => handleSelectDashboard('comparison_view')}
                 className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
                   activeDashboardId === 'comparison_view'
@@ -681,7 +1002,9 @@ export default function AcademicPerformancePage() {
               >
                 Comparison View
               </button>
-              {publishedDashboards.map(d => (
+              {publishedDashboards
+                .filter(d => !REMOVED_DASHBOARD_NAMES.has(d.name))
+                .map(d => (
                 <button
                   key={d.id}
                   type="button"
@@ -709,86 +1032,95 @@ export default function AcademicPerformancePage() {
         )}
                 {/* Metric Cards Row - College Level (Exact 5 Primary KPI Cards) */}
         {(activeTab === '' || activeTab === 'principal') && activeDashboardId === 'overall_overview' && !loading && data?.metrics && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 animate-in fade-in-50">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5 mb-8 relative z-10 animate-in slide-in-from-bottom-4 duration-700 ease-out">
             {/* 1. Total No. of Students */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
-              <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total No. of Students</p>
-                <h3 className="text-2xl font-black text-slate-900 mt-1">
-                  {data?.metrics?.total_students !== undefined ? data.metrics.total_students.toLocaleString() : '—'}
-                </h3>
-                <p className="text-xs text-emerald-600 font-semibold mt-1 flex items-center gap-1">
-                  <TrendingUp className="w-3.5 h-3.5" /> Live Enrollment
-                </p>
-              </div>
-              <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 border border-blue-100">
-                <Users className="w-6 h-6" />
+            <div className="group bg-white rounded-2xl p-5 border border-slate-200/60 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 overflow-hidden relative">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 rounded-full blur-2xl group-hover:bg-blue-500/10 transition-colors"></div>
+              <div className="relative z-10 flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Total No. of Students</p>
+                  <h3 className="text-3xl font-black text-slate-800 mt-1.5 tracking-tight group-hover:text-blue-600 transition-colors">{data?.metrics?.total_students || 0}</h3>
+                  <p className="text-xs text-blue-600/80 font-semibold mt-1 flex items-center gap-1">
+                    <Users className="w-3.5 h-3.5" /> Enrolled Cohort
+                  </p>
+                </div>
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-50 to-blue-100/50 flex items-center justify-center text-blue-600 border border-blue-100 shadow-inner group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300">
+                  <Users className="w-7 h-7 drop-shadow-sm" />
+                </div>
               </div>
             </div>
 
             {/* 2. Overall Pass Percentage */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
-              <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Overall Pass Percentage</p>
-                <h3 className="text-2xl font-black text-slate-900 mt-1">
-                  {data?.metrics?.overall_pass_pct !== undefined ? `${data.metrics.overall_pass_pct}%` : '—'}
-                </h3>
-                <p className="text-xs text-emerald-600 font-semibold mt-1 flex items-center gap-1">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> Pass Rate
-                </p>
-              </div>
-              <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 border border-emerald-100">
-                <Award className="w-6 h-6" />
+            <div className="group bg-white rounded-2xl p-5 border border-slate-200/60 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 overflow-hidden relative">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full blur-2xl group-hover:bg-emerald-500/10 transition-colors"></div>
+              <div className="relative z-10 flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Overall Pass Percentage</p>
+                  <h3 className="text-3xl font-black text-slate-800 mt-1.5 tracking-tight group-hover:text-emerald-600 transition-colors">{data?.metrics?.overall_pass_pct || 0}<span className="text-lg text-slate-400">%</span></h3>
+                  <p className="text-xs text-emerald-600/80 font-semibold mt-1 flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Institutional Average
+                  </p>
+                </div>
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-50 to-emerald-100/50 flex items-center justify-center text-emerald-600 border border-emerald-100 shadow-inner group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300">
+                  <CheckCircle2 className="w-7 h-7 drop-shadow-sm" />
+                </div>
               </div>
             </div>
 
             {/* 3. Overall Average Marks */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
-              <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Overall Average Marks</p>
-                <h3 className="text-2xl font-black text-slate-900 mt-1">
-                  {data?.metrics?.overall_marks_pct !== undefined ? `${data.metrics.overall_marks_pct}%` : '—'}
-                </h3>
-                <p className="text-xs text-indigo-600 font-semibold mt-1 flex items-center gap-1">
-                  <GraduationCap className="w-3.5 h-3.5" /> Institutional Avg
-                </p>
-              </div>
-              <div className="w-12 h-12 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 border border-indigo-100">
-                <GraduationCap className="w-6 h-6" />
+            <div className="group bg-white rounded-2xl p-5 border border-slate-200/60 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 overflow-hidden relative">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-purple-500/5 rounded-full blur-2xl group-hover:bg-purple-500/10 transition-colors"></div>
+              <div className="relative z-10 flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Overall Average Marks</p>
+                  <h3 className="text-3xl font-black text-slate-800 mt-1.5 tracking-tight group-hover:text-purple-600 transition-colors">{data?.metrics?.overall_marks_pct || 0}<span className="text-lg text-slate-400">%</span></h3>
+                  <p className="text-xs text-purple-600/80 font-semibold mt-1 flex items-center gap-1">
+                    <GraduationCap className="w-3.5 h-3.5" /> Academic Mean
+                  </p>
+                </div>
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-purple-50 to-purple-100/50 flex items-center justify-center text-purple-600 border border-purple-100 shadow-inner group-hover:scale-110 group-hover:-rotate-3 transition-transform duration-300">
+                  <GraduationCap className="w-7 h-7 drop-shadow-sm" />
+                </div>
               </div>
             </div>
 
             {/* 4. Overall Attendance */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
-              <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Overall Attendance</p>
-                <h3 className="text-2xl font-black text-slate-900 mt-1">
-                  {data?.metrics?.overall_attendance != null ? `${data.metrics.overall_attendance}%` : '—'}
-                </h3>
-                <p className="text-xs text-blue-600 font-semibold mt-1 flex items-center gap-1">
-                  <Clock className="w-3.5 h-3.5" /> Present / OD Rate
-                </p>
-              </div>
-              <div className="w-12 h-12 rounded-xl bg-sky-50 flex items-center justify-center text-sky-600 border border-sky-100">
-                <Clock className="w-6 h-6" />
+            <div className="group bg-white rounded-2xl p-5 border border-slate-200/60 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 overflow-hidden relative">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/5 rounded-full blur-2xl group-hover:bg-amber-500/10 transition-colors"></div>
+              <div className="relative z-10 flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Overall Attendance</p>
+                  <h3 className="text-3xl font-black text-slate-800 mt-1.5 tracking-tight group-hover:text-amber-500 transition-colors">
+                    {data?.metrics?.overall_attendance !== null && data?.metrics?.overall_attendance !== undefined ? data.metrics.overall_attendance : '—'}<span className="text-lg text-slate-400">%</span>
+                  </h3>
+                  <p className="text-xs text-amber-600/80 font-semibold mt-1 flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5" /> Present / OD Rate
+                  </p>
+                </div>
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-50 to-amber-100/50 flex items-center justify-center text-amber-600 border border-amber-100 shadow-inner group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300">
+                  <Clock className="w-7 h-7 drop-shadow-sm" />
+                </div>
               </div>
             </div>
 
             {/* 5. Overall Pass / Fail Count */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
-              <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Overall Pass / Fail Count</p>
-                <h3 className="text-xl font-black text-slate-900 mt-1">
-                  <span className="text-emerald-600">{data?.metrics?.overall_pass_count !== undefined ? data.metrics.overall_pass_count : '—'}</span>
-                  <span className="text-slate-400 font-normal mx-1">/</span>
-                  <span className="text-rose-600">{data?.metrics?.overall_fail_count !== undefined ? data.metrics.overall_fail_count : '—'}</span>
-                </h3>
-                <p className="text-xs text-slate-500 font-semibold mt-1 flex items-center gap-1">
-                  Unique Students
-                </p>
-              </div>
-              <div className="w-12 h-12 rounded-xl bg-purple-50 flex items-center justify-center text-purple-600 border border-purple-100">
-                <Users className="w-6 h-6" />
+            <div className="group bg-white rounded-2xl p-5 border border-slate-200/60 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 overflow-hidden relative">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 rounded-full blur-2xl group-hover:bg-indigo-500/10 transition-colors"></div>
+              <div className="relative z-10 flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Pass / Fail Count</p>
+                  <h3 className="text-3xl font-black text-slate-800 mt-1.5 tracking-tight">
+                    <span className="text-emerald-500 group-hover:text-emerald-600 transition-colors">{data?.metrics?.overall_pass_count !== undefined ? data.metrics.overall_pass_count : '—'}</span>
+                    <span className="text-slate-300 font-normal mx-1.5 text-xl">/</span>
+                    <span className="text-rose-500 group-hover:text-rose-600 transition-colors">{data?.metrics?.overall_fail_count !== undefined ? data.metrics.overall_fail_count : '—'}</span>
+                  </h3>
+                  <p className="text-xs text-indigo-500/80 font-semibold mt-1 flex items-center gap-1">
+                    <TrendingUp className="w-3.5 h-3.5" /> Distribution
+                  </p>
+                </div>
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-50 to-indigo-100/50 flex items-center justify-center text-indigo-600 border border-indigo-100 shadow-inner group-hover:scale-110 group-hover:-rotate-3 transition-transform duration-300">
+                  <Award className="w-7 h-7 drop-shadow-sm" />
+                </div>
               </div>
             </div>
           </div>
@@ -902,11 +1234,7 @@ export default function AcademicPerformancePage() {
                       <tr 
                         key={d.dept_code} 
                                                 onClick={() => {
-                          setSelectedDept(d.dept_code);
-                          setSelectedDeptName(d.dept_name);
-                          setSelectedSection('');
-                          setActiveTab('hod');
-                          setActiveDashboardId('overall_overview');
+                          openDepartmentDrilldown(d.dept_code, d.dept_name);
                         }}
                         className="hover:bg-blue-50/50 cursor-pointer transition-colors group"
                       >
@@ -941,91 +1269,65 @@ export default function AcademicPerformancePage() {
         )}
 
                         
-        {/* View Mode: Faculty-Wise (Handled Subjects & Mentees) */}
+        {/* View Mode: Faculty-Wise comparison table (drills into Faculty Analysis) */}
         {(activeTab === 'faculty' || activeTab === 'hod') && (
           <div className="space-y-6 animate-in fade-in-50">
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
               <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-6">
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">Faculty Academic Portfolio & Assigned Mentees</h3>
-                  <p className="text-xs text-slate-500">Personally handled subjects, pass rate performance, and assigned student mentees</p>
+                  <h3 className="text-base font-bold text-slate-900">Faculty Academic Performance</h3>
+                  <p className="text-xs text-slate-500">Click a row to open detailed faculty analysis</p>
                 </div>
               </div>
 
               {facultyLoading ? (
                 <div className="py-12 text-center">
                   <RefreshCw className="w-6 h-6 text-blue-600 animate-spin mx-auto mb-2" />
-                  <p className="text-xs font-bold text-slate-500">Loading faculty academic portfolio...</p>
+                  <p className="text-xs font-bold text-slate-500">Loading faculty data...</p>
+                </div>
+              ) : faculties.length === 0 ? (
+                <div className="py-12 text-center">
+                  <p className="text-sm text-slate-400">No faculty teaching data available for the selected filters.</p>
                 </div>
               ) : (
-                <div className="space-y-6">
-                  {faculties.map((fac) => (
-                    <div key={fac.faculty_id} className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-200 pb-3">
-                        <div>
-                          <h4 className="text-sm font-black text-slate-900">{fac.name}</h4>
-                          <p className="text-xs text-slate-500">{fac.designation} • Dept: {fac.department} • ID: {fac.staff_id}</p>
-                        </div>
-                        {fac.class_advisor && (
-                          <span className="px-3 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full text-xs font-bold flex items-center gap-1.5">
-                            <UserCheck className="w-3.5 h-3.5" /> Class Advisor: Sec {fac.class_advisor.section_name} ({fac.class_advisor.department})
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Handled Subjects */}
-                      <div>
-                        <h5 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Handled Courses (Click to open Subject Analysis)</h5>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                          {fac.handled_subjects.map((sub) => (
-                            <div 
-                              key={sub.id} 
-                              onClick={() => {
-                                setSelectedRangeSubject(sub.subject_code);
-                                setActiveTab('range');
-                              }}
-                              className="p-3 bg-white rounded-xl border border-slate-200 shadow-xs hover:border-blue-500 hover:shadow-md cursor-pointer transition-all group"
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider">
+                      <tr>
+                        <th className="py-3 px-4">Faculty</th>
+                        <th className="py-3 px-4 text-center">Subjects</th>
+                        <th className="py-3 px-4 text-center">Students</th>
+                        <th className="py-3 px-4 text-center">Avg Marks %</th>
+                        <th className="py-3 px-4 text-center">Pass %</th>
+                        <th className="py-3 px-4 text-center">Attendance %</th>
+                        <th className="py-3 px-4 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {faculties.map((fac) => (
+                        <tr key={fac.id} className="hover:bg-slate-50/60">
+                          <td className="py-3 px-4">
+                            <div className="font-bold text-slate-900">{fac.name}</div>
+                            <div className="text-[11px] text-slate-400">{fac.designation}{fac.department ? ` • ${fac.department}` : ''}</div>
+                          </td>
+                          <td className="py-3 px-4 text-center text-slate-700">{fac.subjects_count}</td>
+                          <td className="py-3 px-4 text-center text-slate-700">{fac.students_handled}</td>
+                          <td className="py-3 px-4 text-center text-slate-700">{fac.avg_marks_pct != null ? `${fac.avg_marks_pct}%` : '—'}</td>
+                          <td className="py-3 px-4 text-center text-slate-700">{fac.pass_pct != null ? `${fac.pass_pct}%` : '—'}</td>
+                          <td className="py-3 px-4 text-center text-slate-700">{fac.attendance_pct != null ? `${fac.attendance_pct}%` : '—'}</td>
+                          <td className="py-3 px-4 text-right">
+                            <button
+                              type="button"
+                              onClick={() => openFacultyDrilldown(fac.id, fac.name)}
+                              className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-700"
                             >
-                              <span className="text-xs font-bold text-slate-900 block truncate group-hover:text-blue-600">{sub.subject_name}</span>
-                              <p className="text-[11px] text-slate-500">{sub.subject_code} • Section {sub.section}</p>
-                              <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100 text-xs">
-                                <span className="font-semibold text-emerald-600">Pass: {sub.pass_percentage}%</span>
-                                <span className="font-semibold text-blue-600">Avg: {sub.avg_score}%</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Assigned Mentees */}
-                      <div>
-                        <h5 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Assigned Mentees (Holistic Semester Performance)</h5>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                          {fac.mentees.map((m) => (
-                            <div key={m.student_id} className="p-3 bg-white rounded-xl border border-slate-200 shadow-xs flex items-center justify-between">
-                              <div>
-                                <span className="text-xs font-bold text-slate-900 block">{m.name}</span>
-                                <p className="text-[11px] text-slate-400">{m.reg_no}</p>
-                                <span className={`text-[10px] font-bold mt-1 inline-block px-2 py-0.5 rounded-full ${
-                                  m.performance_level === 'Above 58%' ? 'bg-emerald-50 text-emerald-700' :
-                                  m.performance_level === 'Equal to 58%' ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'
-                                }`}>
-                                  {m.performance_level}
-                                </span>
-                              </div>
-                              <button
-                                onClick={() => handleOpenReport(m.student_id)}
-                                className="p-1.5 bg-slate-50 hover:bg-blue-50 text-blue-600 rounded-lg"
-                                title="View Mentee Progress"
-                              >
-                                <ChevronRight className="w-4 h-4" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                              Drill Down <ChevronRight className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
@@ -1290,32 +1592,17 @@ export default function AcademicPerformancePage() {
           </div>
         )}
 
-        {/* View Mode: Range Analysis */}
-        {activeTab === 'range' && (
-          <div className="space-y-6 animate-in fade-in-50">
-            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-              <h3 className="text-base font-bold text-slate-900 mb-4">Academic Score Range Distribution</h3>
-              <div className="h-72 w-full min-w-0">
-                <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-                  <BarChart data={rangeData?.range_distribution || []}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748B' }} />
-                    <YAxis tick={{ fontSize: 11, fill: '#64748B' }} />
-                    <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
-                    <Bar dataKey="student_count" name="Student Count" fill="#6366F1" radius={[6, 6, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* View Mode: Individual Student Analysis */}
         {activeTab === 'student' && (
           <div className="space-y-6 animate-in fade-in-50">
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-4">
-                <h3 className="text-base font-bold text-slate-900">Student Subject Marks & Curriculum Analysis</h3>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Individual Student Analysis</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Showing performance records matching selected context & assessment.
+                  </p>
+                </div>
                 <div className="relative max-w-sm w-full">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                   <input
@@ -1331,6 +1618,12 @@ export default function AcademicPerformancePage() {
               {studentCurriculumLoading ? (
                 <div className="flex items-center justify-center h-40">
                   <div className="animate-spin rounded-full h-8 w-8 border-2 border-indigo-500 border-t-transparent"></div>
+                  <span className="ml-3 text-sm font-semibold text-slate-500">Loading student records...</span>
+                </div>
+              ) : studentCurriculumError ? (
+                <div className="py-10 text-center">
+                  <AlertTriangle className="w-8 h-8 text-amber-500 mx-auto mb-2" />
+                  <p className="text-sm font-semibold text-slate-600">{studentCurriculumError}</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -1340,6 +1633,8 @@ export default function AcademicPerformancePage() {
                         <th className="px-4 py-3 rounded-tl-xl whitespace-nowrap">Reg No</th>
                         <th className="px-4 py-3 whitespace-nowrap">Name</th>
                         <th className="px-4 py-3 whitespace-nowrap">Dept / Sec</th>
+                        <th className="px-4 py-3 whitespace-nowrap">Semester</th>
+                        <th className="px-4 py-3 whitespace-nowrap">Academic Year</th>
                         {studentCurriculumData?.subjects.map(sub => (
                           <th key={sub.id} className="px-4 py-3 whitespace-nowrap text-center" title={sub.name}>
                             {sub.code}
@@ -1349,18 +1644,20 @@ export default function AcademicPerformancePage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {studentCurriculumData?.students.length === 0 ? (
+                      {!studentCurriculumData?.students || studentCurriculumData.students.length === 0 ? (
                         <tr>
-                          <td colSpan={(studentCurriculumData?.subjects.length || 0) + 4} className="px-4 py-8 text-center text-slate-500">
-                            No students found for this selection.
+                          <td colSpan={(studentCurriculumData?.subjects.length || 0) + 6} className="px-4 py-8 text-center text-slate-500">
+                            No students found for the selected filters.
                           </td>
                         </tr>
                       ) : (
-                        studentCurriculumData?.students.map((student) => (
+                        studentCurriculumData.students.map((student) => (
                           <tr key={student.student_id} className="hover:bg-slate-50/50 transition-colors">
                             <td className="px-4 py-3 font-medium text-slate-900">{student.reg_no}</td>
                             <td className="px-4 py-3 text-slate-600">{student.name}</td>
                             <td className="px-4 py-3 text-slate-600">{student.department} / {student.section}</td>
+                            <td className="px-4 py-3 text-slate-600">{student.semester || selectedSem || '1'}</td>
+                            <td className="px-4 py-3 text-slate-600">{student.academic_year || selectedYear || '-'}</td>
                             {studentCurriculumData?.subjects.map(sub => {
                               const mark = student.marks[sub.id];
                               const hasMark = mark !== undefined && mark !== null;
@@ -1388,7 +1685,394 @@ export default function AcademicPerformancePage() {
             </div>
           </div>
         )}
+
       </main>
+
+      {deptDrilldown && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-5xl w-full max-h-[90vh] flex flex-col animate-in zoom-in-95">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+              <div>
+                <div className="flex items-center gap-2 text-blue-600 font-bold text-xs uppercase tracking-wider">
+                  <Building2 className="w-4 h-4" /> {facultyDrill ? 'Faculty Analysis' : 'Department Analysis'}
+                </div>
+                {facultyDrill ? (
+                  <h3 className="text-lg font-bold text-slate-900 mt-0.5">
+                    <button
+                      type="button"
+                      onClick={closeDepartmentDrilldown}
+                      className="text-blue-600 hover:text-blue-700 hover:underline"
+                    >
+                      College
+                    </button>
+                    <span className="text-slate-400 mx-1.5">→</span>
+                    <button
+                      type="button"
+                      onClick={subjectDrill ? closeSubjectDrilldown : closeFacultyDrilldown}
+                      className="text-blue-600 hover:text-blue-700 hover:underline"
+                    >
+                      {deptDrilldown.name}
+                    </button>
+                    <span className="text-slate-400 mx-1.5">→</span>
+                    {subjectDrill ? (
+                      <button
+                        type="button"
+                        onClick={closeSubjectDrilldown}
+                        className="text-blue-600 hover:text-blue-700 hover:underline"
+                      >
+                        {facultyDrill.name}
+                      </button>
+                    ) : (
+                      facultyDrill.name
+                    )}
+                    {subjectDrill && (
+                      <>
+                        <span className="text-slate-400 mx-1.5">→</span>
+                        <span className="text-slate-900">{subjectDrill.code}</span>
+                      </>
+                    )}
+                  </h3>
+                ) : (
+                  <h3 className="text-lg font-bold text-slate-900 mt-0.5">{deptDrilldown.name} ({deptDrilldown.code})</h3>
+                )}
+                <p className="text-xs text-slate-500">
+                  Year: {selectedYear || 'All'} • Semester: {selectedSem || 'All'} • Assessment: {selectedExamType || 'All Assessments'} • Section: {selectedSection || 'All'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {facultyDrill && subjectDrill && (
+                  <button
+                    type="button"
+                    onClick={closeSubjectDrilldown}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-xl"
+                  >
+                    <ArrowRight className="w-4 h-4 rotate-180" /> Back to {facultyDrill.name}
+                  </button>
+                )}
+                {facultyDrill && !subjectDrill && (
+                  <button
+                    type="button"
+                    onClick={closeFacultyDrilldown}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-xl"
+                  >
+                    <ArrowRight className="w-4 h-4 rotate-180" /> Back to {deptDrilldown.code}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={closeDepartmentDrilldown}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl"
+                >
+                  <ArrowRight className="w-4 h-4 rotate-180" /> Back to Overall
+                </button>
+                <button type="button" onClick={closeDepartmentDrilldown} className="p-2 text-slate-400 hover:text-slate-700 rounded-xl hover:bg-slate-100">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 overflow-y-auto space-y-6" style={{ maxHeight: 'calc(100vh - 220px)' }}>
+              {facultyDrill && subjectDrill && (
+                <SubjectWiseAnalysis
+                  data={subjectDetail}
+                  loading={subjectLoading}
+                  error={subjectError}
+                  sectionFilter={subjectSectionFilter}
+                  onSectionClick={setSubjectSectionFilter}
+                  onViewStudent={handleOpenReport}
+                />
+              )}
+              {facultyDrill && !subjectDrill && (
+                facultyDetailLoading ? (
+                  <div className="py-16 text-center">
+                    <RefreshCw className="w-7 h-7 text-blue-600 animate-spin mx-auto mb-3" />
+                    <p className="text-sm font-bold text-slate-500">Loading faculty analysis...</p>
+                  </div>
+                ) : facultyDetailError ? (
+                  <div className="py-16 text-center text-rose-600 font-bold text-sm">{facultyDetailError}</div>
+                ) : !facultyDetail ? (
+                  <div className="py-16 text-center text-slate-500 text-sm">No faculty data found for the selected filters.</div>
+                ) : (
+                  <>
+                    {/* Faculty KPI Cards */}
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                      <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
+                        <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Subjects</p>
+                        <p className="text-2xl font-black text-slate-900 mt-1">{facultyDetail.metrics.subjects}</p>
+                      </div>
+                      <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
+                        <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Students</p>
+                        <p className="text-2xl font-black text-slate-900 mt-1">{facultyDetail.metrics.students}</p>
+                      </div>
+                      <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
+                        <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Avg Marks %</p>
+                        <p className="text-2xl font-black text-slate-900 mt-1">{facultyDetail.metrics.average_marks_pct != null ? `${facultyDetail.metrics.average_marks_pct}%` : '—'}</p>
+                      </div>
+                      <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
+                        <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Pass %</p>
+                        <p className="text-2xl font-black text-emerald-700 mt-1">{facultyDetail.metrics.pass_pct != null ? `${facultyDetail.metrics.pass_pct}%` : '—'}</p>
+                      </div>
+                      <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
+                        <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Attendance %</p>
+                        <p className="text-2xl font-black text-slate-900 mt-1">{facultyDetail.metrics.attendance_pct != null ? `${facultyDetail.metrics.attendance_pct}%` : '—'}</p>
+                      </div>
+                      <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
+                        <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Pass / Fail</p>
+                        <p className="text-2xl font-black text-slate-900 mt-1">{facultyDetail.metrics.pass_count}<span className="text-rose-500 text-lg"> / {facultyDetail.metrics.fail_count}</span></p>
+                      </div>
+                    </div>
+
+                    {/* Faculty Subject-wise Performance Table */}
+                    <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+                      <div className="px-5 py-4 border-b border-slate-100">
+                        <h4 className="text-sm font-bold text-slate-900">Subjects Handled by {facultyDetail.faculty.name}</h4>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider">
+                            <tr>
+                              <th className="py-3 px-4">Subject Code</th>
+                              <th className="py-3 px-4">Subject Name</th>
+                              <th className="py-3 px-4">Sections</th>
+                              <th className="py-3 px-4 text-center">Students</th>
+                              <th className="py-3 px-4 text-center">Avg Marks %</th>
+                              <th className="py-3 px-4 text-center">Pass %</th>
+                              <th className="py-3 px-4 text-center">Attendance %</th>
+                              <th className="py-3 px-4 text-center">Records</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {facultyDetail.subjects.length === 0 ? (
+                              <tr><td colSpan={8} className="py-6 text-center text-slate-400">No subjects found for this faculty.</td></tr>
+                            ) : (
+                              facultyDetail.subjects.map((sub) => (
+                                <tr
+                                  key={sub.subject_code}
+                                  onClick={() => openSubjectDrilldown(sub.subject_code, sub.subject_name)}
+                                  className="hover:bg-blue-50/60 cursor-pointer transition-colors"
+                                >
+                                  <td className="py-3 px-4 font-bold text-slate-900">{sub.subject_code}</td>
+                                  <td className="py-3 px-4 text-slate-700">{sub.subject_name}</td>
+                                  <td className="py-3 px-4 text-slate-700">{sub.sections?.join(', ') || '—'}</td>
+                                  <td className="py-3 px-4 text-center text-slate-700">{sub.student_count != null ? sub.student_count : '—'}</td>
+                                  <td className="py-3 px-4 text-center text-slate-700">{sub.avg_marks_pct != null ? `${sub.avg_marks_pct}%` : '—'}</td>
+                                  <td className="py-3 px-4 text-center text-slate-700">{sub.pass_pct != null ? `${sub.pass_pct}%` : '—'}</td>
+                                  <td className="py-3 px-4 text-center text-slate-700">{sub.attendance_pct != null ? `${sub.attendance_pct}%` : '—'}</td>
+                                  <td className="py-3 px-4 text-center text-slate-700">{sub.total_records}</td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                    <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+                      <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+                        <h4 className="text-sm font-bold text-slate-900">Students Taught by {facultyDetail.faculty.name}</h4>
+                        <span className="text-[11px] font-bold text-slate-400">{facultyDetail.students.length} students</span>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider">
+                            <tr>
+                              <th className="py-3 px-4">Register No</th>
+                              <th className="py-3 px-4">Student Name</th>
+                              <th className="py-3 px-4 text-center">Section</th>
+                              <th className="py-3 px-4 text-center">Subjects</th>
+                              <th className="py-3 px-4 text-center">Avg Marks %</th>
+                              <th className="py-3 px-4 text-center">Result</th>
+                              <th className="py-3 px-4 text-right">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {facultyDetail.students.length === 0 ? (
+                              <tr><td colSpan={7} className="py-6 text-center text-slate-400">No students found for this faculty under the selected filters.</td></tr>
+                            ) : (
+                              facultyDetail.students.map((st) => (
+                                <tr key={st.student_id} className="hover:bg-slate-50/60">
+                                  <td className="py-3 px-4 font-bold text-slate-900">{st.reg_no}</td>
+                                  <td className="py-3 px-4 text-slate-700">{st.name}</td>
+                                  <td className="py-3 px-4 text-center text-slate-700">{st.section}</td>
+                                  <td className="py-3 px-4 text-slate-700">{st.subjects?.join(', ') || '—'}</td>
+                                  <td className="py-3 px-4 text-center text-slate-700">
+                                    {st.avg_marks_pct != null ? `${st.avg_marks_pct}%` : '—'}
+                                  </td>
+                                  <td className="py-3 px-4 text-center">
+                                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${st.result === 'Pass' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-600'}`}>{st.result || '—'}</span>
+                                  </td>
+                                  <td className="py-3 px-4 text-right">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenReport(st.student_id)}
+                                      className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-700"
+                                    >
+                                      View Analysis <ChevronRight className="w-3.5 h-3.5" />
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </>))}
+                  {/* Department-level content below — only when NOT in faculty drill-down */}
+                  {!facultyDrill && (
+                    <>
+                    <div className="bg-blue-50 rounded-2xl p-4 border border-blue-100">
+                      <p className="text-[11px] font-bold text-blue-600 uppercase tracking-wider">Pass %</p>
+                      <p className="text-2xl font-black text-blue-700 mt-1">{drilldownData.metrics.pass_pct ?? 0}%</p>
+                    </div>
+                    <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-100">
+                      <p className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">Avg Marks</p>
+                      <p className="text-2xl font-black text-emerald-700 mt-1">{drilldownData.metrics.avg_marks ?? 0}</p>
+                    </div>
+                    <div className="bg-amber-50 rounded-2xl p-4 border border-amber-100">
+                      <p className="text-[11px] font-bold text-amber-600 uppercase tracking-wider">Attendance</p>
+                      <p className="text-2xl font-black text-amber-700 mt-1">
+                        {drilldownData.metrics.attendance != null ? `${drilldownData.metrics.attendance}%` : '—'}
+                      </p>
+                    </div>
+                    <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-100">
+                      <p className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">Pass</p>
+                      <p className="text-2xl font-black text-emerald-700 mt-1">{drilldownData.metrics.pass_count ?? 0}</p>
+                    </div>
+                    <div className="bg-rose-50 rounded-2xl p-4 border border-rose-100">
+                      <p className="text-[11px] font-bold text-rose-600 uppercase tracking-wider">Fail</p>
+                      <p className="text-2xl font-black text-rose-700 mt-1">{drilldownData.metrics.fail_count ?? 0}</p>
+                    </div>
+
+                  {/* Section-wise */}
+                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+                    <div className="px-5 py-4 border-b border-slate-100">
+                      <h4 className="text-sm font-bold text-slate-900">Section-wise Performance</h4>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider">
+                          <tr>
+                            <th className="py-3 px-4">Section</th>
+                            <th className="py-3 px-4 text-center">Students</th>
+                            <th className="py-3 px-4 text-center">Avg Marks</th>
+                            <th className="py-3 px-4 text-center">Pass %</th>
+                            <th className="py-3 px-4 text-center">Attendance %</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {(drilldownData.section_wise || []).length === 0 ? (
+                            <tr><td colSpan={5} className="py-6 text-center text-slate-400">No data found for the selected filters.</td></tr>
+                          ) : (
+                            (drilldownData.section_wise || []).map((s) => (
+                              <tr key={s.section} className="hover:bg-slate-50/60">
+                                <td className="py-3 px-4 font-bold text-slate-900">{s.section}</td>
+                                <td className="py-3 px-4 text-center text-slate-700">{s.students}</td>
+                                <td className="py-3 px-4 text-center text-slate-700">{s.avg_marks != null ? s.avg_marks : '—'}</td>
+                                <td className="py-3 px-4 text-center text-slate-700">{s.pass_pct}%</td>
+                                <td className="py-3 px-4 text-center text-slate-700">{s.attendance != null ? `${s.attendance}%` : '—'}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Subject-wise */}
+                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+                    <div className="px-5 py-4 border-b border-slate-100">
+                      <h4 className="text-sm font-bold text-slate-900">Subject-wise Performance</h4>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider">
+                          <tr>
+                            <th className="py-3 px-4">Subject Code</th>
+                            <th className="py-3 px-4">Subject Name</th>
+                            <th className="py-3 px-4 text-center">Students</th>
+                            <th className="py-3 px-4 text-center">Avg Marks</th>
+                            <th className="py-3 px-4 text-center">Pass %</th>
+                            <th className="py-3 px-4 text-center">Attendance</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {(drilldownData.subject_wise || []).length === 0 ? (
+                            <tr><td colSpan={6} className="py-6 text-center text-slate-400">No subject marks found for the selected filters.</td></tr>
+                          ) : (
+                            (drilldownData.subject_wise || []).map((sub) => (
+                              <tr key={sub.subject_code} className="hover:bg-slate-50/60">
+                                <td className="py-3 px-4 font-bold text-slate-900">{sub.subject_code}</td>
+                                <td className="py-3 px-4 text-slate-700">{sub.subject_name}</td>
+                                <td className="py-3 px-4 text-center text-slate-700">{sub.students}</td>
+                                <td className="py-3 px-4 text-center text-slate-700">{sub.avg_marks != null ? sub.avg_marks : '—'}</td>
+                                <td className="py-3 px-4 text-center text-slate-700">{sub.pass_pct != null ? `${sub.pass_pct}%` : '—'}</td>
+                                <td className="py-3 px-4 text-center text-slate-700">—</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Students */}
+                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+                    <div className="px-5 py-4 border-b border-slate-100">
+                      <h4 className="text-sm font-bold text-slate-900">Student Performance</h4>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider">
+                          <tr>
+                            <th className="py-3 px-4">Register No</th>
+                            <th className="py-3 px-4">Student Name</th>
+                            <th className="py-3 px-4 text-center">Section</th>
+                            <th className="py-3 px-4 text-center">Average Marks</th>
+                            <th className="py-3 px-4 text-center">Result</th>
+                            <th className="py-3 px-4 text-right">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {(drilldownData.students || []).length === 0 ? (
+                            <tr><td colSpan={6} className="py-6 text-center text-slate-400">No students found for the selected filters.</td></tr>
+                          ) : (
+                            (drilldownData.students || []).map((st) => (
+                              <tr key={st.student_id} className="hover:bg-slate-50/60">
+                                <td className="py-3 px-4 font-bold text-slate-900">{st.reg_no}</td>
+                                <td className="py-3 px-4 text-slate-700">{st.name}</td>
+                                <td className="py-3 px-4 text-center text-slate-700">{st.section}</td>
+                                <td className="py-3 px-4 text-center text-slate-700">
+                                                                    { st.avg_marks != null ? st.avg_marks : '—'}
+                                </td>
+                                <td className="py-3 px-4 text-center">
+                                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${st.result === 'Pass' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-600'}`}>{st.result}</span>
+                                </td>
+                                <td className="py-3 px-4 text-right">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenReport(st.student_id)}
+                                    className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-700"
+                                  >
+                                    View Analysis <ChevronRight className="w-3.5 h-3.5" />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Student Progress Report Modal */}
 
       {/* Student Progress Report Modal */}
       {selectedStudentId && (
@@ -1482,8 +2166,20 @@ export default function AcademicPerformancePage() {
             <div className="sticky top-0 bg-white/80 backdrop-blur-md border-b border-slate-100 p-6 flex items-center justify-between z-10 rounded-t-3xl">
               <div>
                 <h3 className="text-xl font-bold text-slate-900">Individual Student Analysis</h3>
-                <p className="text-sm text-slate-500 mt-1">
-                  {studentChartsData?.student_name} ({studentChartsData?.reg_no}) - {selectedExamType}
+                <p className="text-sm text-slate-500 mt-1 flex flex-wrap items-center gap-2">
+                  <span className="font-semibold text-slate-800">{studentChartsData?.student_name || 'Student'}</span>
+                  <span>({studentChartsData?.reg_no || '-'})</span>
+                  <span>•</span>
+                  <span>Dept: {studentChartsData?.department || selectedDept || 'N/A'}</span>
+                  <span>•</span>
+                  <span>Sec: {studentChartsData?.section || selectedSection || 'N/A'}</span>
+                  <span>•</span>
+                  <span>Sem: {studentChartsData?.semester || selectedSem || 'N/A'}</span>
+                  <span>•</span>
+                  <span>AY: {studentChartsData?.academic_year || selectedYear || 'N/A'}</span>
+                  <span className="ml-1 px-2 py-0.5 text-xs font-bold bg-indigo-50 text-indigo-700 rounded-md">
+                    {selectedExamType || 'All Assessments'}
+                  </span>
                 </p>
               </div>
               <button 
@@ -1500,6 +2196,27 @@ export default function AcademicPerformancePage() {
                   <div className="animate-spin rounded-full h-10 w-10 border-2 border-indigo-500 border-t-transparent"></div>
                 </div>
               ) : (
+                <div>
+                  {/* Avg / Pass metric cards */}
+                  <div className="grid grid-cols-2 gap-4 mb-6">
+                    <div className="bg-indigo-50/60 border border-indigo-100 rounded-2xl p-5 text-center">
+                      <p className="text-xs font-bold text-indigo-500 uppercase tracking-wider">Average Marks</p>
+                      <h3 className="text-3xl font-black text-indigo-700 mt-1">
+                        {studentChartsData?.avg_pct !== undefined && studentChartsData?.avg_pct !== null
+                          ? `${studentChartsData.avg_pct}%`
+                          : '—'}
+                      </h3>
+                    </div>
+                    <div className="bg-emerald-50/60 border border-emerald-100 rounded-2xl p-5 text-center">
+                      <p className="text-xs font-bold text-emerald-500 uppercase tracking-wider">Pass Percentage</p>
+                      <h3 className="text-3xl font-black text-emerald-700 mt-1">
+                        {studentChartsData?.pass_pct !== undefined && studentChartsData?.pass_pct !== null
+                          ? `${studentChartsData.pass_pct}%`
+                          : '—'}
+                      </h3>
+                    </div>
+                  </div>
+
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   {/* Subject Marks Bar Chart */}
                   <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
@@ -1533,6 +2250,7 @@ export default function AcademicPerformancePage() {
                             <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Subject Code</th>
                             <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Subject Name</th>
                             <th scope="col" className="px-4 py-3 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Marks Obtained</th>
+                            <th scope="col" className="px-4 py-3 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Result</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 bg-white">
@@ -1542,11 +2260,20 @@ export default function AcademicPerformancePage() {
                                 <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-700">{mark.subject_code}</td>
                                 <td className="px-4 py-3 text-slate-600">{mark.subject_name}</td>
                                 <td className="whitespace-nowrap px-4 py-3 text-right font-black text-slate-900">{mark.score}</td>
+                                <td className="whitespace-nowrap px-4 py-3 text-right">
+                                  {mark.result === 'Pass' ? (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700">Pass</span>
+                                  ) : mark.result === 'Fail' ? (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700">Fail</span>
+                                  ) : (
+                                    <span className="text-slate-400 text-[11px] font-medium">—</span>
+                                  )}
+                                </td>
                               </tr>
                             ))
                           ) : (
                             <tr>
-                              <td colSpan={3} className="px-4 py-8 text-center text-slate-400 font-medium">No subject marks available</td>
+                              <td colSpan={4} className="px-4 py-8 text-center text-slate-400 font-medium">No subject marks available</td>
                             </tr>
                           )}
                         </tbody>
@@ -1554,11 +2281,13 @@ export default function AcademicPerformancePage() {
                     </div>
                   </div>
                 </div>
+                </div>
               )}
             </div>
           </div>
         </div>
       )}
     </div>
+  </ErrorBoundary>
   );
 }

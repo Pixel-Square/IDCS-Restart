@@ -46,10 +46,8 @@ export default function DepartmentAnalysis({ deptCode, onFacultyClick }: Props) 
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {faculties.map((f) => {
-                const totalStudents = f.handled_subjects.reduce((sum, s) => sum + s.student_count, 0);
-                return (
-                  <tr key={f.faculty_id} onClick={() => onFacultyClick(f.faculty_id, f.name, f)} className="hover:bg-blue-50 cursor-pointer transition-colors group">
+              {faculties.filter(f => f.students_handled && f.students_handled > 0).map((f) => (
+                  <tr key={f.id} onClick={() => onFacultyClick(f.id, f.name, f)} className="hover:bg-blue-50 cursor-pointer transition-colors group">
                     <td className="p-4">
                       <div className="font-bold text-blue-700 flex items-center gap-2">
                         {f.name} <span className="text-xs text-slate-400 font-normal">({f.staff_id})</span>
@@ -57,12 +55,11 @@ export default function DepartmentAnalysis({ deptCode, onFacultyClick }: Props) 
                       </div>
                     </td>
                     <td className="p-4 text-sm">{f.designation}</td>
-                    <td className="p-4 font-semibold">{f.handled_subjects.length}</td>
-                    <td className="p-4 font-semibold">{totalStudents}</td>
+                    <td className="p-4 font-semibold">{f.subjects_count}</td>
+                    <td className="p-4 font-semibold">{f.students_handled}</td>
                   </tr>
-                );
-              })}
-              {faculties.length === 0 && (
+              ))}
+              {faculties.filter(f => f.students_handled && f.students_handled > 0).length === 0 && (
                 <tr>
                   <td colSpan={4} className="p-8 text-center text-slate-500 font-medium">No faculty data available for this department.</td>
                 </tr>

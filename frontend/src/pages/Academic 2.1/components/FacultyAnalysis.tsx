@@ -17,7 +17,7 @@ export default function FacultyAnalysis({ facultyData, onSubjectClick }: Props) 
         <div className="flex gap-4">
           <div className="bg-blue-50 px-4 py-2 rounded-xl text-center border border-blue-100">
             <p className="text-xs font-bold text-blue-500 uppercase">Subjects</p>
-            <p className="text-xl font-black text-blue-700">{facultyData.handled_subjects.length}</p>
+            <p className="text-xl font-black text-blue-700">{facultyData.subjects_count}</p>
           </div>
         </div>
       </div>
@@ -43,7 +43,7 @@ export default function FacultyAnalysis({ facultyData, onSubjectClick }: Props) 
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {facultyData.handled_subjects.map((sub: any) => (
+              {facultyData.subjects && facultyData.subjects.filter(sub => sub.student_count && sub.student_count > 0).map((sub: any) => (
                 <tr key={sub.id} onClick={() => onSubjectClick(sub.subject_code, sub.subject_name, sub)} className="hover:bg-blue-50 cursor-pointer transition-colors group">
                   <td className="p-4">
                     <div className="font-bold text-blue-700 flex items-center gap-2">
@@ -63,7 +63,7 @@ export default function FacultyAnalysis({ facultyData, onSubjectClick }: Props) 
                   </td>
                 </tr>
               ))}
-              {facultyData.handled_subjects.length === 0 && (
+              {(!facultyData.subjects || facultyData.subjects.filter(sub => sub.student_count && sub.student_count > 0).length === 0) && (
                 <tr>
                   <td colSpan={9} className="p-8 text-center text-slate-500 font-medium">No subjects available for this faculty.</td>
                 </tr>
