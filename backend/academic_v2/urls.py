@@ -213,6 +213,7 @@ urlpatterns += [
 
 # Academic Performance & Analytics Endpoints (Scoped RBAC)
 from .academic_performance_views import (
+    StudentReportPDFView,
     PublishedDashboardsListView,
     AcademicPerformanceAnalyticsView,
     StudentSearchView,
@@ -242,6 +243,7 @@ urlpatterns += [
     path('performance/student-curriculum-marks/', StudentCurriculumMarksView.as_view(), name='academic-performance-student-curriculum-marks'),
     path('performance/student-analysis-charts/<str:student_id>/', StudentAnalysisChartsView.as_view(), name='academic-performance-student-analysis-charts-detail'),
     path('performance/student-analysis-charts/', StudentAnalysisChartsView.as_view(), name='academic-performance-student-analysis-charts'),
+    path('performance/student-report-pdf/<str:student_id>/', StudentReportPDFView.as_view(), name='academic-performance-student-report-pdf'),
     path('performance/department-analysis/', DepartmentAnalysisView.as_view(), name='academic-performance-department-analysis'),
     path('performance/subject-wise/', SubjectWiseAnalysisView.as_view(), name='academic-performance-subject-wise'),
 ]

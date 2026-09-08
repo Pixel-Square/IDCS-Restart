@@ -2283,4 +2283,137 @@ class StudentAnalysisChartsView(APIView):
             "attendance_series": []
         }, status=status.HTTP_200_OK)
 
+class StudentReportPDFView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, student_id=None):
+        """Generate a one‑page PDF report for a student.
+        The view mirrors the data returned by `StudentProgressReportView`
+        but renders it as a nicely formatted PDF using ReportLab.
+        """
+        # Resolve student identifier
+        if not student_id:
+            student_id = request.query_params.get('student_id') or request.query_params.get('id')
+        student = None
+        if student_id:
+            student = StudentProfile.objects.filter(
+                Q(id=student_id if str(student_id).isdigit() else None) |
+                Q(reg_no__iexact=str(student_id))
+            ).select_related('user', 'home_department', 'section', 'section__batch', 'section__semester').first()
+        if not student:
+            student = StudentProfile.objects.select_related('user', 'home_department', 'section', 'section__batch', 'section__semester').first()
+        if not student:
+            return Response({"detail": "Student not found"}, status=status.HTTP_404_NOT_FOUND)
+        # Authorization check
+        scope = get_performance_scope(request.user)
+        try:
+            assert_student_in_scope(scope, student)
+        except PermissionDenied:
+            return Response({"detail": "Requested student is outside your authorized scope."}, status=status.HTTP_403_FORBIDDEN)
+        # Determine exam type and subject filter
+        exam_type = request.query_params.get('exam', 'CIA 1').strip().upper()
+        subject_filter = request.query_params.get('subject', '').strip()
+        marks_data = []
+        # Handle semester‑exam (COE final result) separately
+        if "SEMESTER" in exam_type:
+            from COE.models import CoeFinalResult
+            coe_qs = CoeFinalResult.objects.filter(reg_no=student.reg_no)
+            if subject_filter:
+                coe_qs = coe_qs.filter(Q(course_code__iexact=subject_filter) | Q(course_name__icontains=subject_filter))
+            for c in coe_qs:
+                score = float(c.total_marks or 0.0)
+                marks_data.append({
+                    "subject_code": c.course_code or "SUB",
+                    "subject_name": c.course_name or c.course_code or "Subject",
+                    "score": score,
+                    "result": "Pass" if score >= 50.0 else "Fail",
+                })
+        else:
+            # Resolve the appropriate mark model
+            MarkModel = Cia1Mark
+            if "CIA 2" in exam_type:
+                MarkModel = Cia2Mark
+            elif "SSA 1" in exam_type:
+                MarkModel = Ssa1Mark
+            elif "SSA 2" in exam_type:
+                MarkModel = Ssa2Mark
+            elif "REVIEW 2" in exam_type:
+                MarkModel = Review2Mark
+            elif "REVIEW" in exam_type:
+                MarkModel = Review1Mark
+            elif "FORMATIVE 2" in exam_type:
+                MarkModel = Formative2Mark
+            elif "FORMATIVE" in exam_type:
+                MarkModel = Formative1Mark
+            elif "MODEL" in exam_type:
+                MarkModel = ModelExamMark
+            elif "LAB" in exam_type:
+                MarkModel = LabExamMark
+            elif "FINAL INTERNAL" in exam_type or "INTERNAL" in exam_type:
+                MarkModel = FinalInternalMark
+            qs = MarkModel.objects.filter(student=student).select_related('subject')
+            if subject_filter:
+                qs = qs.filter(
+                    Q(subject_id=subject_filter if subject_filter.isdigit() else None) |
+                    Q(subject__code__iexact=subject_filter) |
+                    Q(subject__name__icontains=subject_filter)
+                )
+            for m in qs:
+                if not m.subject:
+                    continue
+                val = getattr(m, 'mark', None)
+                if val is None:
+                    val = getattr(m, 'total_mark', 0.0)
+                score = float(val) if val is not None else 0.0
+                marks_data.append({
+                    "subject_code": m.subject.code,
+                    "subject_name": m.subject.name,
+                    "score": score,
+                    "result": "Pass" if score >= 50.0 else "Fail",
+                })
+        # Generate PDF with ReportLab
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.lib import colors
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from django.http import HttpResponse
+            import io
+        except ImportError:
+            return Response({"detail": "reportlab not installed"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        elements = []
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle('TitleStyle', parent=styles['Title'], alignment=0, textColor=colors.HexColor('#4F46E5'))
+        elements.append(Paragraph('Student Performance Report', title_style))
+        elements.append(Spacer(1, 12))
+        subtitle = f"{student.user.get_full_name() or student.user.username} | Reg No: {student.reg_no or '—'}"
+        elements.append(Paragraph(subtitle, styles['Normal']))
+        elements.append(Spacer(1, 12))
+        # Table header
+        table_data = [['Subject Code', 'Subject Name', 'Score', 'Result']]
+        for md in marks_data:
+            table_data.append([
+                md.get('subject_code', ''),
+                md.get('subject_name', ''),
+                f"{md.get('score', 0):.1f}",
+                md.get('result', '')
+            ])
+        tbl = Table(table_data, colWidths=[80, 200, 60, 60])
+        tbl.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4F46E5')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ]))
+        elements.append(tbl)
+        doc.build(elements)
+        buffer.seek(0)
+        response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+        filename = f"student_report_{student.reg_no or student.id}.pdf"
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
 
