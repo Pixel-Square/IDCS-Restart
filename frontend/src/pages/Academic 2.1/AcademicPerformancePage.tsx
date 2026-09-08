@@ -42,6 +42,7 @@ import {
   LineChart,
   Line
 } from 'recharts';
+import { apiClient } from '../../services/auth';
 import {
   fetchPerformanceAnalytics,
   fetchStudentProgressReport,
@@ -56,6 +57,8 @@ import {
   fetchStudentAnalysisCharts,
   fetchDepartmentAnalysis,
   fetchSubjectAnalysis,
+} from '../../services/academicPerformance';
+import type {
   SubjectAnalysisResponse,
   PerformanceAnalyticsResponse,
   StudentProgressReportResponse,
@@ -65,7 +68,7 @@ import {
   StudentCurriculumMarksResponse,
   StudentAnalysisChartsResponse,
   DepartmentAnalysisResponse,
-  FacultyAnalysisResponse
+  FacultyAnalysisResponse,
 } from '../../services/academicPerformance';
 import SubjectWiseAnalysis from './components/SubjectWiseAnalysis';
 import {
@@ -198,6 +201,7 @@ export default function AcademicPerformancePage() {
   const [studentSearchQuery, setStudentSearchQuery] = useState('');
 
   const [studentChartsLoading, setStudentChartsLoading] = useState(false);
+  const [downloadLoading, setDownloadLoading] = useState(false);
   const [studentChartsData, setStudentChartsData] = useState<StudentAnalysisChartsResponse | null>(null);
 
   // Department Drill Down — opens a real, DB-backed Department Analysis view that
@@ -536,15 +540,53 @@ export default function AcademicPerformancePage() {
   const [isStudentChartsModalOpen, setIsStudentChartsModalOpen] = useState(false);
 
   const handleOpenStudentCharts = async (studentId: string) => {
-    setStudentChartsLoading(true);
+    // Preserve numeric student ID for PDF download
+    setSelectedStudentId(studentId);
     setIsStudentChartsModalOpen(true);
+    setStudentChartsLoading(true);
     try {
-      const data = await fetchStudentAnalysisCharts(studentId, selectedExamType || 'All Assessments', selectedSubject);
+      const data = await fetchStudentAnalysisCharts(
+        studentId,
+        selectedExamType || 'All Assessments',
+        selectedSubject
+      );
       setStudentChartsData(data);
     } catch (e) {
       console.error('Failed to load student charts', e);
     } finally {
       setStudentChartsLoading(false);
+    }
+  };
+
+  // Download PDF report for the currently selected student
+  const handleDownloadReport = async () => {
+    const studentId = selectedStudentId;
+    if (!studentId) return;
+    setDownloadLoading(true);
+    try {
+      const response = await apiClient.get(`/api/academic-v2/performance/student-report-pdf/${studentId}/`, {
+        responseType: 'blob',
+      });
+      // Determine filename, preferring Content-Disposition header
+      let filename = `Academic_Performance_${studentChartsData?.reg_no || 'Report'}.pdf`;
+      const disposition = response.headers['content-disposition'];
+      if (disposition) {
+        const match = disposition.match(/filename[^;=\\s]*=\\s*\"?([^\";]*)\"?/i);
+        if (match && match[1]) filename = match[1];
+      }
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to download report', err);
+      // TODO: Show UI error toast if available
+    } finally {
+      setDownloadLoading(false);
     }
   };
 
@@ -2182,12 +2224,21 @@ return (
                   </span>
                 </p>
               </div>
-              <button 
-                onClick={() => setIsStudentChartsModalOpen(false)}
-                className="p-2 hover:bg-slate-100 rounded-full transition-colors"
-              >
-                <X className="w-5 h-5 text-slate-500" />
-              </button>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={handleDownloadReport}
+                  disabled={downloadLoading}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 disabled:opacity-50 transition"
+                >
+                  {downloadLoading ? 'Downloading...' : 'Download Report'}
+                </button>
+                <button
+                  onClick={() => setIsStudentChartsModalOpen(false)}
+                  className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                >
+                  <X className="w-5 h-5 text-slate-500" />
+                </button>
+              </div>
             </div>
             
             <div className="p-6">
