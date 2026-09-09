@@ -24,7 +24,6 @@ import ProfilePage from "./pages/profile/Profile";
 import SettingsPage from './pages/settings/SettingsPage';
 import WhatsAppSenderPage from './pages/settings/WhatsAppSenderPage';
 import SystemTransitionsPage from './pages/dashboard/SystemTransitionsPage';
-import BatchArchivalPage from './pages/dashboard/BatchArchivalPage';
 import UnderConstructionManagerPage from './pages/settings/UnderConstructionManagerPage';
 import ConditionsPage from './pages/settings/ConditionsPage';
 import UCGate from './components/UCGate';
@@ -88,9 +87,6 @@ import MyRequestsPage from './pages/staff-requests/MyRequestsPage';
 import PendingApprovalsPage from './pages/staff-requests/PendingApprovalsPage';
 import EventAttendingPage from './pages/staff-requests/EventAttendingPage';
 import ApplicationsAdminPage from './pages/iqac/ApplicationsAdminPage';
-import AuditManagementPage from './pages/audits/AuditManagementPage';
-import AuditEntryPage from './pages/audits/AuditEntryPage';
-import AuditATRPage from './pages/audits/AuditATRPage';
 import ApplicationsInboxPage from './pages/applications/ApplicationsInboxPage';
 import ApplicationsPage from './pages/applications/ApplicationsPage';
 import ApplicationFormPage from './pages/applications/ApplicationFormPage';
@@ -395,19 +391,6 @@ export default function App() {
                   path="/iqac/calendar/events"
                   element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<CalendarEvents />} />}
                 />
-                {/* Academic Audit (IQAC management / auditor entry / HOD ATR) */}
-                <Route
-                  path="/iqac/audits"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AuditManagementPage />} />}
-                />
-                <Route
-                  path="/audits"
-                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<AuditEntryPage />} />}
-                />
-                <Route
-                  path="/audits/atr"
-                  element={<ProtectedRoute user={user} requiredRoles={['HOD', 'AHOD', 'IQAC']} element={<AuditATRPage />} />}
-                />
                 <Route
                   path="/hod/calendar"
                   element={<ProtectedRoute user={user} requiredRoles={['HOD']} element={<AcademicCalendarPage mode="hod" />} />}
@@ -537,10 +520,6 @@ export default function App() {
                 <Route
                   path="/iqac/system-transitions"
                   element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} element={<SystemTransitionsPage />} />}
-                />
-                <Route
-                  path="/batch-archival"
-                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} element={<BatchArchivalPage />} />}
                 />
                 {/* PBAS IQAC route removed */}
                 <Route
@@ -714,14 +693,14 @@ export default function App() {
                 />
                 <Route
                   path="/staff-requests/pending-approvals"
-                  element={<ProtectedRoute user={user} requiredRoles={['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL', 'ADMIN', 'CFFA']} requiredPermissions={['staff_requests.approve_requests']} element={<PendingApprovalsPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL', 'ADMIN']} requiredPermissions={['staff_requests.approve_requests']} element={<PendingApprovalsPage />} />}
                 />
                 <Route
                   path="/staff-requests/event-attending"
                   element={
                     <ProtectedRoute
                       user={user}
-                      requiredRoles={['STAFF', 'HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'CFFA']}
+                      requiredRoles={['STAFF', 'HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS']}
                       element={<EventAttendingPage />}
                     />
                   }
