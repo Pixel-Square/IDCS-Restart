@@ -371,7 +371,7 @@ class HallAttendancePdfView(APIView):
             # -------------------------------------------------------------
             footer_data = [
                 [
-                    Paragraph("<br/><br/>________________________________________<br/><b>Name & Signature of Hall Invigilator</b><br/><font size=7 color='#64748b'>Date: ________________________</font>", sig_title_style),
+                    Paragraph("<br/><br/>________________________________________<br/><b>Name & Signature of Hall Invigilator</b><br/><font size=7 color='#64748b'>Date: _________n_______________</font>", sig_title_style),
                     Paragraph("<br/><br/>________________________________________<br/><b>Controller of Examinations</b><br/><font size=7 color='#64748b'>Date: ________________________</font>", sig_title_style),
                 ]
             ]
