@@ -113,6 +113,10 @@ export default function AcademicPerformancePage() {
   // Multi-Selection State for Comparison View
   const [multiDepts, setMultiDepts] = useState<string[]>([]);
   const [multiBatches, setMultiBatches] = useState<string[]>([]);
+
+  // Request ID refs to guard against stale out-of-order async responses
+  const analyticsReqIdRef = useRef(0);
+  const studentChartsReqIdRef = useRef(0);
   const [multiSems, setMultiSems] = useState<string[]>([]);
   const [multiSections, setMultiSections] = useState<string[]>([]);
   const [multiSubjects, setMultiSubjects] = useState<string[]>([]);
@@ -171,8 +175,6 @@ export default function AcademicPerformancePage() {
   // When a batch is selected, auto-pick the semester(s) that actually exist for that
   // batch in the database (batch_semesters comes from the backend response).
   useEffect(() => {
-    // Load data on component mount
-    loadInitialData();
     if (!selectedYear) return;
     const sems = data?.filter_options?.batch_semesters?.[selectedYear];
     if (sems && sems.length > 0) {
@@ -181,7 +183,7 @@ export default function AcademicPerformancePage() {
       setSelectedSem('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedYear, data?.filter_options?.batch_semesters]);
+  }, [selectedYear]);
 
   // Search & Progress Report Modal
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
@@ -201,8 +203,17 @@ export default function AcademicPerformancePage() {
   const [studentSearchQuery, setStudentSearchQuery] = useState('');
 
   const [studentChartsLoading, setStudentChartsLoading] = useState(false);
+  const [studentChartsError, setStudentChartsError] = useState('');
   const [downloadLoading, setDownloadLoading] = useState(false);
   const [studentChartsData, setStudentChartsData] = useState<StudentAnalysisChartsResponse | null>(null);
+  const [studentModalMeta, setStudentModalMeta] = useState<{
+    student_name: string;
+    reg_no: string;
+    department: string;
+    section: string;
+    semester: string;
+    academic_year: string;
+  } | null>(null);
 
   // Department Drill Down — opens a real, DB-backed Department Analysis view that
   // preserves the current Academic Year / Semester / Assessment / Section filters.
@@ -261,17 +272,14 @@ export default function AcademicPerformancePage() {
     return () => { cancelled = true; };
   }, [activeTab, selectedYear, selectedSem, selectedDept]);
 
-
-
+  // Load dashboards and initial user context on mount (no filter state changes)
   const loadInitialData = async () => {
     setLoading(true);
     setError('');
     try {
-      // 1. Fetch Auth & Published Dashboards
       const dashRes = await fetchPublishedDashboards();
       setPublishedDashboards(dashRes.dashboards || []);
-
-      // 2. Fetch Scoped Performance Analytics
+      // Fetch analytics to obtain user_context without mutating filter state
       const res = await fetchPerformanceAnalytics({
         year: selectedYear,
         sem: selectedSem,
@@ -280,8 +288,7 @@ export default function AcademicPerformancePage() {
         qp_type: selectedExamType,
       });
       setData(res);
-
-      // Auto-set tab based on resolved role ONLY if it hasn't been set yet
+      // Set active tab and any default filters based on user_context only once
       if (activeTab === '') {
         if (res.user_context?.is_principal) {
           setActiveTab('principal');
@@ -291,13 +298,12 @@ export default function AcademicPerformancePage() {
         } else if (res.user_context?.is_advisor) {
           setActiveTab('advisor');
           if (res.user_context.department_code) setSelectedDept(res.user_context.department_code);
-          if (res.user_context.advised_sections && res.user_context.advised_sections.length > 0) {
+          if (res.user_context.advised_sections?.length) {
             setSelectedYear(res.user_context.advised_sections[0].batch || '');
             setSelectedSem(String(res.user_context.advised_sections[0].semester || ''));
           }
         } else if (res.user_context?.is_faculty) {
           setActiveTab('faculty');
-          if (res.user_context.department_code) setSelectedDept(res.user_context.department_code);
         } else if (res.user_context?.is_student) {
           setActiveTab('student');
         }
@@ -309,8 +315,40 @@ export default function AcademicPerformancePage() {
     }
   };
 
+  // Fetch analytics whenever filter criteria change (does not alter filter state)
+  const fetchAnalytics = async () => {
+    const reqId = ++analyticsReqIdRef.current;
+    setLoading(true);
+    try {
+      const res = await fetchPerformanceAnalytics({
+        year: selectedYear,
+        sem: selectedSem,
+        dept: selectedDept,
+        section: selectedSection,
+        qp_type: selectedExamType,
+      });
+      if (reqId === analyticsReqIdRef.current) {
+        setData(res);
+      }
+    } catch (err: any) {
+      if (reqId === analyticsReqIdRef.current) {
+        setError(err.message || 'Failed to load academic performance data');
+      }
+    } finally {
+      if (reqId === analyticsReqIdRef.current) {
+        setLoading(false);
+      }
+    }
+  };
+
+  // Initial load (once)
   useEffect(() => {
     loadInitialData();
+  }, []);
+
+  // Refetch analytics when filter values change
+  useEffect(() => {
+    fetchAnalytics();
   }, [selectedYear, selectedSem, selectedDept, selectedSection, selectedExamType]);
 
   // Dynamic section & subject options come straight from backend
@@ -433,6 +471,7 @@ export default function AcademicPerformancePage() {
 
   // Navigate to the College-level overview (used by breadcrumb + reset).
   const goCollegeOverview = () => {
+    // Reset all filter and drill-down state back to college level
     setSelectedDept('');
     setSelectedDeptName('');
     setSelectedSection('');
@@ -450,7 +489,9 @@ export default function AcademicPerformancePage() {
     setHierarchyLevel(HierarchyLevel.COLLEGE);
     setActiveTab('');
     setActiveDashboardId('overall_overview');
-    // Fall back to the college-level analytics dataset.
+    // Reset breadcrumb to only college level
+    setBreadcrumbPath([{ id: 'college', label: 'College', type: 'COLLEGE' }]);
+    // Reload initial dashboards and context
     loadInitialData();
   };
 
@@ -469,9 +510,20 @@ export default function AcademicPerformancePage() {
 
   // Reset drilldowns when core filters change to avoid stale data
   useEffect(() => {
-    // Only reset if we are drilled down
+    // Only reset drill-down state if currently drilled down without restarting college load
     if (hierarchyLevel !== HierarchyLevel.COLLEGE) {
-      goCollegeOverview();
+      setDeptDrilldown(null);
+      setDrilldownData(null);
+      setDrilldownError('');
+      setFacultyDrill(null);
+      setFacultyDetail(null);
+      setFacultyDetailError('');
+      setSubjectDrill(null);
+      setSubjectDetail(null);
+      setSubjectError('');
+      setSubjectSectionFilter('');
+      setHierarchyLevel(HierarchyLevel.COLLEGE);
+      setBreadcrumbPath([{ id: 'college', label: 'College', type: 'COLLEGE' }]);
     }
   }, [selectedYear, selectedSem, selectedSection, selectedExamType, selectedDept]);
 
@@ -539,9 +591,30 @@ export default function AcademicPerformancePage() {
 
   const [isStudentChartsModalOpen, setIsStudentChartsModalOpen] = useState(false);
 
-  const handleOpenStudentCharts = async (studentId: string) => {
+  const handleOpenStudentCharts = async (
+    studentId: string,
+    fallbackMeta?: {
+      student_name?: string;
+      reg_no?: string;
+      department?: string;
+      section?: string;
+      semester?: string;
+      academic_year?: string;
+    }
+  ) => {
+    const reqId = ++studentChartsReqIdRef.current;
     // Preserve numeric student ID for PDF download
     setSelectedStudentId(studentId);
+    setStudentModalMeta({
+      student_name: fallbackMeta?.student_name || '',
+      reg_no: fallbackMeta?.reg_no || '',
+      department: fallbackMeta?.department || selectedDept || '',
+      section: fallbackMeta?.section || selectedSection || '',
+      semester: fallbackMeta?.semester || selectedSem || '',
+      academic_year: fallbackMeta?.academic_year || selectedYear || '',
+    });
+    setStudentChartsData(null);
+    setStudentChartsError('');
     setIsStudentChartsModalOpen(true);
     setStudentChartsLoading(true);
     try {
@@ -550,11 +623,18 @@ export default function AcademicPerformancePage() {
         selectedExamType || 'All Assessments',
         selectedSubject
       );
-      setStudentChartsData(data);
-    } catch (e) {
-      console.error('Failed to load student charts', e);
+      if (reqId === studentChartsReqIdRef.current) {
+        setStudentChartsData(data);
+      }
+    } catch (e: any) {
+      if (reqId === studentChartsReqIdRef.current) {
+        console.error('Failed to load student charts', e);
+        setStudentChartsError(e?.message || 'Failed to load student analysis charts');
+      }
     } finally {
-      setStudentChartsLoading(false);
+      if (reqId === studentChartsReqIdRef.current) {
+        setStudentChartsLoading(false);
+      }
     }
   };
 
@@ -664,8 +744,11 @@ export default function AcademicPerformancePage() {
     setDrilldownError('');
     setFacultyRowsLoading(true);
     setFacultyRows([]);
-    // Push breadcrumb for department level
-    setBreadcrumbPath(prev => [...prev, { id: deptCode, label: deptName, type: 'DEPARTMENT' }]);
+    // Set explicit breadcrumb path: College -> Department
+    setBreadcrumbPath([
+      { id: 'college', label: 'College', type: 'COLLEGE' },
+      { id: deptCode, label: deptName, type: 'DEPARTMENT' }
+    ]);
 
       try {
         const [res, facRows] = await Promise.all([
@@ -708,7 +791,14 @@ export default function AcademicPerformancePage() {
   const openFacultyDrilldown = async (facultyId: string, facultyName: string) => {
     setHierarchyLevel(HierarchyLevel.FACULTY);
     setFacultyDrill({ id: facultyId, name: facultyName });
-    setBreadcrumbPath(prev => [...prev, { id: facultyId, label: facultyName, type: 'FACULTY' }]);
+    const currentDeptCode = deptDrilldown?.code || selectedDept || 'dept';
+    const currentDeptName = deptDrilldown?.name || selectedDeptName || currentDeptCode;
+    // Set explicit breadcrumb path: College -> Department -> Faculty
+    setBreadcrumbPath([
+      { id: 'college', label: 'College', type: 'COLLEGE' },
+      { id: currentDeptCode, label: currentDeptName, type: 'DEPARTMENT' },
+      { id: facultyId, label: facultyName, type: 'FACULTY' }
+    ]);
     setFacultyDetailLoading(true);
     setFacultyDetailError('');
     setFacultyDetail(null);
@@ -746,7 +836,17 @@ export default function AcademicPerformancePage() {
   const openSubjectDrilldown = async (subjectCode: string, subjectName: string) => {
     setHierarchyLevel(HierarchyLevel.SUBJECT);
     setSubjectDrill({ code: subjectCode, name: subjectName });
-    setBreadcrumbPath(prev => [...prev, { id: subjectCode, label: subjectName, type: 'SUBJECT' }]);
+    const currentDeptCode = deptDrilldown?.code || selectedDept || 'dept';
+    const currentDeptName = deptDrilldown?.name || selectedDeptName || currentDeptCode;
+    const currentFacultyId = facultyDrill?.id || 'faculty';
+    const currentFacultyName = facultyDrill?.name || 'Faculty';
+    // Set explicit breadcrumb path: College -> Department -> Faculty -> Subject
+    setBreadcrumbPath([
+      { id: 'college', label: 'College', type: 'COLLEGE' },
+      { id: currentDeptCode, label: currentDeptName, type: 'DEPARTMENT' },
+      { id: currentFacultyId, label: currentFacultyName, type: 'FACULTY' },
+      { id: subjectCode, label: subjectName, type: 'SUBJECT' }
+    ]);
     setSubjectLoading(true);
     setSubjectError('');
     setSubjectDetail(null);
@@ -1711,7 +1811,14 @@ return (
                             })}
                             <td className="px-4 py-3 text-center">
                               <button
-                                onClick={() => handleOpenStudentCharts(student.student_id)}
+                                onClick={() => handleOpenStudentCharts(student.student_id, {
+                                  student_name: student.name,
+                                  reg_no: student.reg_no,
+                                  department: student.department,
+                                  section: student.section,
+                                  semester: student.semester,
+                                  academic_year: student.academic_year,
+                                })}
                                 className="px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 font-medium rounded-lg text-xs transition-colors whitespace-nowrap"
                               >
                                 View Analysis
@@ -2209,16 +2316,40 @@ return (
               <div>
                 <h3 className="text-xl font-bold text-slate-900">Individual Student Analysis</h3>
                 <p className="text-sm text-slate-500 mt-1 flex flex-wrap items-center gap-2">
-                  <span className="font-semibold text-slate-800">{studentChartsData?.student_name || 'Student'}</span>
-                  <span>({studentChartsData?.reg_no || '-'})</span>
+                  <span className="font-semibold text-slate-800">
+                    {(studentChartsData?.student_name && studentChartsData.student_name !== 'N/A')
+                      ? studentChartsData.student_name
+                      : (studentModalMeta?.student_name || 'Student')}
+                  </span>
+                  <span>
+                    ({(studentChartsData?.reg_no && studentChartsData.reg_no !== 'N/A')
+                      ? studentChartsData.reg_no
+                      : (studentModalMeta?.reg_no || '-')})
+                  </span>
                   <span>•</span>
-                  <span>Dept: {studentChartsData?.department || selectedDept || 'N/A'}</span>
+                  <span>
+                    Dept: {(studentChartsData?.department && studentChartsData.department !== 'N/A')
+                      ? studentChartsData.department
+                      : (studentModalMeta?.department || selectedDept || 'N/A')}
+                  </span>
                   <span>•</span>
-                  <span>Sec: {studentChartsData?.section || selectedSection || 'N/A'}</span>
+                  <span>
+                    Sec: {(studentChartsData?.section && studentChartsData.section !== 'N/A')
+                      ? studentChartsData.section
+                      : (studentModalMeta?.section || selectedSection || 'N/A')}
+                  </span>
                   <span>•</span>
-                  <span>Sem: {studentChartsData?.semester || selectedSem || 'N/A'}</span>
+                  <span>
+                    Sem: {(studentChartsData?.semester && studentChartsData.semester !== 'N/A')
+                      ? studentChartsData.semester
+                      : (studentModalMeta?.semester || selectedSem || 'N/A')}
+                  </span>
                   <span>•</span>
-                  <span>AY: {studentChartsData?.academic_year || selectedYear || 'N/A'}</span>
+                  <span>
+                    AY: {(studentChartsData?.academic_year && studentChartsData.academic_year !== 'N/A')
+                      ? studentChartsData.academic_year
+                      : (studentModalMeta?.academic_year || selectedYear || 'N/A')}
+                  </span>
                   <span className="ml-1 px-2 py-0.5 text-xs font-bold bg-indigo-50 text-indigo-700 rounded-md">
                     {selectedExamType || 'All Assessments'}
                   </span>
@@ -2243,8 +2374,13 @@ return (
             
             <div className="p-6">
               {studentChartsLoading ? (
-                <div className="flex items-center justify-center h-64">
+                <div className="flex flex-col items-center justify-center h-64 gap-3">
                   <div className="animate-spin rounded-full h-10 w-10 border-2 border-indigo-500 border-t-transparent"></div>
+                  <span className="text-sm font-medium text-slate-500">Loading student analysis…</span>
+                </div>
+              ) : studentChartsError ? (
+                <div className="p-6 text-center text-sm font-medium text-rose-600 bg-rose-50 rounded-2xl border border-rose-200">
+                  {studentChartsError}
                 </div>
               ) : (
                 <div>
