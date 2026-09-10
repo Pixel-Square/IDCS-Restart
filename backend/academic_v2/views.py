@@ -4087,6 +4087,22 @@ def faculty_course_info(request, ta_id):
         _deduped_assignments.append(_ea)
     exam_assignments = _deduped_assignments
 
+    # Pre-fetch CQI models for this teaching assignment
+    cqi_pub_entries = {}
+    cqi_pub_at = None
+    cqi_draft_entries = {}
+    try:
+        from .models import AcV2CqiAttained, AcV2CqiAssignment
+        _cqi_att = AcV2CqiAttained.objects.filter(teaching_assignment=ta).first()
+        if _cqi_att and isinstance(_cqi_att.entries, dict):
+            cqi_pub_entries = _cqi_att.entries
+            cqi_pub_at = _cqi_att.published_at
+        _cqi_asgn = AcV2CqiAssignment.objects.filter(teaching_assignment=ta).first()
+        if _cqi_asgn and isinstance(_cqi_asgn.draft_entries, dict):
+            cqi_draft_entries = _cqi_asgn.draft_entries
+    except Exception:
+        pass
+
     for ea in exam_assignments:
         ea_weight = float(ea.weight) if ea.weight else 0
         ea_key = norm_exam_key(ea.exam_display_name or ea.exam)
@@ -4197,66 +4213,93 @@ def faculty_course_info(request, ta_id):
         # Calculate progress / entered count based on filled cells
         # Check active student profiles for this TA
         active_student_ids = {str(sp.id) for sp in active_student_profiles} if active_student_profiles else set()
+        active_reg_nos = {str(getattr(sp, 'reg_no', '') or getattr(sp, 'register_number', '') or '').strip() for sp in active_student_profiles if (getattr(sp, 'reg_no', '') or getattr(sp, 'register_number', ''))}
         
-        # Check if questions exist in pattern p
-        q_count = 0
-        if isinstance(p, dict):
-            titles = p.get('titles') or []
-            enabled = p.get('enabled') or []
-            if titles:
-                q_count = sum(1 for i in range(len(titles)) if (i >= len(enabled) or enabled[i]))
-            elif p.get('marks'):
-                q_count = len(p.get('marks'))
+        if ea_kind == 'cqi':
+            # Count students with entered marks in CQI (published or draft)
+            cqi_entered_students = set()
+            for sid, co_dict in (cqi_pub_entries or {}).items():
+                if isinstance(co_dict, dict) and any(v is not None and str(v).strip() != '' for v in co_dict.values()):
+                    cqi_entered_students.add(str(sid))
+            for sid, co_dict in (cqi_draft_entries or {}).items():
+                if isinstance(co_dict, dict) and any(v is not None and str(v).strip() != '' for v in co_dict.values()):
+                    cqi_entered_students.add(str(sid))
 
-        marks = draft.get('marks', {})
-        pub_marks = (ea.published_data if isinstance(ea.published_data, dict) else {}).get('marks', {})
-        db_marks_qs = AcV2StudentMark.objects.filter(exam_assignment=ea)
-        db_marks_dict = {str(m.student_id): m for m in db_marks_qs}
-        draft_rows_qs = AcV2DraftMark.objects.filter(exam_assignment=ea)
-        draft_rows_dict = {str(m.student_id): m for m in draft_rows_qs}
-        
-        # Count students who have marks entered across draft_data, published_data, and DB marks
-        entered_students_count = 0
-        all_candidate_sids = active_student_ids or set(marks.keys()) | set(pub_marks.keys()) | set(db_marks_dict.keys()) | set(draft_rows_dict.keys())
+            # Match against active student profiles by id or reg_no
+            matched_count = 0
+            if active_student_profiles:
+                for sp in active_student_profiles:
+                    sp_id = str(sp.id)
+                    sp_reg = str(getattr(sp, 'reg_no', '') or getattr(sp, 'register_number', '') or '').strip()
+                    if sp_id in cqi_entered_students or (sp_reg and sp_reg in cqi_entered_students):
+                        matched_count += 1
+                entered_students_count = matched_count
+            else:
+                entered_students_count = len(cqi_entered_students)
+        else:
+            # Check if questions exist in pattern p
+            q_count = 0
+            if isinstance(p, dict):
+                titles = p.get('titles') or []
+                enabled = p.get('enabled') or []
+                if titles:
+                    q_count = sum(1 for i in range(len(titles)) if (i >= len(enabled) or enabled[i]))
+                elif p.get('marks'):
+                    q_count = len(p.get('marks'))
 
-        for sid in all_candidate_sids:
-            # 1. Check draft snapshot
-            m_info = marks.get(sid) or pub_marks.get(sid)
-            if m_info:
-                if isinstance(m_info, dict):
-                    if m_info.get('is_absent'):
+            marks = draft.get('marks', {})
+            pub_marks = (ea.published_data if isinstance(ea.published_data, dict) else {}).get('marks', {})
+            db_marks_qs = AcV2StudentMark.objects.filter(exam_assignment=ea)
+            db_marks_dict = {str(m.student_id): m for m in db_marks_qs}
+            draft_rows_qs = AcV2DraftMark.objects.filter(exam_assignment=ea)
+            draft_rows_dict = {str(m.student_id): m for m in draft_rows_qs}
+            
+            # Count students who have marks entered across draft_data, published_data, and DB marks
+            entered_students_count = 0
+            all_candidate_sids = active_student_ids or set(marks.keys()) | set(pub_marks.keys()) | set(db_marks_dict.keys()) | set(draft_rows_dict.keys())
+
+            for sid in all_candidate_sids:
+                # 1. Check draft snapshot
+                m_info = marks.get(sid) or pub_marks.get(sid)
+                if m_info:
+                    if isinstance(m_info, dict):
+                        if m_info.get('is_absent'):
+                            entered_students_count += 1
+                            continue
+                        co_m = m_info.get('co_marks') or m_info.get('question_marks') or {}
+                        if q_count > 0:
+                            if any(v is not None and v != '' for v in co_m.values()) or (m_info.get('mark') is not None and m_info.get('mark') != ''):
+                                entered_students_count += 1
+                                continue
+                        else:
+                            if m_info.get('mark') is not None and m_info.get('mark') != '':
+                                entered_students_count += 1
+                                continue
+                    elif m_info is not None and m_info != '':
                         entered_students_count += 1
                         continue
-                    co_m = m_info.get('co_marks') or m_info.get('question_marks') or {}
-                    if q_count > 0:
-                        if any(v is not None and v != '' for v in co_m.values()) or (m_info.get('mark') is not None and m_info.get('mark') != ''):
-                            entered_students_count += 1
-                            continue
-                    else:
-                        if m_info.get('mark') is not None and m_info.get('mark') != '':
-                            entered_students_count += 1
-                            continue
-                elif m_info is not None and m_info != '':
-                    entered_students_count += 1
-                    continue
 
-            # 2. Check draft rows in DB (AcV2DraftMark)
-            dm_row = draft_rows_dict.get(sid)
-            if dm_row:
-                if dm_row.is_absent or dm_row.total_mark is not None or (isinstance(dm_row.question_marks, dict) and any(v is not None and v != '' for v in dm_row.question_marks.values())):
-                    entered_students_count += 1
-                    continue
+                # 2. Check draft rows in DB (AcV2DraftMark)
+                dm_row = draft_rows_dict.get(sid)
+                if dm_row:
+                    if dm_row.is_absent or dm_row.total_mark is not None or (isinstance(dm_row.question_marks, dict) and any(v is not None and v != '' for v in dm_row.question_marks.values())):
+                        entered_students_count += 1
+                        continue
 
-            # 3. Check published DB rows (AcV2StudentMark)
-            sm_row = db_marks_dict.get(sid)
-            if sm_row:
-                if sm_row.is_absent or sm_row.total_mark is not None or any(getattr(sm_row, f'co{i}_mark', None) is not None for i in range(1, 6)):
-                    entered_students_count += 1
-                    continue
+                # 3. Check published DB rows (AcV2StudentMark)
+                sm_row = db_marks_dict.get(sid)
+                if sm_row:
+                    if sm_row.is_absent or sm_row.total_mark is not None or any(getattr(sm_row, f'co{i}_mark', None) is not None for i in range(1, 6)):
+                        entered_students_count += 1
+                        continue
 
         entered_count = entered_students_count
-        is_strictly_locked = ea.status in PUBLISHED_EXAM_STATUSES  # PUBLISHED, APPROVED, LOCKED
-        has_been_published = bool(is_strictly_locked or ea.published_at)
+        if ea_kind == 'cqi':
+            has_been_published = bool(cqi_pub_at or ea.status in PUBLISHED_EXAM_STATUSES or ea.published_at)
+        else:
+            is_strictly_locked = ea.status in PUBLISHED_EXAM_STATUSES  # PUBLISHED, APPROVED, LOCKED
+            has_been_published = bool(is_strictly_locked or ea.published_at)
+        is_strictly_locked = ea.status in PUBLISHED_EXAM_STATUSES
         cycle_state = _get_exam_cycle_state(
             ea,
             semester_id=getattr(sec, 'semester_id', None),
@@ -4519,29 +4562,48 @@ def faculty_course_info(request, ta_id):
                 ea_pub = ea_obj.published_data if isinstance(ea_obj.published_data, dict) else {}
                 ea_draft_marks = ea_draft.get('marks', {})
                 ea_pub_marks = ea_pub.get('marks', {})
-                ea_db_sm = AcV2StudentMark.objects.filter(exam_assignment=ea_obj)
-                ea_db_dm = AcV2DraftMark.objects.filter(exam_assignment=ea_obj)
-                ea_db_sm_dict = {str(m.student_id): m for m in ea_db_sm}
-                ea_db_dm_dict = {str(m.student_id): m for m in ea_db_dm}
+                if _new_kind == 'cqi':
+                    cqi_entered_students = set()
+                    for sid, co_dict in (cqi_pub_entries or {}).items():
+                        if isinstance(co_dict, dict) and any(v is not None and str(v).strip() != '' for v in co_dict.values()):
+                            cqi_entered_students.add(str(sid))
+                    for sid, co_dict in (cqi_draft_entries or {}).items():
+                        if isinstance(co_dict, dict) and any(v is not None and str(v).strip() != '' for v in co_dict.values()):
+                            cqi_entered_students.add(str(sid))
 
-                ea_sids = active_student_ids or set(ea_draft_marks.keys()) | set(ea_pub_marks.keys()) | set(ea_db_sm_dict.keys()) | set(ea_db_dm_dict.keys())
-                ea_entered_cnt = 0
-                for sid in ea_sids:
-                    m_info = ea_draft_marks.get(sid) or ea_pub_marks.get(sid)
-                    if m_info:
-                        if isinstance(m_info, dict):
-                            if m_info.get('is_absent') or any(v is not None and v != '' for v in (m_info.get('co_marks') or m_info.get('question_marks') or {}).values()) or (m_info.get('mark') is not None and m_info.get('mark') != ''):
+                    matched_count = 0
+                    if active_student_profiles:
+                        for sp in active_student_profiles:
+                            sp_id = str(sp.id)
+                            sp_reg = str(getattr(sp, 'reg_no', '') or getattr(sp, 'register_number', '') or '').strip()
+                            if sp_id in cqi_entered_students or (sp_reg and sp_reg in cqi_entered_students):
+                                matched_count += 1
+                        ea_entered_cnt = matched_count
+                    else:
+                        ea_entered_cnt = len(cqi_entered_students)
+
+                    ea_strictly_locked = ea_obj.status in PUBLISHED_EXAM_STATUSES
+                    ea_has_published = bool(cqi_pub_at or ea_strictly_locked or ea_obj.published_at)
+                else:
+                    ea_sids = active_student_ids or set(ea_draft_marks.keys()) | set(ea_pub_marks.keys()) | set(ea_db_sm_dict.keys()) | set(ea_db_dm_dict.keys())
+                    ea_entered_cnt = 0
+                    for sid in ea_sids:
+                        m_info = ea_draft_marks.get(sid) or ea_pub_marks.get(sid)
+                        if m_info:
+                            if isinstance(m_info, dict):
+                                if m_info.get('is_absent') or any(v is not None and v != '' for v in (m_info.get('co_marks') or m_info.get('question_marks') or {}).values()) or (m_info.get('mark') is not None and m_info.get('mark') != ''):
+                                    ea_entered_cnt += 1
+                                    continue
+                            elif m_info is not None and m_info != '':
                                 ea_entered_cnt += 1
                                 continue
-                        elif m_info is not None and m_info != '':
+                        if sid in ea_db_dm_dict or sid in ea_db_sm_dict:
                             ea_entered_cnt += 1
                             continue
-                    if sid in ea_db_dm_dict or sid in ea_db_sm_dict:
-                        ea_entered_cnt += 1
-                        continue
 
-                ea_strictly_locked = ea_obj.status in PUBLISHED_EXAM_STATUSES
-                ea_has_published = bool(ea_strictly_locked or ea_obj.published_at or ea_pub_marks)
+                    ea_strictly_locked = ea_obj.status in PUBLISHED_EXAM_STATUSES
+                    ea_has_published = bool(ea_strictly_locked or ea_obj.published_at or ea_pub_marks)
+
                 if ea_has_published:
                     ea_sm_status = 'PUBLISHED'
                 elif ea_entered_cnt > 0:
@@ -7112,7 +7174,13 @@ def faculty_course_co_summary(request, ta_id):
         # Apply CQI exam(s) after non-CQI totals are known.
         if pending_cqi:
             sid_key = str(sid)
-            s_entries = cqi_entries.get(sid_key, {}) if isinstance(cqi_entries, dict) else {}
+            reg_no_key = str(getattr(sp, 'reg_no', '') or '')
+            s_entries = (
+                (cqi_entries.get(sid_key) if isinstance(cqi_entries.get(sid_key), dict) else None)
+                or (cqi_entries.get(reg_no_key) if reg_no_key and isinstance(cqi_entries.get(reg_no_key), dict) else None)
+                or (cqi_entries.get(str(getattr(sp, 'student_id', ''))) if getattr(sp, 'student_id', None) and isinstance(cqi_entries.get(str(getattr(sp, 'student_id', ''))), dict) else None)
+                or {}
+            )
 
             before_total_all = float(sum(student_entry.get('co_totals') or []))
             # Precompute sum(CQI inputs) for TOTAL_CQI context.
@@ -7936,7 +8004,9 @@ def faculty_exam_cqi_draft(request, exam_id):
         ea = get_object_or_404(ea_qs, id=exam_id)
     else:
         ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
-    return faculty_course_cqi_draft(request, ea.section.teaching_assignment_id)
+    raw_req = getattr(request, '_request', request)
+    raw_req.user = request.user
+    return faculty_course_cqi_draft(raw_req, ea.section.teaching_assignment_id)
 
 
 @api_view(['GET'])
@@ -7952,7 +8022,27 @@ def faculty_exam_cqi_published(request, exam_id):
         ea = get_object_or_404(ea_qs, id=exam_id)
     else:
         ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
-    return faculty_course_cqi_published(request, ea.section.teaching_assignment_id)
+    raw_req = getattr(request, '_request', request)
+    raw_req.user = request.user
+    return faculty_course_cqi_published(raw_req, ea.section.teaching_assignment_id)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def faculty_exam_cqi_publish(request, exam_id):
+    """CQI publish endpoint keyed by exam_id.
+
+    Maps exam assignment to its teaching assignment and reuses the
+    course-level CQI publish handler.
+    """
+    ea_qs = AcV2ExamAssignment.objects.select_related('section__teaching_assignment')
+    if _has_admin_bypass_access(request.user):
+        ea = get_object_or_404(ea_qs, id=exam_id)
+    else:
+        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
+    raw_req = getattr(request, '_request', request)
+    raw_req.user = request.user
+    return faculty_course_cqi_publish(raw_req, ea.section.teaching_assignment_id)
 
 
 @api_view(['GET', 'PUT'])
@@ -7976,16 +8066,28 @@ def faculty_course_cqi_draft(request, ta_id: int):
 
     if request.method == 'GET':
         obj = AcV2CqiAssignment.objects.filter(teaching_assignment=ta).first()
-        if obj is None:
+        draft_entries = (obj.draft_entries if obj else {}) or {}
+        if not draft_entries:
+            try:
+                for acv2_sec in ta.acv2_sections.all():
+                    for ea in acv2_sec.exam_assignments.all():
+                        if str(ea.exam or '').lower().startswith('cqi') or str(ea.exam_display_name or '').lower().startswith('cqi'):
+                            d = getattr(ea, 'draft_data', {}) or {}
+                            if isinstance(d, dict) and d.get('cqi_entries'):
+                                draft_entries = d.get('cqi_entries')
+                                break
+            except Exception:
+                pass
+        if not draft_entries and obj is None:
             return Response({'draft': None})
         return Response({
             'draft': {
-                'co_numbers': obj.co_numbers or [],
-                'threshold_percent': float(obj.threshold_percent or 58.0),
-                'entries': obj.draft_entries or {},
+                'co_numbers': (obj.co_numbers if obj else []) or [],
+                'threshold_percent': float((obj.threshold_percent if obj else 58.0) or 58.0),
+                'entries': draft_entries or {},
             },
             'updated_at': obj.draft_updated_at.isoformat() if getattr(obj, 'draft_updated_at', None) else None,
-            'updated_by': obj.draft_updated_by,
+            'updated_by': obj.draft_updated_by if obj else None,
         })
 
     # If CQI is already published and publish control locks it, block draft edits.
@@ -8033,7 +8135,21 @@ def faculty_course_cqi_draft(request, ta_id: int):
 
     obj.draft_entries = entries
     obj.draft_updated_by = user_id
+    obj.draft_updated_at = timezone.now()
     obj.save(update_fields=['co_numbers', 'threshold_percent', 'draft_entries', 'draft_updated_by', 'draft_updated_at'])
+
+    # Also persist draft entries onto any CQI ExamAssignments
+    try:
+        for acv2_sec in ta.acv2_sections.all():
+            for ea in acv2_sec.exam_assignments.all():
+                if str(ea.exam or '').lower().startswith('cqi') or str(ea.exam_display_name or '').lower().startswith('cqi'):
+                    draft_data = dict(ea.draft_data or {})
+                    draft_data['cqi_entries'] = entries
+                    draft_data['co_numbers'] = co_numbers or []
+                    ea.draft_data = draft_data
+                    ea.save(update_fields=['draft_data'])
+    except Exception:
+        pass
 
     return Response({
         'status': 'ok',
@@ -8056,17 +8172,30 @@ def faculty_course_cqi_published(request, ta_id: int):
         ta = get_object_or_404(_ta_qs_cqi_pub, id=ta_id, staff__user=request.user, is_active=True)
 
     obj = AcV2CqiAttained.objects.filter(teaching_assignment=ta).first()
-    if obj is None:
+    pub_entries = (obj.entries if obj else {}) or {}
+    if not pub_entries:
+        try:
+            for acv2_sec in ta.acv2_sections.all():
+                for ea in acv2_sec.exam_assignments.all():
+                    if str(ea.exam or '').lower().startswith('cqi') or str(ea.exam_display_name or '').lower().startswith('cqi'):
+                        d = getattr(ea, 'published_data', {}) or {}
+                        if isinstance(d, dict) and d.get('cqi_entries'):
+                            pub_entries = d.get('cqi_entries')
+                            break
+        except Exception:
+            pass
+
+    if not pub_entries and obj is None:
         return Response({'published': None})
 
-    pc = check_cqi_publish_control(obj)
+    pc = check_cqi_publish_control(obj) if obj else {'publish_control_enabled': False, 'is_locked': False, 'is_editable': True}
 
     return Response({
         'published': {
-            'co_numbers': obj.co_numbers or [],
-            'entries': obj.entries or {},
-            'published_at': obj.published_at.isoformat() if getattr(obj, 'published_at', None) else None,
-            'published_by': obj.published_by,
+            'co_numbers': (obj.co_numbers if obj else []) or [],
+            'entries': pub_entries or {},
+            'published_at': obj.published_at.isoformat() if getattr(obj, 'published_at', None) else (timezone.now().isoformat() if pub_entries else None),
+            'published_by': obj.published_by if obj else None,
         },
         'publish_control': pc,
     })
@@ -8126,6 +8255,7 @@ def faculty_course_cqi_publish(request, ta_id: int):
             'entries': {},
             'co_numbers': [],
             'published_by': user_id,
+            'published_at': timezone.now(),
             'edit_window_until': None,
             'has_pending_edit_request': False,
         },
@@ -8144,12 +8274,81 @@ def faculty_course_cqi_publish(request, ta_id: int):
     _existing_co_nums = set(obj.co_numbers or [])
     _existing_co_nums.update(co_numbers or [])
 
+    now = timezone.now()
     obj.entries = merged_entries
     obj.co_numbers = sorted(_existing_co_nums)
     obj.published_by = user_id
+    obj.published_at = now
     obj.edit_window_until = None
     obj.has_pending_edit_request = False
-    obj.save(update_fields=['entries', 'co_numbers', 'published_by', 'edit_window_until', 'has_pending_edit_request'])
+    obj.save(update_fields=['entries', 'co_numbers', 'published_by', 'published_at', 'edit_window_until', 'has_pending_edit_request'])
+
+    # Also mark any CQI exam assignments on this teaching assignment as PUBLISHED and save data
+    try:
+        from accounts.models import StudentProfile
+        for acv2_sec in ta.acv2_sections.all():
+            for ea in acv2_sec.exam_assignments.all():
+                if str(ea.exam or '').lower().startswith('cqi') or str(ea.exam_display_name or '').lower().startswith('cqi'):
+                    ea.status = 'PUBLISHED'
+                    ea.published_at = now
+                    ea.published_by = request.user
+                    pub_data = dict(ea.published_data or {})
+                    pub_data['cqi_entries'] = merged_entries
+                    pub_data['co_numbers'] = sorted(_existing_co_nums)
+                    ea.published_data = pub_data
+                    draft_data = dict(ea.draft_data or {})
+                    draft_data['cqi_entries'] = merged_entries
+                    draft_data['co_numbers'] = sorted(_existing_co_nums)
+                    ea.draft_data = draft_data
+                    ea.save(update_fields=['status', 'published_at', 'published_by', 'published_data', 'draft_data'])
+
+                    # Materialize into AcV2StudentMark
+                    for sid_str, co_dict in merged_entries.items():
+                        if isinstance(co_dict, dict):
+                            sp = None
+                            if str(sid_str).isdigit():
+                                sp = StudentProfile.objects.filter(id=int(sid_str)).first()
+                            if not sp:
+                                sp = StudentProfile.objects.filter(reg_no=str(sid_str)).first()
+                            if sp:
+                                valid_marks = {k: float(v) for k, v in co_dict.items() if v is not None}
+                                sm_obj, _ = AcV2StudentMark.objects.get_or_create(
+                                    exam_assignment=ea,
+                                    student=sp,
+                                    defaults={
+                                        'reg_no': sp.reg_no or '',
+                                        'student_name': str(getattr(sp.user, 'get_full_name', lambda: '')() or sp.reg_no or ''),
+                                        'co_marks': valid_marks,
+                                        'total_marks': sum(valid_marks.values()) if valid_marks else 0,
+                                    },
+                                )
+                                sm_obj.reg_no = sp.reg_no or ''
+                                sm_obj.student_name = str(getattr(sp.user, 'get_full_name', lambda: '')() or sp.reg_no or '')
+                                sm_obj.co_marks = valid_marks
+                                sm_obj.total_marks = sum(valid_marks.values()) if valid_marks else 0
+                                sm_obj.save()
+    except Exception:
+        pass
+
+    # Keep draft_entries in sync with published entries so drafts always have the data
+    try:
+        draft_obj, _ = AcV2CqiAssignment.objects.get_or_create(
+            teaching_assignment=ta,
+            defaults={
+                'co_numbers': sorted(_existing_co_nums),
+                'threshold_percent': 58.0,
+                'draft_entries': merged_entries,
+                'draft_updated_by': user_id,
+                'draft_updated_at': now,
+            },
+        )
+        draft_obj.draft_entries = merged_entries
+        draft_obj.co_numbers = sorted(_existing_co_nums)
+        draft_obj.draft_updated_by = user_id
+        draft_obj.draft_updated_at = now
+        draft_obj.save(update_fields=['draft_entries', 'co_numbers', 'draft_updated_by', 'draft_updated_at'])
+    except Exception:
+        pass
 
     try:
         for acv2_section in ta.acv2_sections.select_related('course__class_type').all():

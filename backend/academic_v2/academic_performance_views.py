@@ -2284,24 +2284,19 @@ class StudentAnalysisChartsView(APIView):
         }, status=status.HTTP_200_OK)
 
 class StudentReportPDFView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, student_id=None):
         """Generate a one‑page PDF report for a student.
         The view mirrors the data returned by `StudentProgressReportView`
         but renders it as a nicely formatted PDF using ReportLab.
         """
-        # Resolve student identifier
+        # Resolve student identifier strictly; return 404 if missing or invalid
         if not student_id:
-            student_id = request.query_params.get('student_id') or request.query_params.get('id')
-        student = None
-        if student_id:
-            student = StudentProfile.objects.filter(
-                Q(id=student_id if str(student_id).isdigit() else None) |
-                Q(reg_no__iexact=str(student_id))
-            ).select_related('user', 'home_department', 'section', 'section__batch', 'section__semester').first()
-        if not student:
-            student = StudentProfile.objects.select_related('user', 'home_department', 'section', 'section__batch', 'section__semester').first()
+            return Response({"detail": "student_id parameter is required"}, status=status.HTTP_404_NOT_FOUND)
+        student = StudentProfile.objects.filter(
+            Q(id=student_id) if str(student_id).isdigit() else Q(reg_no__iexact=str(student_id))
+        ).select_related('user', 'home_department', 'section', 'section__batch', 'section__semester').first()
         if not student:
             return Response({"detail": "Student not found"}, status=status.HTTP_404_NOT_FOUND)
         # Authorization check
@@ -2310,6 +2305,7 @@ class StudentReportPDFView(APIView):
             assert_student_in_scope(scope, student)
         except PermissionDenied:
             return Response({"detail": "Requested student is outside your authorized scope."}, status=status.HTTP_403_FORBIDDEN)
+
         # Determine exam type and subject filter
         exam_type = request.query_params.get('exam', 'CIA 1').strip().upper()
         subject_filter = request.query_params.get('subject', '').strip()
@@ -2412,7 +2408,7 @@ class StudentReportPDFView(APIView):
         doc.build(elements)
         buffer.seek(0)
         response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
-        filename = f"student_report_{student.reg_no or student.id}.pdf"
+        filename = f"Academic_Performance_{student.reg_no or student.id}.pdf"
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
 

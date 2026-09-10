@@ -416,8 +416,14 @@ def compute_section_internal_marks(section) -> List[Dict]:
                     if 1 <= co_idx <= 5:
                         co_totals[co_idx] += Decimal(str(value))
 
+                reg_no = str(student_info.get(sid, {}).get('reg_no') or '')
+                s_dict = (
+                    (cqi_entries.get(sid) if isinstance(cqi_entries.get(sid), dict) else None)
+                    or (cqi_entries.get(reg_no) if reg_no and isinstance(cqi_entries.get(reg_no), dict) else None)
+                    or {}
+                )
                 for co_n in covered_cos:
-                    raw_in = cqi_entries.get(sid, {}).get(f'co{co_n}') if isinstance(cqi_entries.get(sid), dict) else None
+                    raw_in = s_dict.get(f'co{co_n}')
                     if raw_in is None:
                         continue
                     try:

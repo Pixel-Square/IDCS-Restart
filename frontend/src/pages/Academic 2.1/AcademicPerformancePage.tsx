@@ -288,20 +288,16 @@ export default function AcademicPerformancePage() {
         qp_type: selectedExamType,
       });
       setData(res);
-      // Set active tab and any default filters based on user_context only once
+      // Set active tab based on user_context only once. Do NOT modify filter state here to avoid triggering analytics refetch loop.
       if (activeTab === '') {
         if (res.user_context?.is_principal) {
           setActiveTab('principal');
         } else if (res.user_context?.is_hod) {
           setActiveTab('hod');
-          if (res.user_context.department_code) setSelectedDept(res.user_context.department_code);
+          // Department will be selected manually by the user.
         } else if (res.user_context?.is_advisor) {
           setActiveTab('advisor');
-          if (res.user_context.department_code) setSelectedDept(res.user_context.department_code);
-          if (res.user_context.advised_sections?.length) {
-            setSelectedYear(res.user_context.advised_sections[0].batch || '');
-            setSelectedSem(String(res.user_context.advised_sections[0].semester || ''));
-          }
+          // Filters (year, semester, department) remain unset; user selects them.
         } else if (res.user_context?.is_faculty) {
           setActiveTab('faculty');
         } else if (res.user_context?.is_student) {
@@ -510,8 +506,9 @@ export default function AcademicPerformancePage() {
 
   // Reset drilldowns when core filters change to avoid stale data
   useEffect(() => {
-    // Only reset drill-down state if currently drilled down without restarting college load
-    if (hierarchyLevel !== HierarchyLevel.COLLEGE) {
+    // Reset drill-down state only when NOT in an active drill-down (i.e., at college level)
+    if (hierarchyLevel === HierarchyLevel.COLLEGE) {
+      // Ensure any stray drill-down state is cleared when core filters change at top level
       setDeptDrilldown(null);
       setDrilldownData(null);
       setDrilldownError('');
@@ -522,8 +519,6 @@ export default function AcademicPerformancePage() {
       setSubjectDetail(null);
       setSubjectError('');
       setSubjectSectionFilter('');
-      setHierarchyLevel(HierarchyLevel.COLLEGE);
-      setBreadcrumbPath([{ id: 'college', label: 'College', type: 'COLLEGE' }]);
     }
   }, [selectedYear, selectedSem, selectedSection, selectedExamType, selectedDept]);
 
@@ -738,6 +733,9 @@ export default function AcademicPerformancePage() {
   // context while preserving the selected Year / Semester / Assessment / Section.
   const openDepartmentDrilldown = async (deptCode: string, deptName: string) => {
     setHierarchyLevel(HierarchyLevel.DEPARTMENT);
+    // Update filter state for department drilldown
+    setSelectedDept(deptCode);
+    setSelectedDeptName(deptName);
     // Set department context and initialize loading states
     setDeptDrilldown({ code: deptCode, name: deptName });
     setDrilldownLoading(true);
@@ -750,25 +748,25 @@ export default function AcademicPerformancePage() {
       { id: deptCode, label: deptName, type: 'DEPARTMENT' }
     ]);
 
-      try {
-        const [res, facRows] = await Promise.all([
-          fetchDepartmentAnalysis({
-            dept: deptCode,
-            year: selectedYear,
-            sem: selectedSem,
-            exam: selectedExamType || undefined,
-            section: selectedSection || undefined,
-          }),
-          fetchFacultyWiseAnalytics(deptCode),
-        ]);
-        setDrilldownData(res);
-        setFacultyRows(facRows || []);
-      } catch {
-        setDrilldownError('Unable to load department analysis. Please try again.');
-      } finally {
-        setDrilldownLoading(false);
-        setFacultyRowsLoading(false);
-      }
+    try {
+      const [res, facRows] = await Promise.all([
+        fetchDepartmentAnalysis({
+          dept: deptCode,
+          year: selectedYear,
+          sem: selectedSem,
+          exam: selectedExamType || undefined,
+          section: selectedSection || undefined,
+        }),
+        fetchFacultyWiseAnalytics(deptCode),
+      ]);
+      setDrilldownData(res);
+      setFacultyRows(facRows || []);
+    } catch {
+      setDrilldownError('Unable to load department analysis. Please try again.');
+    } finally {
+      setDrilldownLoading(false);
+      setFacultyRowsLoading(false);
+    }
   };
 
   const closeDepartmentDrilldown = () => {
