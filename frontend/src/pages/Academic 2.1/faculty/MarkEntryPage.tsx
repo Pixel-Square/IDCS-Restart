@@ -2253,6 +2253,27 @@ export default function MarkEntryPage() {
         </div>
       )}
 
+      {/* SSA Workflow Banner — shown when exam is SSA type */}
+      {examInfo.name && /ssa/i.test(examInfo.name) && (
+        <div className="shrink-0 flex items-center justify-between gap-4 bg-indigo-50 border border-indigo-200 rounded-xl px-5 py-3">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0">
+              <Send className="w-4 h-4 text-white" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-indigo-900">SSA Online Submission Portal</p>
+              <p className="text-xs text-indigo-700 mt-0.5">Students submit their work online. View submissions and enter marks from the SSA portal — marks will auto-sync here.</p>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate(`/academic-v2/ssa/submissions/${examId}`)}
+            className="shrink-0 px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 flex items-center gap-2 transition-colors"
+          >
+            <Eye className="w-4 h-4" /> View SSA Submissions
+          </button>
+        </div>
+      )}
+
       {/* ───── Toolbar + Table ───── */}
       <>
       <div className="bg-white rounded-xl shadow-sm border shrink-0">

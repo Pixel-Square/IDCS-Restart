@@ -1361,11 +1361,15 @@ class SectionSubjectsStaffView(APIView):
                     batch_dept_id2 = sec.batch.department_id
                 except Exception:
                     pass
+                reg_obj = getattr(sec.batch, 'regulation', None)
                 if curriculum_dept_ids:
                     qs_all = CurriculumDepartment.objects.filter(
                         department_id__in=curriculum_dept_ids,
                         semester__number=sem_num,
-                    ).order_by('course_code', 'department_id')
+                    )
+                    if reg_obj:
+                        qs_all = qs_all.filter(regulation=reg_obj)
+                    qs_all = qs_all.order_by('course_code', 'department_id')
                 else:
                     all_ids = list(set(home_dept_ids + [x for x in [managing_dept_id2, batch_dept_id2] if x]))
                     if not all_ids:
@@ -1374,7 +1378,10 @@ class SectionSubjectsStaffView(APIView):
                     qs_all = CurriculumDepartment.objects.filter(
                         department_id__in=all_ids,
                         semester__number=sem_num,
-                    ).order_by('course_code', 'department_id')
+                    )
+                    if reg_obj:
+                        qs_all = qs_all.filter(regulation=reg_obj)
+                    qs_all = qs_all.order_by('course_code', 'department_id')
                 seen: dict = {}
                 for c in qs_all:
                     key = f'code:{c.course_code}' if c.course_code else f'name:{(c.course_name or "").strip().lower()}' or f'pk:{c.pk}'
@@ -1387,7 +1394,11 @@ class SectionSubjectsStaffView(APIView):
                 dept = getattr(sec.batch.course, 'department', None)
                 if dept is None:
                     return Response({'results': []})
-                qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem_num)
+                reg = getattr(sec.batch, 'regulation', None)
+                if reg:
+                    qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem_num, regulation=reg)
+                else:
+                    qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem_num)
             # build a map from curriculum_row id -> staff (from TeachingAssignment)
             from academics.models import TeachingAssignment
 
@@ -2057,8 +2068,10 @@ class TimetableTemplateViewSet(viewsets.ModelViewSet):
                 template.parity = semester_type
                 template.description = description
                 template.save()
-                # delete old slots
+                # delete old slots and configs
                 template.periods.all().delete()
+                template.config_columns.all().delete()
+                template.config_rows.all().delete()
             except TimetableTemplate.DoesNotExist:
                 template = TimetableTemplate.objects.create(
                     name=name,
@@ -2076,7 +2089,8 @@ class TimetableTemplateViewSet(viewsets.ModelViewSet):
                 is_active=True
             )
 
-        # Create slots based on columns
+        # Create slots and config data based on columns/rows
+        from .models import TimetableConfigColumn, TimetableConfigRow
         import datetime
         import re
         
@@ -2118,6 +2132,21 @@ class TimetableTemplateViewSet(viewsets.ModelViewSet):
                 is_lunch=is_lunch,
                 start_time=start_time,
                 end_time=end_time
+            )
+            
+            TimetableConfigColumn.objects.create(
+                template=template,
+                frontend_id=col.get('id', f'col-{idx+1}'),
+                title=col.get('title', f'Column {idx+1}'),
+                period=period_name,
+                timing=col.get('timing', '')
+            )
+            
+        for idx, row in enumerate(rows):
+            TimetableConfigRow.objects.create(
+                template=template,
+                frontend_id=row.get('id', f'row-{idx+1}'),
+                day=row.get('day', f'Day {idx+1}')
             )
 
         # Return the template
@@ -3844,3 +3873,49 @@ class PeriodSwapRequestActionView(APIView):
         
         else:
             return Response({'error': 'Invalid action'}, status=400)
+
+
+from .models import CreditAllocation, ClassTypeException, GroupAllocation, VenueExceptionRule, CourseExceptionRule
+from .serializers import CreditAllocationSerializer, ClassTypeExceptionSerializer, GroupAllocationSerializer, VenueExceptionRuleSerializer, CourseExceptionRuleSerializer
+
+class CreditAllocationViewSet(viewsets.ModelViewSet):
+    queryset = CreditAllocation.objects.all()
+    serializer_class = CreditAllocationSerializer
+    permission_classes = [IsAuthenticated]
+
+
+class ClassTypeExceptionViewSet(viewsets.ModelViewSet):
+    queryset = ClassTypeException.objects.all()
+    serializer_class = ClassTypeExceptionSerializer
+    permission_classes = [IsAuthenticated]
+
+
+class GroupAllocationViewSet(viewsets.ModelViewSet):
+    queryset = GroupAllocation.objects.all()
+    serializer_class = GroupAllocationSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'frontend_id'
+
+class VenueExceptionRuleViewSet(viewsets.ModelViewSet):
+    queryset = VenueExceptionRule.objects.all()
+    serializer_class = VenueExceptionRuleSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'frontend_id'
+
+
+from .models import CourseExceptionRule, SpecialPeriodRule
+from .serializers import CourseExceptionRuleSerializer, SpecialPeriodRuleSerializer
+
+class CourseExceptionRuleViewSet(viewsets.ModelViewSet):
+    queryset = CourseExceptionRule.objects.all()
+    serializer_class = CourseExceptionRuleSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'frontend_id'
+
+
+class SpecialPeriodRuleViewSet(viewsets.ModelViewSet):
+    queryset = SpecialPeriodRule.objects.all()
+    serializer_class = SpecialPeriodRuleSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'frontend_id'
+

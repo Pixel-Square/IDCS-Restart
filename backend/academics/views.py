@@ -339,6 +339,10 @@ class MyTeachingAssignmentsView(APIView):
 
     def get(self, request):
         user = request.user
+        staff_profile = get_user_staff_profile(user)
+        if not staff_profile:
+            return Response([])
+
         base_qs = TeachingAssignment.objects.select_related(
             'subject',
             'curriculum_row',
@@ -351,40 +355,40 @@ class MyTeachingAssignmentsView(APIView):
             'section__batch__course__department',
         )
 
-        qs = base_qs.filter(is_active=True)
+        staff_qs = base_qs.filter(Q(staff__user=user) | Q(staff=staff_profile))
 
-        staff_profile = get_user_staff_profile(user)
-        if not staff_profile:
-            return Response([])
+        ay_param = request.query_params.get('academic_year_id') or request.query_params.get('academic_year')
+        active_ay = AcademicYear.objects.filter(is_active=True).first()
 
-        # staff: only their teaching assignments (do not expand to department-level for HOD/ADVISOR here)
-        # Prefer matching by user link; it's stable even if staff profile details change.
-        qs_staff = qs.filter(staff__user=user)
-        # Fallback: legacy / direct FK match.
-        if not qs_staff.exists():
-            qs_staff = qs.filter(staff=staff_profile)
-        # Final fallback: if assignments exist but are not marked active, include active academic year.
-        if not qs_staff.exists():
-            qs_staff = base_qs.filter(staff__user=user, academic_year__is_active=True)
+        if ay_param and str(ay_param).lower() == 'all':
+            qs = staff_qs
+        elif ay_param and str(ay_param).isdigit():
+            # Specific historical or current academic year requested
+            qs = staff_qs.filter(academic_year_id=int(ay_param))
+        else:
+            # Default to active academic year
+            if active_ay:
+                qs = staff_qs.filter(academic_year=active_ay)
+            else:
+                qs = staff_qs.filter(is_active=True)
+                if not qs.exists():
+                    latest_ay = AcademicYear.objects.order_by('-id').first()
+                    if latest_ay:
+                        qs = staff_qs.filter(academic_year=latest_ay)
+                    else:
+                        qs = staff_qs
 
-        # Backfill from StudentSubjectBatch — always run to pick up newly
-        # assigned batches (e.g. elective batches assigned by another staff).
-        try:
-            _ensure_teaching_assignments_from_subject_batches(staff_profile)
-        except Exception:
-            pass
-        if not qs_staff.exists():
-            qs_staff = qs.filter(staff__user=user)
-            if not qs_staff.exists():
-                qs_staff = qs.filter(staff=staff_profile)
-
-        # Final fallback: do not hide assignments solely due to flags.
-        # If the staff has any TeachingAssignment rows at all, return them.
-        if not qs_staff.exists():
-            qs_staff = base_qs.filter(staff__user=user)
-            if not qs_staff.exists():
-                qs_staff = base_qs.filter(staff=staff_profile)
-        qs = qs_staff
+        # Backfill from StudentSubjectBatch if empty on active year
+        if not qs.exists() and (not ay_param or (active_ay and str(ay_param) == str(active_ay.id))):
+            try:
+                _ensure_teaching_assignments_from_subject_batches(staff_profile)
+                staff_qs = base_qs.filter(Q(staff__user=user) | Q(staff=staff_profile))
+                if active_ay:
+                    qs = staff_qs.filter(academic_year=active_ay)
+                else:
+                    qs = staff_qs.filter(is_active=True)
+            except Exception:
+                pass
 
         ser = TeachingAssignmentInfoSerializer(qs.order_by('section__name', 'id'), many=True)
         return Response(ser.data)
@@ -2156,32 +2160,55 @@ class SectionAdvisorViewSet(viewsets.ModelViewSet):
         # users with explicit permission may view advisor assignments
         # but visibility should be limited to departments the user is effective for
         if user.is_superuser:
-            return self.queryset
+            qs = self.queryset
+        else:
+            staff_profile = getattr(user, 'staff_profile', None)
+            if not staff_profile:
+                return SectionAdvisor.objects.none()
 
-        staff_profile = getattr(user, 'staff_profile', None)
-        if not staff_profile:
-            return SectionAdvisor.objects.none()
+            # compute departments the user effectively represents (own dept + HOD/AHOD mappings)
+            allowed_depts = get_user_effective_departments(user)
 
-        # compute departments the user effectively represents (own dept + HOD/AHOD mappings)
-        allowed_depts = get_user_effective_departments(user)
-
-        # If user has assign permission, allow viewing assignments for their departments
-        if 'academics.assign_advisor' in perms:
-            if allowed_depts:
-                return self.queryset.filter(
-                    Q(section__batch__course__department_id__in=allowed_depts) |
-                    Q(section__batch__department_id__in=allowed_depts) |
-                    Q(section__managing_department_id__in=allowed_depts)
+            # If user has assign permission, allow viewing assignments for their departments
+            if 'academics.assign_advisor' in perms:
+                if allowed_depts:
+                    qs = self.queryset.filter(
+                        Q(section__batch__course__department_id__in=allowed_depts) |
+                        Q(section__batch__department_id__in=allowed_depts) |
+                        Q(section__managing_department_id__in=allowed_depts)
+                    )
+                else:
+                    return SectionAdvisor.objects.none()
+            else:
+                # fallback: HODs (role-based) can view for their HOD departments
+                hod_depts = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True)
+                qs = self.queryset.filter(
+                    Q(section__batch__course__department_id__in=hod_depts) |
+                    Q(section__batch__department_id__in=hod_depts) |
+                    Q(section__managing_department_id__in=hod_depts)
                 )
-            return SectionAdvisor.objects.none()
 
-        # fallback: HODs (role-based) can view for their HOD departments
-        hod_depts = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True)
-        return self.queryset.filter(
-            Q(section__batch__course__department_id__in=hod_depts) |
-            Q(section__batch__department_id__in=hod_depts) |
-            Q(section__managing_department_id__in=hod_depts)
-        )
+        # Apply query parameter filters
+        ay_param = self.request.query_params.get('academic_year_id') or self.request.query_params.get('academic_year')
+        if ay_param:
+            if str(ay_param).lower() != 'all':
+                qs = qs.filter(academic_year_id=ay_param)
+        else:
+            qs = qs.filter(academic_year__is_active=True)
+
+        sec_id = self.request.query_params.get('section_id') or self.request.query_params.get('section')
+        if sec_id:
+            qs = qs.filter(section_id=sec_id)
+
+        mixed_id = self.request.query_params.get('mixed_section_id') or self.request.query_params.get('mixed_section')
+        if mixed_id:
+            qs = qs.filter(mixed_section_id=mixed_id)
+
+        if 'is_active' in self.request.query_params:
+            is_act = self.request.query_params.get('is_active').lower() in ('true', '1')
+            qs = qs.filter(is_active=is_act)
+
+        return qs
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -2641,110 +2668,141 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
         # Academic Controller (IQAC / OBE master), superusers, and users with global access
         # need full assignment visibility even when the user does not have a linked staff profile.
         if _user_is_iqac_admin(user) or user.is_superuser or ('academics.assign_teaching' in perms) or ('academics.view_all_sections' in perms):
-            return self.queryset
+            qs = self.queryset
+        else:
+            staff_profile = getattr(user, 'staff_profile', None)
+            if not staff_profile:
+                return TeachingAssignment.objects.none()
+            # Only include assignments for sections the user advises (active mapping)
+            # or assignments belonging to the staff themselves. Users with the
+            # `academics.view_assigned_subjects` permission (or superusers) are
+            # allowed to see elective assignments across departments as well,
+            # but should NOT see every regular assignment across the system.
+            advisor_section_ids = list(SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True, academic_year__is_active=True).values_list('section_id', flat=True))
 
-        staff_profile = getattr(user, 'staff_profile', None)
-        if not staff_profile:
-            return TeachingAssignment.objects.none()
-        # Only include assignments for sections the user advises (active mapping)
-        # or assignments belonging to the staff themselves. Users with the
-        # `academics.view_assigned_subjects` permission (or superusers) are
-        # allowed to see elective assignments across departments as well,
-        # but should NOT see every regular assignment across the system.
-        advisor_section_ids = list(SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True, academic_year__is_active=True).values_list('section_id', flat=True))
+            from django.db.models import Q
 
-        from django.db.models import Q
-
-        # Get HOD-accessible department sections
-        hod_department_section_ids = []
-        hod_depts = []
-        try:
-            # Check if user is HOD of any department
-            hod_depts = list(DepartmentRole.objects.filter(
-                staff=staff_profile,
-                role__iexact='HOD',
-                academic_year__is_active=True
-            ).values_list('department_id', flat=True))
-            
-            if hod_depts:
-                # Get all sections from HOD's department(s)
-                from academics.models import Section
-                own_sections = Section.objects.filter(
-                    Q(batch__course__department_id__in=hod_depts) |
-                    Q(batch__department_id__in=hod_depts) |
-                    Q(managing_department_id__in=hod_depts),
-                    semester__isnull=False
-                ).values_list('id', flat=True)
+            # Get HOD-accessible department sections
+            hod_department_section_ids = []
+            hod_depts = []
+            try:
+                # Check if user is HOD of any department
+                hod_depts = list(DepartmentRole.objects.filter(
+                    staff=staff_profile,
+                    role__iexact='HOD',
+                    academic_year__is_active=True
+                ).values_list('department_id', flat=True))
                 
-                # S&H shared sections containing students from HOD's department(s)
-                from django.db.models import Exists, OuterRef
-                from academics.models import StudentSectionAssignment as _SSA
-                has_student_from_dept = _SSA.objects.filter(
-                    section_id=OuterRef('pk'),
-                    end_date__isnull=True,
-                    student__home_department_id__in=hod_depts,
-                )
-                student_sections = Section.objects.filter(
-                    Exists(has_student_from_dept)
-                ).values_list('id', flat=True)
-                
-                hod_department_section_ids = list(set(own_sections) | set(student_sections))
-        except Exception:
-            pass
-
-        # If caller has global view permission, expose elective assignments
-        # but restrict visibility to assignments whose subject/row department
-        # matches the user's effective departments (unless superuser).
-        if 'academics.view_assigned_subjects' in perms or user.is_superuser:
-            # base: elective assignments
-            q = Q(elective_subject__isnull=False)
-            # include advisor sections, HOD department sections, and own assignments always
-            if advisor_section_ids:
-                q |= Q(section_id__in=advisor_section_ids)
-            if hod_department_section_ids:
-                q |= Q(section_id__in=hod_department_section_ids)
-            q |= Q(staff__user=getattr(user, 'id', None))
-
-            # if not superuser, further restrict elective assignments to
-            # those belonging to departments the user is effective for
-            if not user.is_superuser:
-                allowed_depts = get_user_effective_departments(user)
-                if allowed_depts:
-                    dept_q = (
-                        Q(section__batch__course__department_id__in=allowed_depts)
-                        | Q(section__batch__department_id__in=allowed_depts)
-                        | Q(section__managing_department_id__in=allowed_depts)
-                        | Q(curriculum_row__department_id__in=allowed_depts)
-                        # match elective options by their explicit department OR their parent's department
-                        | Q(elective_subject__department_id__in=allowed_depts)
-                        | Q(elective_subject__parent__department_id__in=allowed_depts)
+                if hod_depts:
+                    # Get all sections from HOD's department(s)
+                    from academics.models import Section
+                    own_sections = Section.objects.filter(
+                        Q(batch__course__department_id__in=hod_depts) |
+                        Q(batch__department_id__in=hod_depts) |
+                        Q(managing_department_id__in=hod_depts),
+                        semester__isnull=False
+                    ).values_list('id', flat=True)
+                    
+                    # S&H shared sections containing students from HOD's department(s)
+                    from django.db.models import Exists, OuterRef
+                    from academics.models import StudentSectionAssignment as _SSA
+                    has_student_from_dept = _SSA.objects.filter(
+                        section_id=OuterRef('pk'),
+                        end_date__isnull=True,
+                        student__home_department_id__in=hod_depts,
                     )
-                    # apply department filter only to elective assignments part
-                    q = (Q(elective_subject__isnull=False) & dept_q) | Q(section_id__in=advisor_section_ids)
-                    if hod_department_section_ids:
-                        q |= Q(section_id__in=hod_department_section_ids)
-                    q |= Q(staff__user=getattr(user, 'id', None))
+                    student_sections = Section.objects.filter(
+                        Exists(has_student_from_dept)
+                    ).values_list('id', flat=True)
+                    
+                    hod_department_section_ids = list(set(own_sections) | set(student_sections))
+            except Exception:
+                pass
+
+            # If caller has global view permission, expose elective assignments
+            # but restrict visibility to assignments whose subject/row department
+            # matches the user's effective departments (unless superuser).
+            if 'academics.view_assigned_subjects' in perms or user.is_superuser:
+                # base: elective assignments
+                q = Q(elective_subject__isnull=False)
+                # include advisor sections, HOD department sections, and own assignments always
+                if advisor_section_ids:
+                    q |= Q(section_id__in=advisor_section_ids)
+                if hod_department_section_ids:
+                    q |= Q(section_id__in=hod_department_section_ids)
+                q |= Q(staff__user=getattr(user, 'id', None))
+
+                # if not superuser, further restrict elective assignments to
+                # those belonging to departments the user is effective for
+                if not user.is_superuser:
+                    allowed_depts = get_user_effective_departments(user)
+                    if allowed_depts:
+                        dept_q = (
+                            Q(section__batch__course__department_id__in=allowed_depts)
+                            | Q(section__batch__department_id__in=allowed_depts)
+                            | Q(section__managing_department_id__in=allowed_depts)
+                            | Q(curriculum_row__department_id__in=allowed_depts)
+                            # match elective options by their explicit department OR their parent's department
+                            | Q(elective_subject__department_id__in=allowed_depts)
+                            | Q(elective_subject__parent__department_id__in=allowed_depts)
+                        )
+                        # apply department filter only to elective assignments part
+                        q = (Q(elective_subject__isnull=False) & dept_q) | Q(section_id__in=advisor_section_ids)
+                        if hod_department_section_ids:
+                            q |= Q(section_id__in=hod_department_section_ids)
+                        q |= Q(staff__user=getattr(user, 'id', None))
+                    else:
+                        # no effective departments -> fall back to advisor sections and own assignments
+                        q = Q(section_id__in=advisor_section_ids) | Q(staff__user=getattr(user, 'id', None))
+                        if hod_department_section_ids:
+                            q |= Q(section_id__in=hod_department_section_ids)
+
+                qs = self.queryset.filter(q)
+            else:
+                # Default: restrict to advisor sections, HOD department sections, HOD department staff, and own assignments
+                final_q = Q()
+                if advisor_section_ids:
+                    final_q |= Q(section_id__in=advisor_section_ids)
+                if hod_department_section_ids:
+                    final_q |= Q(section_id__in=hod_department_section_ids)
+                if hod_depts:
+                    final_q |= Q(staff__department_id__in=hod_depts)
+                final_q |= Q(staff__user=getattr(user, 'id', None))
+
+                if final_q:
+                    qs = self.queryset.filter(final_q)
                 else:
-                    # no effective departments -> fall back to advisor sections and own assignments
-                    q = Q(section_id__in=advisor_section_ids) | Q(staff__user=getattr(user, 'id', None))
-                    if hod_department_section_ids:
-                        q |= Q(section_id__in=hod_department_section_ids)
+                    return TeachingAssignment.objects.none()
 
-            return self.queryset.filter(q)
+        # Apply query parameter filters
+        ay_param = self.request.query_params.get('academic_year_id') or self.request.query_params.get('academic_year')
+        if ay_param:
+            if str(ay_param).lower() != 'all':
+                qs = qs.filter(academic_year_id=ay_param)
+        else:
+            qs = qs.filter(academic_year__is_active=True)
 
-        # Default: restrict to advisor sections, HOD department sections, HOD department staff, and own assignments
-        final_q = Q()
-        if advisor_section_ids:
-            final_q |= Q(section_id__in=advisor_section_ids)
-        if hod_department_section_ids:
-            final_q |= Q(section_id__in=hod_department_section_ids)
-        if hod_depts:
-            final_q |= Q(staff__department_id__in=hod_depts)
-        final_q |= Q(staff__user=getattr(user, 'id', None))
+        sec_id = self.request.query_params.get('section_id') or self.request.query_params.get('section')
+        if sec_id:
+            qs = qs.filter(section_id=sec_id)
 
-        if final_q:
-            return self.queryset.filter(final_q)
-        return TeachingAssignment.objects.none()
+        staff_id = self.request.query_params.get('staff_id') or self.request.query_params.get('staff')
+        if staff_id:
+            qs = qs.filter(staff_id=staff_id)
+
+        subj_code = self.request.query_params.get('subject_code')
+        if subj_code:
+            qs = qs.filter(
+                Q(subject__code__iexact=subj_code) |
+                Q(curriculum_row__course_code__iexact=subj_code) |
+                Q(elective_subject__course_code__iexact=subj_code)
+            )
+
+        if 'is_active' in self.request.query_params:
+            is_act = self.request.query_params.get('is_active').lower() in ('true', '1')
+            qs = qs.filter(is_active=is_act)
+
+        return qs
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -3754,23 +3812,30 @@ class SpecialCourseAssessmentEditRequestViewSet(viewsets.ReadOnlyModelViewSet):
 
 class AcademicYearViewSet(viewsets.ModelViewSet):
     """Manage AcademicYear objects: create, list, activate/deactivate."""
-    queryset = AcademicYear.objects.all().order_by('-id')
+    queryset = AcademicYear.objects.all().order_by('-is_active', '-name', '-parity')
     serializer_class = AcademicYearSerializer
     permission_classes = (IsAuthenticated,)
+
+    def get_queryset(self):
+        return AcademicYear.objects.all().order_by('-is_active', '-name', '-parity')
 
     def perform_create(self, serializer):
         user = self.request.user
         perms = get_user_permissions(user)
         if not (user.is_staff or 'academics.manage_academicyears' in perms or user.has_perm('academics.add_academicyear')):
             raise PermissionDenied('You do not have permission to create academic years.')
-        serializer.save()
+        instance = serializer.save()
+        if instance.is_active:
+            AcademicYear.objects.exclude(pk=instance.pk).update(is_active=False)
 
     def perform_update(self, serializer):
         user = self.request.user
         perms = get_user_permissions(user)
         if not (user.is_staff or 'academics.manage_academicyears' in perms or user.has_perm('academics.change_academicyear')):
             raise PermissionDenied('You do not have permission to change academic years.')
-        serializer.save()
+        instance = serializer.save()
+        if instance.is_active:
+            AcademicYear.objects.exclude(pk=instance.pk).update(is_active=False)
 
     def perform_destroy(self, instance):
         user = self.request.user
@@ -3778,84 +3843,6 @@ class AcademicYearViewSet(viewsets.ModelViewSet):
         if not (user.is_staff or 'academics.manage_academicyears' in perms or user.has_perm('academics.delete_academicyear')):
             raise PermissionDenied('You do not have permission to delete academic years.')
         instance.delete()
-
-    def create(self, request, *args, **kwargs):
-        try:
-            return super().create(request, *args, **kwargs)
-        except PermissionDenied:
-            raise
-        except Exception as e:
-            import logging, traceback
-            logging.getLogger(__name__).exception('Error creating TeachingAssignment: %s', e)
-            tb = traceback.format_exc()
-            return Response({'detail': 'Failed to create teaching assignment.', 'error': str(e), 'trace': tb}, status=status.HTTP_400_BAD_REQUEST)
-
-    def perform_update(self, serializer):
-        user = self.request.user
-        perms = get_user_permissions(user)
-
-        # Allow if explicit change permission
-        if ('academics.change_teaching' in perms) or user.has_perm('academics.change_teachingassignment'):
-            serializer.save()
-            return
-
-        # Determine whether this is for an elective or regular subject
-        is_elective = False
-        ta = getattr(serializer, 'instance', None)
-        try:
-            if 'elective_subject_id' in getattr(serializer, 'initial_data', {}) or 'elective_subject' in getattr(serializer, 'validated_data', {}):
-                is_elective = True
-            elif ta and getattr(ta, 'elective_subject', None):
-                is_elective = True
-        except Exception:
-            is_elective = False
-
-        # Elective: require elective change permission or HOD of parent dept
-        if is_elective:
-            if ('academics.change_elective_teaching' in perms) or user.has_perm('academics.change_elective_teaching'):
-                serializer.save()
-                return
-            # check HOD of elective parent department
-            try:
-                es = None
-                if 'elective_subject_id' in getattr(serializer, 'initial_data', {}):
-                    from curriculum.models import ElectiveSubject
-                    es = ElectiveSubject.objects.filter(pk=int(serializer.initial_data.get('elective_subject_id'))).select_related('parent__department').first()
-                elif ta:
-                    es = getattr(ta, 'elective_subject', None)
-                parent_dept_id = getattr(getattr(es, 'parent', None), 'department_id', None)
-                es_dept_id = getattr(es, 'department_id', None)
-                staff_profile = getattr(user, 'staff_profile', None)
-                if staff_profile:
-                    hod_depts = list(DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True))
-                    # HOD of the parent dept (normal elective) OR HOD of the variant's own dept
-                    # (dept-core: parent is S&H but variant belongs to AI&DS HOD etc.)
-                    if (parent_dept_id and parent_dept_id in hod_depts) or (es_dept_id and es_dept_id in hod_depts):
-                        serializer.save()
-                        return
-            except Exception:
-                pass
-            raise PermissionDenied('You do not have permission to change this elective teaching assignment.')
-
-        # Regular subject: advisor for section required
-        staff_profile = getattr(user, 'staff_profile', None)
-        section_obj = None
-        try:
-            if 'section' in getattr(serializer, 'validated_data', {}):
-                section_obj = serializer.validated_data.get('section')
-            elif ta is not None:
-                section_obj = getattr(ta, 'section', None)
-        except Exception:
-            section_obj = getattr(ta, 'section', None) if ta is not None else None
-
-        if not section_obj:
-            raise PermissionDenied('You do not have permission to change this teaching assignment.')
-
-        is_advisor = SectionAdvisor.objects.filter(section=section_obj, advisor=staff_profile, is_active=True, academic_year__is_active=True).exists() if staff_profile else False
-        if not is_advisor:
-            raise PermissionDenied('You do not have permission to change this teaching assignment.')
-
-        serializer.save()
 
 
 class HODSectionsView(APIView):
@@ -11104,3 +11091,143 @@ class ExtStaffSignupView(APIView):
                 {'detail': f'Signup failed: {str(exc)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class ShiftSemesterView(APIView):
+    """
+    Globally activate a target AcademicYear and shift all sections to their calculated semesters.
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        user = request.user
+        perms = get_user_permissions(user)
+        roles = [r.name.upper() for r in user.roles.all()]
+        is_iqac = 'IQAC' in roles
+        is_admin = user.is_staff or 'ADMIN' in roles
+        if not (is_iqac or is_admin or 'academics.manage_academicyears' in perms or user.has_perm('academics.change_academicyear')):
+            raise PermissionDenied('Only IQAC or Admin administrators can perform system semester shifts.')
+
+        ay_id = request.data.get('academic_year_id')
+        if not ay_id:
+            return Response({'detail': 'academic_year_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .models import AcademicYear, Section, SystemTransitionLog, StudentProfile, Semester
+        try:
+            ay = AcademicYear.objects.get(pk=ay_id)
+        except AcademicYear.DoesNotExist:
+            return Response({'detail': 'Academic Year not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        from django.db import transaction
+        with transaction.atomic():
+            # 1. Activate this AcademicYear and deactivate others
+            AcademicYear.objects.exclude(pk=ay.pk).update(is_active=False)
+            ay.is_active = True
+            ay.save()
+
+            # Parse academic start year from name (e.g. '2025-2026')
+            try:
+                acad_start = int(str(ay.name).split('-')[0])
+            except Exception:
+                acad_start = None
+
+            parity_offset = 1 if (ay.parity or '').upper() == 'ODD' else 2
+
+            # 2. Recalculate semester for all sections & auto-mark finished batches as ALUMNI
+            sections = Section.objects.all().select_related('batch', 'semester')
+            updated = 0
+            graduated_students_count = 0
+
+            for sec in sections:
+                old_sem = sec.semester.number if sec.semester else None
+
+                # Calculate natural semester number
+                start_year = getattr(sec.batch, 'start_year', None)
+                if start_year is None and sec.batch:
+                    try:
+                        start_year = int(str(sec.batch.name).split('-')[0])
+                    except Exception:
+                        start_year = None
+
+                if acad_start is not None and start_year is not None:
+                    delta = acad_start - int(start_year)
+                    raw_sem = delta * 2 + parity_offset
+
+                    if raw_sem > 8:
+                        # Batch has finished 8th semester (Graduated / Alumni)
+                        # Keep section capped at Semester 8 to preserve 8th sem data
+                        sem8, _ = Semester.objects.get_or_create(number=8)
+                        sec.semester = sem8
+                        sec.save()
+
+                        # Mark active students of this graduated section as ALUMNI
+                        grad_count = StudentProfile.objects.filter(section=sec, status='ACTIVE').update(status='ALUMNI')
+                        graduated_students_count += grad_count
+                    elif raw_sem > 0:
+                        sem_obj, _ = Semester.objects.get_or_create(number=raw_sem)
+                        sec.semester = sem_obj
+                        sec.save()
+                    else:
+                        sec.semester = None
+                        sec.save()
+                else:
+                    sec.semester = None
+                    sec.save()
+
+                new_sem = sec.semester.number if sec.semester else None
+                if old_sem != new_sem:
+                    updated += 1
+
+            # 3. Record in SystemTransitionLog
+            details_str = (
+                f"Global semester shift to {ay.name} ({ay.parity or 'ALL'}). "
+                f"Recalculated {sections.count()} sections ({updated} modified, {graduated_students_count} students marked ALUMNI)."
+            )
+            log = SystemTransitionLog.objects.create(
+                academic_year=ay,
+                performed_by=user,
+                updated_count=updated,
+                details=details_str
+            )
+
+        return Response({
+            'message': f'Successfully shifted system to {ay.name} ({ay.parity or "ALL"}). {updated} sections updated, {graduated_students_count} students graduated.',
+            'updated_count': updated,
+            'graduated_count': graduated_students_count,
+            'log_id': log.id,
+        })
+
+
+class TransitionLogListView(APIView):
+    """
+    List history of system transitions and semester shifts.
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        perms = get_user_permissions(user)
+        roles = [r.name.upper() for r in user.roles.all()]
+        is_iqac = 'IQAC' in roles
+        is_admin = user.is_staff or 'ADMIN' in roles
+        if not (is_iqac or is_admin or 'academics.manage_academicyears' in perms or user.has_perm('academics.change_academicyear')):
+            raise PermissionDenied('Access denied.')
+
+        from .models import SystemTransitionLog
+        logs = SystemTransitionLog.objects.select_related('academic_year', 'performed_by').all().order_by('-performed_at')[:100]
+        data = [
+            {
+                'id': l.id,
+                'academic_year': {
+                    'id': l.academic_year.id,
+                    'name': l.academic_year.name,
+                } if l.academic_year else None,
+                'parity': l.academic_year.parity if l.academic_year else None,
+                'performed_by': l.performed_by.username if l.performed_by else 'System',
+                'performed_at': l.performed_at.isoformat(),
+                'updated_count': l.updated_count,
+                'details': l.details,
+            }
+            for l in logs
+        ]
+        return Response(data)

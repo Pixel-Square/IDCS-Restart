@@ -6,11 +6,14 @@ import {
   PBASFormFieldType,
   PBASNode,
   StaffMember,
+  fetchAllRoles,
+  fetchApprovalFlow,
   fetchStaffList,
   getDepartmentTree,
   getNodeApprovers,
   listCustomDepartments,
   saveStoredPBASTree,
+  updateApprovalFlow,
   updateDepartmentTree,
   updateNodeApprovers,
 } from '../../../services/pbas'
@@ -32,6 +35,7 @@ function draftToPayload(n: PBASNode): any {
     input_mode: n.input_mode || 'upload',
     form_schema: n.form_schema || [],
     pbas_credit: n.pbas_credit != null ? Number(n.pbas_credit) : null,
+    mentor_credit: n.mentor_credit != null ? Number(n.mentor_credit) : null,
     link: n.link ? n.link : null,
     uploaded_name: n.uploaded_name ? n.uploaded_name : null,
     limit: n.limit != null ? Number(n.limit) : null,
@@ -75,6 +79,113 @@ export default function PBASAdminPage() {
   const [formTargetLabel, setFormTargetLabel] = useState<string>('')
   const [editingFields, setEditingFields] = useState<PBASFormField[]>([])
   const [formMsg, setFormMsg] = useState('')
+
+  // Modal State for Node Configuration ("Config" button)
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false)
+  const [configTargetNode, setConfigTargetNode] = useState<PBASNode | null>(null)
+  const [configAudience, setConfigAudience] = useState<PBASAudience>('both')
+  const [configStaffCredit, setConfigStaffCredit] = useState<string>('')
+  const [configStudentCredit, setConfigStudentCredit] = useState<string>('')
+  const [configMentorCredit, setConfigMentorCredit] = useState<string>('')
+
+  // Open Config Modal for a node
+  const handleOpenConfigModal = (node: PBASNode) => {
+    setConfigTargetNode(node)
+    setConfigAudience(node.audience || 'both')
+    setConfigStaffCredit(node.pbas_credit != null ? String(node.pbas_credit) : '')
+    setConfigStudentCredit(node.pbas_credit != null ? String(node.pbas_credit) : '')
+    setConfigMentorCredit(node.mentor_credit != null ? String(node.mentor_credit) : '')
+    setIsConfigModalOpen(true)
+  }
+
+  const handleSaveConfig = () => {
+    if (!configTargetNode) return
+    const staffCr = configStaffCredit.trim() === '' ? null : parseInt(configStaffCredit, 10)
+    const studentCr = configStudentCredit.trim() === '' ? null : parseInt(configStudentCredit, 10)
+    const mentorCr = configMentorCredit.trim() === '' ? null : parseInt(configMentorCredit, 10)
+
+    // For faculty view, pbas_credit is staffCr; for student view, pbas_credit is studentCr; for both, pbas_credit can hold staff/student credit
+    const effectiveCredit = configAudience === 'student' ? studentCr : staffCr
+    const effectiveMentorCredit = (configAudience === 'student' || configAudience === 'both') ? mentorCr : null
+
+    handleNodeChange(configTargetNode.id, {
+      audience: configAudience,
+      pbas_credit: effectiveCredit,
+      mentor_credit: effectiveMentorCredit,
+    })
+
+    setIsConfigModalOpen(false)
+    setConfigTargetNode(null)
+  }
+
+  // Modal State for Approval Flow ("Approval Flow" button)
+  const [isFlowModalOpen, setIsFlowModalOpen] = useState(false)
+  const [availableRoles, setAvailableRoles] = useState<string[]>([])
+  const [staffFlowRoles, setStaffFlowRoles] = useState<string[]>([])
+  const [studentFlowRoles, setStudentFlowRoles] = useState<string[]>([])
+  const [flowLoading, setFlowLoading] = useState(false)
+  const [flowSaving, setFlowSaving] = useState(false)
+  const [flowMsg, setFlowMsg] = useState('')
+
+  // Open Approval Flow Modal
+  const handleOpenFlowModal = async () => {
+    setIsFlowModalOpen(true)
+    setFlowLoading(true)
+    setFlowMsg('')
+    try {
+      const [roles, flowData] = await Promise.all([fetchAllRoles(), fetchApprovalFlow()])
+      setAvailableRoles(roles)
+      setStaffFlowRoles(flowData.staff_flow || [])
+      setStudentFlowRoles(flowData.student_flow || [])
+    } catch (e: any) {
+      setFlowMsg(e?.message || 'Failed to load approval flow.')
+    } finally {
+      setFlowLoading(false)
+    }
+  }
+
+  // Add role step to staff flow
+  const handleAddStaffFlowRole = (role: string) => {
+    if (!role) return
+    setStaffFlowRoles((prev) => [...prev, role])
+  }
+
+  // Remove role step from staff flow
+  const handleRemoveStaffFlowRole = (idx: number) => {
+    setStaffFlowRoles((prev) => prev.filter((_, i) => i !== idx))
+  }
+
+  // Add role step to student flow
+  const handleAddStudentFlowRole = (role: string) => {
+    if (!role) return
+    setStudentFlowRoles((prev) => [...prev, role])
+  }
+
+  // Remove role step from student flow
+  const handleRemoveStudentFlowRole = (idx: number) => {
+    setStudentFlowRoles((prev) => prev.filter((_, i) => i !== idx))
+  }
+
+  // Save Approval Flow to DB
+  const handleSaveApprovalFlow = async () => {
+    setFlowSaving(true)
+    setFlowMsg('')
+    try {
+      await updateApprovalFlow({
+        staff_flow: staffFlowRoles,
+        student_flow: studentFlowRoles,
+      })
+      setFlowMsg('Approval flow saved successfully ✓')
+      setTimeout(() => {
+        setIsFlowModalOpen(false)
+        setFlowMsg('')
+      }, 1200)
+    } catch (e: any) {
+      setFlowMsg(e?.message || 'Failed to save approval flow.')
+    } finally {
+      setFlowSaving(false)
+    }
+  }
 
   // Load master tree from Database on mount
   const loadMasterTree = async () => {
@@ -407,18 +518,32 @@ export default function PBASAdminPage() {
           </p>
         </div>
 
-        {/* Create Group Button */}
-        <button
-          type="button"
-          onClick={handleOpenCreateGroupModal}
-          disabled={loading || savingDB}
-          className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium text-sm shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/30 transition-all duration-200 active:scale-95 shrink-0"
-        >
-          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-          </svg>
-          <span>Create Group</span>
-        </button>
+        {/* Action Buttons */}
+        <div className="flex items-center gap-3 shrink-0">
+          {/* Approval Flow Config Button */}
+          <button
+            type="button"
+            onClick={handleOpenFlowModal}
+            disabled={loading || savingDB}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-semibold text-sm shadow-md transition-all duration-200 active:scale-95 border border-slate-800"
+          >
+            <span>🔄</span>
+            <span>Approval Flow</span>
+          </button>
+
+          {/* Create Group Button */}
+          <button
+            type="button"
+            onClick={handleOpenCreateGroupModal}
+            disabled={loading || savingDB}
+            className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium text-sm shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/30 transition-all duration-200 active:scale-95"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+            <span>Create Group</span>
+          </button>
+        </div>
       </div>
 
       {apiError && (
@@ -463,6 +588,7 @@ export default function PBASAdminPage() {
                 onAddSubgroup={handleOpenCreateSubgroupModal}
                 onOpenAuth={handleOpenAuthModal}
                 onOpenForm={handleOpenFormModal}
+                onOpenConfig={handleOpenConfigModal}
                 onChangeNode={handleNodeChange}
                 onDeleteNode={handleDeleteNode}
               />
@@ -941,6 +1067,457 @@ export default function PBASAdminPage() {
           </div>
         </ModalPortal>
       )}
+
+      {/* MODAL POPUP FOR NODE CONFIGURATION (VIEW & CREDITS) */}
+      {isConfigModalOpen && configTargetNode && (
+        <ModalPortal>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+            <div className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-xl overflow-hidden animate-zoom-popup-in transform transition-all flex flex-col max-h-[90vh]">
+              {/* Modal Header */}
+              <div className="px-6 py-5 bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white flex items-center justify-between gap-4 border-b border-slate-800 shrink-0">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-9 h-9 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-300 font-bold border border-indigo-500/30 shrink-0">
+                    ⚙️
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest block">
+                      Node Configuration
+                    </span>
+                    <h3 className="text-base font-bold text-white truncate" title={configTargetNode.label}>
+                      {configTargetNode.label}
+                    </h3>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsConfigModalOpen(false)}
+                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-slate-300 hover:text-white transition-colors shrink-0 text-sm font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-6 space-y-6 overflow-y-auto flex-1 bg-slate-50/50">
+                {/* 1. View / Audience Selector */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide">
+                    1. Target Viewer / Audience
+                  </label>
+                  <p className="text-xs text-slate-500">
+                    Select who can view and submit evidence under this {configTargetNode.children && configTargetNode.children.length > 0 ? 'category' : 'activity'}.
+                  </p>
+
+                  <div className="grid grid-cols-3 gap-2 pt-1">
+                    {[
+                      { val: 'faculty', label: 'Staff Only', icon: '👨‍🏫', desc: 'Faculty & staff only' },
+                      { val: 'student', label: 'Student Only', icon: '🎓', desc: 'Student credits only' },
+                      { val: 'both', label: 'Both (Staff & Student)', icon: '👥', desc: 'Available to all' },
+                    ].map((opt) => {
+                      const isSelected = configAudience === opt.val
+                      return (
+                        <button
+                          key={opt.val}
+                          type="button"
+                          onClick={() => setConfigAudience(opt.val as PBASAudience)}
+                          className={`p-3 rounded-2xl border text-left transition-all flex flex-col justify-between ${
+                            isSelected
+                              ? 'bg-indigo-50 border-indigo-600 text-indigo-900 shadow-sm ring-2 ring-indigo-500/20'
+                              : 'bg-slate-50/50 border-slate-200 text-slate-700 hover:bg-slate-100/70'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between w-full">
+                            <span className="text-xl">{opt.icon}</span>
+                            {isSelected && (
+                              <span className="w-4 h-4 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-bold">
+                                ✓
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-2">
+                            <div className="text-xs font-bold">{opt.label}</div>
+                            <div className="text-[10px] text-slate-400 mt-0.5">{opt.desc}</div>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* 2. Credits Section (Dynamic based on Audience selection) */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide">
+                    2. Credits Configuration
+                  </label>
+
+                  {/* STAFF ONLY SELECTED */}
+                  {configAudience === 'faculty' && (
+                    <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 space-y-2 animate-fadeIn">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-indigo-900">👨‍🏫 Staff PBAS Credit</span>
+                      </div>
+                      <p className="text-xs text-slate-500">
+                        Enter the PBAS credit awarded to staff members upon approved submission.
+                      </p>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="e.g. 10"
+                        value={configStaffCredit}
+                        onChange={(e) => setConfigStaffCredit(e.target.value)}
+                        className="w-full px-3.5 py-2.5 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                    </div>
+                  )}
+
+                  {/* STUDENT ONLY SELECTED: 1. Student's Credit, 2. Mentor's Credit */}
+                  {configAudience === 'student' && (
+                    <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 space-y-4 animate-fadeIn">
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-bold text-emerald-900">
+                          1. Student's Credit
+                        </label>
+                        <p className="text-xs text-slate-500">Credit awarded to student on verification.</p>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="e.g. 5"
+                          value={configStudentCredit}
+                          onChange={(e) => setConfigStudentCredit(e.target.value)}
+                          className="w-full px-3.5 py-2.5 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5 pt-2 border-t border-emerald-100">
+                        <label className="block text-xs font-bold text-emerald-900">
+                          2. Mentor Credits
+                        </label>
+                        <p className="text-xs text-slate-500">Credit points awarded to mentor.</p>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="e.g. 2"
+                          value={configMentorCredit}
+                          onChange={(e) => setConfigMentorCredit(e.target.value)}
+                          className="w-full px-3.5 py-2.5 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* BOTH SELECTED: Splits into two sections (Staff on left, Student & Mentor on right) */}
+                  {configAudience === 'both' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-fadeIn">
+                      {/* Left: Staff Section */}
+                      <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 space-y-3 flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-bold text-indigo-900">👨‍🏫 Staff Section</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-1">PBAS points for faculty/staff submissions.</p>
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="block text-xs font-semibold text-slate-700">Staff Credit</label>
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="e.g. 10"
+                            value={configStaffCredit}
+                            onChange={(e) => setConfigStaffCredit(e.target.value)}
+                            className="w-full px-3.5 py-2 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Right: Student Section (Student credit + Mentor credit) */}
+                      <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 space-y-3">
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-bold text-emerald-900">🎓 Student & Mentor Section</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-1">Credits for student & mentor verification.</p>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="block text-xs font-semibold text-slate-700">1. Student Credit</label>
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="e.g. 5"
+                            value={configStudentCredit}
+                            onChange={(e) => setConfigStudentCredit(e.target.value)}
+                            className="w-full px-3.5 py-2 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="block text-xs font-semibold text-slate-700">2. Mentor Credit</label>
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="e.g. 2"
+                            value={configMentorCredit}
+                            onChange={(e) => setConfigMentorCredit(e.target.value)}
+                            className="w-full px-3.5 py-2 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setIsConfigModalOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 text-sm font-medium hover:bg-slate-100 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveConfig}
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold shadow-md shadow-indigo-500/20 transition-all active:scale-95"
+                >
+                  Save Configuration
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
+      )}
+
+      {/* MODAL POPUP FOR APPROVAL FLOW CONFIGURATION */}
+      {isFlowModalOpen && (
+        <ModalPortal>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+            <div className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-3xl overflow-hidden animate-zoom-popup-in transform transition-all flex flex-col max-h-[90vh]">
+              {/* Modal Header */}
+              <div className="px-6 py-5 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white flex items-center justify-between gap-4 border-b border-slate-800 shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 flex items-center justify-center text-xl font-bold border border-indigo-500/30">
+                    🔄
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest block">
+                      Multi-Stage Workflow
+                    </span>
+                    <h3 className="text-lg font-bold text-white">
+                      PBAS Approval Flow Configuration
+                    </h3>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsFlowModalOpen(false)}
+                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-slate-300 hover:text-white transition-colors shrink-0 text-sm font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Status or Error Message */}
+              {flowMsg && (
+                <div className={`px-6 py-3 text-xs font-semibold text-center ${
+                  flowMsg.includes('✓') ? 'bg-emerald-50 text-emerald-700 border-b border-emerald-200' : 'bg-red-50 text-red-700 border-b border-red-200'
+                }`}>
+                  {flowMsg}
+                </div>
+              )}
+
+              {/* Modal Body */}
+              <div className="p-6 space-y-6 overflow-y-auto flex-1 bg-slate-50/60">
+                {flowLoading ? (
+                  <div className="py-12 text-center text-slate-500 font-medium text-sm">Loading workflow roles…</div>
+                ) : (
+                  <>
+                    {/* Top Section: Staff Approval Flow */}
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-4">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center text-sm font-bold">
+                            👨‍🏫
+                          </span>
+                          <div>
+                            <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
+                              1. Staff Approval Flow
+                            </h4>
+                            <p className="text-xs text-slate-500">
+                              Define intermediate approval stages for staff submissions.
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Add Role Dropdown */}
+                        <div className="flex items-center gap-2">
+                          <select
+                            id="add-staff-role-select"
+                            defaultValue=""
+                            onChange={(e) => {
+                              if (e.target.value) {
+                                handleAddStaffFlowRole(e.target.value)
+                                e.target.value = ''
+                              }
+                            }}
+                            className="text-xs font-semibold bg-indigo-50 text-indigo-800 border border-indigo-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                          >
+                            <option value="" disabled>+ Add Role Stage…</option>
+                            {availableRoles.map((r) => (
+                              <option key={r} value={r}>{r}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Visual Flow Diagram / Chain */}
+                      <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 overflow-x-auto">
+                        <div className="flex items-center gap-2 min-w-max">
+                          {/* Submitter Box */}
+                          <div className="px-3.5 py-2 rounded-xl bg-slate-200/80 border border-slate-300 text-slate-700 text-xs font-bold flex items-center gap-1.5 shadow-xs">
+                            <span>👤</span>
+                            <span>Staff Submitter</span>
+                          </div>
+
+                          <span className="text-indigo-400 font-bold">&rarr;</span>
+
+                          {/* Dynamic intermediate roles */}
+                          {staffFlowRoles.map((roleName, idx) => (
+                            <React.Fragment key={`${roleName}-${idx}`}>
+                              <div className="group relative px-3.5 py-2 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs font-bold flex items-center gap-2 shadow-xs hover:border-indigo-400 transition-all">
+                                <span className="w-4 h-4 rounded-full bg-indigo-600 text-white text-[10px] flex items-center justify-center font-black">
+                                  {idx + 1}
+                                </span>
+                                <span>{roleName}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveStaffFlowRole(idx)}
+                                  className="w-4 h-4 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center text-xs font-bold transition-colors"
+                                  title="Remove stage"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                              <span className="text-indigo-400 font-bold">&rarr;</span>
+                            </React.Fragment>
+                          ))}
+
+                          {/* Final Terminal Node: Auth (Default & Non-removable) */}
+                          <div className="px-4 py-2 rounded-xl bg-amber-500 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-sm border border-amber-600/30">
+                            <span>🛡️</span>
+                            <span>Auth (Node Approvers)</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Bottom Section: Student Approval Flow */}
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-4">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center text-sm font-bold">
+                            🎓
+                          </span>
+                          <div>
+                            <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
+                              2. Student Approval Flow
+                            </h4>
+                            <p className="text-xs text-slate-500">
+                              Define intermediate approval stages before reaching final Auth verification.
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Add Role Dropdown */}
+                        <div className="flex items-center gap-2">
+                          <select
+                            id="add-student-role-select"
+                            defaultValue=""
+                            onChange={(e) => {
+                              if (e.target.value) {
+                                handleAddStudentFlowRole(e.target.value)
+                                e.target.value = ''
+                              }
+                            }}
+                            className="text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                          >
+                            <option value="" disabled>+ Add Role Stage…</option>
+                            {availableRoles.map((r) => (
+                              <option key={r} value={r}>{r}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Visual Flow Diagram / Chain */}
+                      <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 overflow-x-auto">
+                        <div className="flex items-center gap-2 min-w-max">
+                          {/* Submitter Box */}
+                          <div className="px-3.5 py-2 rounded-xl bg-slate-200/80 border border-slate-300 text-slate-700 text-xs font-bold flex items-center gap-1.5 shadow-xs">
+                            <span>🎓</span>
+                            <span>Student Submitter</span>
+                          </div>
+
+                          <span className="text-emerald-500 font-bold">&rarr;</span>
+
+                          {/* Dynamic intermediate roles */}
+                          {studentFlowRoles.map((roleName, idx) => (
+                            <React.Fragment key={`${roleName}-${idx}`}>
+                              <div className="group relative px-3.5 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-bold flex items-center gap-2 shadow-xs hover:border-emerald-400 transition-all">
+                                <span className="w-4 h-4 rounded-full bg-emerald-600 text-white text-[10px] flex items-center justify-center font-black">
+                                  {idx + 1}
+                                </span>
+                                <span>{roleName}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveStudentFlowRole(idx)}
+                                  className="w-4 h-4 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center text-xs font-bold transition-colors"
+                                  title="Remove stage"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                              <span className="text-emerald-500 font-bold">&rarr;</span>
+                            </React.Fragment>
+                          ))}
+
+                          {/* Final Terminal Node: Auth (Default & Non-removable) */}
+                          <div className="px-4 py-2 rounded-xl bg-amber-500 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-sm border border-amber-600/30">
+                            <span>🛡️</span>
+                            <span>Auth (Node Approvers)</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setIsFlowModalOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 text-sm font-medium hover:bg-slate-100 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveApprovalFlow}
+                  disabled={flowSaving || flowLoading}
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-semibold shadow-md shadow-indigo-500/20 transition-all active:scale-95 flex items-center gap-1.5"
+                >
+                  {flowSaving ? 'Saving…' : 'Save Approval Flow'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
+      )}
     </div>
   )
 }
@@ -952,6 +1529,7 @@ interface TreeNodeItemProps {
   onAddSubgroup: (parentId: string, parentLabel: string) => void
   onOpenAuth: (nodeId: string, nodeLabel: string) => void
   onOpenForm: (node: PBASNode) => void
+  onOpenConfig: (node: PBASNode) => void
   onChangeNode: (nodeId: string, updates: Partial<PBASNode>) => void
   onDeleteNode: (nodeId: string) => void
 }
@@ -962,18 +1540,13 @@ function TreeNodeItem({
   onAddSubgroup,
   onOpenAuth,
   onOpenForm,
+  onOpenConfig,
   onChangeNode,
   onDeleteNode,
 }: TreeNodeItemProps) {
   const isLeafNode = !node.children || node.children.length === 0
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleValue, setTitleValue] = useState(node.label)
-
-  const handleCreditChange = (val: string) => {
-    const cleaned = val.replace(/[^0-9]/g, '')
-    const num = cleaned === '' ? null : parseInt(cleaned, 10)
-    onChangeNode(node.id, { pbas_credit: num })
-  }
 
   const saveTitle = () => {
     if (titleValue.trim() && titleValue !== node.label) {
@@ -1057,21 +1630,41 @@ function TreeNodeItem({
             {isLeafNode ? 'Leaf Node' : 'Parent Group'}
           </span>
 
-          {/* Audience Selector */}
-          <select
-            value={node.audience || 'both'}
-            onChange={(e) => onChangeNode(node.id, { audience: e.target.value as PBASAudience })}
-            className="text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200 rounded-md px-2 py-0.5 outline-none focus:ring-1 focus:ring-indigo-500"
-            title="Target Audience"
-          >
-            <option value="both">View: Both</option>
-            <option value="faculty">View: Staff</option>
-            <option value="student">View: Student</option>
-          </select>
+          {/* Config Indicator Badges */}
+          <div className="flex items-center gap-1.5 shrink-0 text-[10px] font-bold">
+            <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 uppercase">
+              View: {node.audience || 'both'}
+            </span>
+            {isLeafNode && (
+              <>
+                {(node.audience === 'faculty' || node.audience === 'both' || !node.audience) && (
+                  <span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
+                    Staff: {node.pbas_credit ?? 0} Cr
+                  </span>
+                )}
+                {(node.audience === 'student' || node.audience === 'both') && (
+                  <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    Student: {node.pbas_credit ?? 0} Cr • Mentor: {node.mentor_credit ?? 0} Cr
+                  </span>
+                )}
+              </>
+            )}
+          </div>
         </div>
 
         {/* Right Section: Node Controls */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Config Button (Replaces inline View & Credit inputs) */}
+          <button
+            type="button"
+            onClick={() => onOpenConfig(node)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 text-xs font-bold transition-all active:scale-95 shadow-xs"
+            title="Configure View & Credits"
+          >
+            <span>⚙️</span>
+            <span>Config</span>
+          </button>
+
           {/* Auth Button for Approvers Assignment */}
           <button
             type="button"
@@ -1094,42 +1687,25 @@ function TreeNodeItem({
             <span>Subgroup</span>
           </button>
 
-          {/* Leaf Node Form Builder Button & Credit Controls */}
+          {/* Leaf Node Form Builder Button */}
           {isLeafNode && (
-            <div className="flex items-center gap-2 bg-slate-100/80 p-1 rounded-xl border border-slate-200">
-              {/* Form Button */}
-              <button
-                type="button"
-                onClick={() => onOpenForm(node)}
-                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all active:scale-95 border ${
-                  formFieldsCount > 0
-                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-                    : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
-                }`}
-                title="Configure Google Forms-like fields for this leaf node"
-              >
-                <span>📋 Form</span>
-                {formFieldsCount > 0 && (
-                  <span className="bg-amber-400 text-slate-900 px-1.5 py-0.2 rounded-full text-[10px] font-black">
-                    {formFieldsCount}
-                  </span>
-                )}
-              </button>
-
-              {/* PBAS Credit input */}
-              <div className="flex items-center gap-1 border-l border-slate-300 pl-2">
-                <span className="text-[11px] font-medium text-slate-500">Credit:</span>
-                <input
-                  type="number"
-                  step="1"
-                  min="0"
-                  placeholder="0"
-                  value={node.pbas_credit ?? ''}
-                  onChange={(e) => handleCreditChange(e.target.value)}
-                  className="w-16 text-xs font-bold text-indigo-700 bg-white border border-slate-300 rounded-lg px-2 py-1 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-center"
-                />
-              </div>
-            </div>
+            <button
+              type="button"
+              onClick={() => onOpenForm(node)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all active:scale-95 border ${
+                formFieldsCount > 0
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                  : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
+              }`}
+              title="Configure Google Forms-like fields for this leaf node"
+            >
+              <span>📋 Form</span>
+              {formFieldsCount > 0 && (
+                <span className="bg-amber-400 text-slate-900 px-1.5 py-0.2 rounded-full text-[10px] font-black">
+                  {formFieldsCount}
+                </span>
+              )}
+            </button>
           )}
 
           {/* Delete Button */}
@@ -1157,6 +1733,7 @@ function TreeNodeItem({
               onAddSubgroup={onAddSubgroup}
               onOpenAuth={onOpenAuth}
               onOpenForm={onOpenForm}
+              onOpenConfig={onOpenConfig}
               onChangeNode={onChangeNode}
               onDeleteNode={onDeleteNode}
             />

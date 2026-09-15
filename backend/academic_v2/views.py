@@ -23,6 +23,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 from .models import (
+    AcV2Version,
     AcV2SemesterConfig,
     AcV2SemesterGroup,
     AcV2ClassType,
@@ -48,6 +49,7 @@ from .models import (
     AcV2GoogleSheetLink,
 )
 from .serializers import (
+    AcV2VersionSerializer,
     AcV2SemesterConfigSerializer,
     AcV2SemesterGroupSerializer,
     AcV2ClassTypeSerializer,
@@ -364,6 +366,7 @@ GOOGLE_SHEETS_SCOPES = [
 def _get_google_oauth_client_config() -> dict:
     client_id = getattr(settings, 'GOOGLE_OAUTH_CLIENT_ID', None) or os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '')
     client_secret = getattr(settings, 'GOOGLE_OAUTH_CLIENT_SECRET', None) or os.environ.get('GOOGLE_OAUTH_CLIENT_SECRET', '')
+    redirect_uri = getattr(settings, 'GOOGLE_OAUTH_REDIRECT_URI', None) or os.environ.get('GOOGLE_OAUTH_REDIRECT_URI', 'https://idcs.krgi.co.in/api/academic-v2/google-sheets/oauth/callback')
     return {
         'web': {
             'client_id': client_id,
@@ -371,7 +374,9 @@ def _get_google_oauth_client_config() -> dict:
             'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
             'token_uri': 'https://oauth2.googleapis.com/token',
             'redirect_uris': [
-                getattr(settings, 'GOOGLE_OAUTH_REDIRECT_URI', None) or os.environ.get('GOOGLE_OAUTH_REDIRECT_URI', ''),
+                redirect_uri,
+                'https://idcs.krgi.co.in/api/academic-v2/google-sheets/oauth/callback',
+                'https://idcs.krgi.co.in/api/academic-v2/google-sheets/oauth/callback/',
             ],
         }
     }
@@ -400,8 +405,8 @@ def google_sheets_oauth_start(request):
     state = secrets.token_urlsafe(16)
     request.session['google_sheets_oauth_state'] = state
 
-    env_redirect = getattr(settings, 'GOOGLE_OAUTH_REDIRECT_URI', None) or os.environ.get('GOOGLE_OAUTH_REDIRECT_URI', '')
-    redirect_uri = request.GET.get('redirect_uri') or env_redirect or request.build_absolute_uri(reverse('academic_v2:google-sheets-oauth-callback'))
+    env_redirect = getattr(settings, 'GOOGLE_OAUTH_REDIRECT_URI', None) or os.environ.get('GOOGLE_OAUTH_REDIRECT_URI', 'https://idcs.krgi.co.in/api/academic-v2/google-sheets/oauth/callback')
+    redirect_uri = request.GET.get('redirect_uri') or env_redirect
     flow = InstalledAppFlow.from_client_config(client_config, GOOGLE_SHEETS_SCOPES)
     flow.redirect_uri = redirect_uri
     auth_url, _ = flow.authorization_url(access_type='offline', prompt='consent', state=state)
@@ -691,7 +696,7 @@ def google_sheets_inject_script(request):
     backend_url = (
         getattr(settings, 'BACKEND_BASE_URL', None)
         or os.environ.get('BACKEND_BASE_URL', '')
-        or request.build_absolute_uri('/').rstrip('/')
+        or 'https://idcs.krgi.co.in'
     )
 
     try:
@@ -744,6 +749,23 @@ def google_sheets_webhook(request):
     from academics.models import StudentProfile
     from .models import AcV2StudentMark
 
+    questions = _get_qp_specs_for_exam(exam_assignment)
+    title_to_qid = {}
+    for index, q in enumerate(questions):
+        qid = str(q.get('id') or f'q{index}')
+        qtitle = str(q.get('title') or '').strip()
+        title_to_qid[qid] = qid
+        title_to_qid[qid.lower()] = qid
+        if qtitle:
+            title_to_qid[qtitle] = qid
+            title_to_qid[qtitle.lower()] = qid
+            stripped = qtitle.lstrip('Qq').strip()
+            if stripped:
+                title_to_qid[stripped] = qid
+        title_to_qid[str(index + 1)] = qid
+        title_to_qid[f"Q{index + 1}"] = qid
+        title_to_qid[f"q{index + 1}"] = qid
+
     updated_count = 0
     for row_data in rows:
         if not isinstance(row_data, dict):
@@ -762,9 +784,12 @@ def google_sheets_webhook(request):
         if isinstance(marks_raw, dict):
             for qkey, qval in marks_raw.items():
                 try:
-                    question_marks[str(qkey)] = float(qval)
+                    val = float(qval)
                 except (TypeError, ValueError):
-                    pass
+                    continue
+                str_key = str(qkey).strip()
+                target_id = title_to_qid.get(str_key) or title_to_qid.get(str_key.lower()) or str_key
+                question_marks[target_id] = val
 
         mark_obj, _ = AcV2StudentMark.objects.update_or_create(
             exam_assignment=exam_assignment,
@@ -802,6 +827,22 @@ def google_sheets_webhook(request):
             },
         )
         updated_count += 1
+
+    if updated_count > 0:
+        draft_dict = exam_assignment.draft_data if isinstance(exam_assignment.draft_data, dict) else {}
+        marks_dict = draft_dict.setdefault('marks', {})
+        for dm in AcV2DraftMark.objects.filter(exam_assignment=exam_assignment):
+            total_m = float(dm.total_mark) if dm.total_mark is not None else None
+            q_m = {str(k): float(v) if v is not None else None for k, v in (dm.question_marks or {}).items()}
+            marks_dict[str(dm.student_id)] = {
+                'reg_no': dm.reg_no,
+                'name': dm.student_name,
+                'question_marks': q_m,
+                'mark': total_m,
+                'is_absent': dm.is_absent,
+            }
+        exam_assignment.draft_data = draft_dict
+        exam_assignment.save(update_fields=['draft_data', 'updated_at'])
 
     return Response({'success': True, 'updatedRows': updated_count})
 
@@ -2279,6 +2320,135 @@ class AcV2SemesterGroupViewSet(viewsets.ModelViewSet):
 
 
 # ============================================================================
+# VERSION MANAGEMENT (Academic 2.1 Admin)
+# ============================================================================
+
+def _resolve_academic_v2_version(request, college_id=None):
+    """
+    Resolve the active AcV2Version context for an admin or faculty request.
+    Resolution priority:
+    1. Explicit `version_id` or `version` query param, header 'X-Academic-V2-Version', or request body.
+    2. Version mapped to requested `academic_year_id` or `academic_year`.
+    3. The default active version (is_default=True, is_active=True).
+    4. The most recently created active version.
+    """
+    if not request:
+        return AcV2Version.objects.filter(is_default=True, is_active=True).first()
+
+    params = getattr(request, 'query_params', None)
+    if params is None:
+        params = getattr(request, 'GET', {})
+
+    headers = getattr(request, 'headers', {})
+
+    # 1. Direct version parameter
+    v_param = (
+        params.get('version_id')
+        or params.get('version')
+        or headers.get('X-Academic-V2-Version')
+    )
+    if not v_param and hasattr(request, 'data') and isinstance(request.data, dict):
+        v_param = request.data.get('version_id') or request.data.get('version')
+
+    if v_param:
+        # Check by UUID pk
+        v = AcV2Version.objects.filter(id=v_param, is_active=True).first()
+        if v:
+            return v
+        # Check by name (e.g. SEPT2026)
+        v = AcV2Version.objects.filter(name__iexact=str(v_param).strip(), is_active=True).first()
+        if v:
+            return v
+
+    # 2. Map via academic year
+    ay_param = params.get('academic_year_id') or params.get('academic_year')
+    if not ay_param and hasattr(request, 'data') and isinstance(request.data, dict):
+        ay_param = request.data.get('academic_year_id') or request.data.get('academic_year')
+
+    if ay_param:
+        try:
+            ay_id = int(ay_param)
+            v = AcV2Version.objects.filter(academic_years__id=ay_id, is_active=True).first()
+            if v:
+                return v
+        except (ValueError, TypeError):
+            pass
+
+    # 3. Default version
+    default_v = AcV2Version.objects.filter(is_default=True, is_active=True).first()
+    if default_v:
+        return default_v
+
+    # 4. Fallback: most recent active version
+    return AcV2Version.objects.filter(is_active=True).order_by('-created_at').first()
+
+
+class AcV2VersionViewSet(viewsets.ModelViewSet):
+    """
+    CRUD for Academic 2.1 Configuration Versions.
+    Allows creating versions, mapping academic years, cloning configs,
+    toggling active/inactive, and designating a default active version.
+    """
+    queryset = AcV2Version.objects.all().prefetch_related('academic_years')
+    serializer_class = AcV2VersionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        name = self.request.query_params.get('name')
+        if name:
+            qs = qs.filter(name__icontains=name)
+        
+        is_active_param = self.request.query_params.get('is_active')
+        if is_active_param in ('true', 'True', '1'):
+            qs = qs.filter(is_active=True)
+        elif is_active_param in ('false', 'False', '0'):
+            qs = qs.filter(is_active=False)
+
+        return qs.order_by('-is_active', '-is_default', '-created_at')
+
+    def perform_destroy(self, instance):
+        if instance.is_default:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError("Cannot delete the default version. Set another version as default first.")
+        # If already inactive, permanently remove
+        if not instance.is_active:
+            instance.class_types.all().delete()
+            instance.qp_patterns.all().delete()
+            instance.cycles.all().delete()
+            instance.qp_types.all().delete()
+            instance.delete()
+        else:
+            # Soft-delete to inactive
+            instance.is_active = False
+            instance.save(update_fields=['is_active'])
+
+    @action(detail=True, methods=['post'], url_path='set-default')
+    def set_default(self, request, pk=None):
+        version = self.get_object()
+        with transaction.atomic():
+            AcV2Version.objects.filter(is_default=True).update(is_default=False)
+            version.is_default = True
+            version.is_active = True
+            version.save(update_fields=['is_default', 'is_active', 'updated_at'])
+        serializer = self.get_serializer(version)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='toggle-active')
+    def toggle_active(self, request, pk=None):
+        version = self.get_object()
+        if version.is_default and version.is_active:
+            return Response(
+                {'detail': 'Cannot deactivate the default version. Set another version as default first.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        version.is_active = not version.is_active
+        version.save(update_fields=['is_active', 'updated_at'])
+        serializer = self.get_serializer(version)
+        return Response(serializer.data)
+
+
+# ============================================================================
 # CLASS TYPE (Admin)
 # ============================================================================
 
@@ -2296,10 +2466,15 @@ class AcV2ClassTypeViewSet(viewsets.ModelViewSet):
         college_id = self.request.query_params.get('college')
         if college_id:
             qs = qs.filter(college_id=college_id)
+        if self.request.query_params.get('all_versions') not in ('1', 'true', 'True'):
+            version = _resolve_academic_v2_version(self.request)
+            if version:
+                qs = qs.filter(version=version)
         return qs.order_by('name')
     
     def perform_create(self, serializer):
-        serializer.save(updated_by=self.request.user)
+        version = _resolve_academic_v2_version(self.request)
+        serializer.save(updated_by=self.request.user, version=version)
     
     def perform_update(self, serializer):
         layout = self.request.data.get('coattainment_layout')
@@ -2439,7 +2614,15 @@ class AcV2CycleViewSet(viewsets.ModelViewSet):
         college_id = self.request.query_params.get('college')
         if college_id:
             qs = qs.filter(college_id=college_id)
+        if self.request.query_params.get('all_versions') not in ('1', 'true', 'True'):
+            version = _resolve_academic_v2_version(self.request)
+            if version:
+                qs = qs.filter(version=version)
         return qs.order_by('order', 'name')
+
+    def perform_create(self, serializer):
+        version = _resolve_academic_v2_version(self.request)
+        serializer.save(version=version)
 
     def perform_destroy(self, instance):
         instance.is_active = False
@@ -2556,10 +2739,15 @@ class AcV2QpTypeViewSet(viewsets.ModelViewSet):
         college_id = self.request.query_params.get('college')
         if college_id:
             qs = qs.filter(college_id=college_id)
+        if self.request.query_params.get('all_versions') not in ('1', 'true', 'True'):
+            version = _resolve_academic_v2_version(self.request)
+            if version:
+                qs = qs.filter(Q(version=version) | Q(version__isnull=True))
         return qs.order_by('name')
     
     def perform_create(self, serializer):
-        serializer.save(updated_by=self.request.user)
+        version = _resolve_academic_v2_version(self.request)
+        serializer.save(updated_by=self.request.user, version=version)
     
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)
@@ -2623,11 +2811,17 @@ class AcV2QpPatternViewSet(viewsets.ModelViewSet):
             qs = qs.filter(class_type_id=class_type_id)
         if batch_id:
             qs = qs.filter(batch_id=batch_id)
+
+        if self.request.query_params.get('all_versions') not in ('1', 'true', 'True'):
+            version = _resolve_academic_v2_version(self.request)
+            if version:
+                qs = qs.filter(version=version)
         
         return qs.select_related('class_type', 'batch')
     
     def perform_create(self, serializer):
-        qp_pattern = serializer.save(updated_by=self.request.user)
+        version = _resolve_academic_v2_version(self.request)
+        qp_pattern = serializer.save(updated_by=self.request.user, version=version)
         self._sync_qp_assignment_from_pattern(qp_pattern)
     
     def perform_update(self, serializer):
@@ -4585,6 +4779,8 @@ def faculty_course_info(request, ta_id):
                     ea_strictly_locked = ea_obj.status in PUBLISHED_EXAM_STATUSES
                     ea_has_published = bool(cqi_pub_at or ea_strictly_locked or ea_obj.published_at)
                 else:
+                    ea_db_sm_dict = {str(m.student_id): m for m in AcV2StudentMark.objects.filter(exam_assignment=ea_obj)}
+                    ea_db_dm_dict = {str(m.student_id): m for m in AcV2DraftMark.objects.filter(exam_assignment=ea_obj)}
                     ea_sids = active_student_ids or set(ea_draft_marks.keys()) | set(ea_pub_marks.keys()) | set(ea_db_sm_dict.keys()) | set(ea_db_dm_dict.keys())
                     ea_entered_cnt = 0
                     for sid in ea_sids:
@@ -4690,13 +4886,23 @@ def faculty_courses_status(request):
 
     Returns: { "<ta_id>": "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED" }
     """
-    from academics.models import TeachingAssignment
+    from academics.models import TeachingAssignment, AcademicYear
+
+    ay_param = request.query_params.get('academic_year_id') or request.query_params.get('academic_year')
+    ta_filter = {'staff__user': request.user}
+    if ay_param and str(ay_param).lower() == 'all':
+        pass
+    elif ay_param and str(ay_param).isdigit():
+        ta_filter['academic_year_id'] = int(ay_param)
+    else:
+        active_ay = AcademicYear.objects.filter(is_active=True).first()
+        if active_ay:
+            ta_filter['academic_year'] = active_ay
+        else:
+            ta_filter['is_active'] = True
 
     ta_ids = list(
-        TeachingAssignment.objects.filter(
-            staff__user=request.user,
-            is_active=True,
-        ).values_list('id', flat=True)
+        TeachingAssignment.objects.filter(**ta_filter).values_list('id', flat=True)
     )
     if not ta_ids:
         return Response({})
@@ -9423,7 +9629,7 @@ def bypass_create_share_link(request, session_id):
     site_root = str(
         getattr(__import__('django.conf', fromlist=['settings']).settings, 'VITE_API_BASE', '')
         or _os.getenv('VITE_API_BASE')
-        or 'https://idcs.zynix.us'
+        or 'https://idcs.krgi.co.in'
     ).rstrip('/')
     share_url = f"{site_root}/academic-v2/bypass-share/{token}"
 
@@ -9509,7 +9715,7 @@ def bypass_validate_share(request, token):
         site_root = str(
             getattr(__import__('django.conf', fromlist=['settings']).settings, 'VITE_API_BASE', '')
             or _os.getenv('VITE_API_BASE')
-            or 'https://idcs.zynix.us'
+            or 'https://idcs.krgi.co.in'
         ).rstrip('/')
         share_url = f"{site_root}/academic-v2/bypass-share/{session.share_token}"
 
@@ -9613,7 +9819,7 @@ def admin_courses_list(request):
                     site_root = str(
                         getattr(__import__('django.conf', fromlist=['settings']).settings, 'VITE_API_BASE', '')
                         or _os.getenv('VITE_API_BASE')
-                        or 'https://idcs.zynix.us'
+                        or 'https://idcs.krgi.co.in'
                     ).rstrip('/')
                     faculty_photo = f"{site_root}/media/{str(img).lstrip('/')}"
             except Exception:
@@ -9692,7 +9898,7 @@ def admin_course_faculty(request, ta_id):
                     site_root = str(
                         getattr(__import__('django.conf', fromlist=['settings']).settings, 'VITE_API_BASE', '')
                         or _os.getenv('VITE_API_BASE')
-                        or 'https://idcs.zynix.us'
+                        or 'https://idcs.krgi.co.in'
                     ).rstrip('/')
                     faculty_photo = f"{site_root}/media/{str(img).lstrip('/')}"
             except Exception:

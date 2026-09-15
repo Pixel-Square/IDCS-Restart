@@ -159,6 +159,7 @@ class MeSerializer(serializers.Serializer):
     name_email_edited = serializers.SerializerMethodField()
     profileEdited = serializers.SerializerMethodField()
     pbas_credit = serializers.SerializerMethodField()
+    pbas_scores = serializers.SerializerMethodField()
     under_construction = serializers.SerializerMethodField()
     is_superuser = serializers.BooleanField(read_only=True)
 
@@ -287,6 +288,20 @@ class MeSerializer(serializers.Serializer):
             pass
         return 0
 
+    def get_pbas_scores(self, obj):
+        profile = self._safe_related_profile(obj, 'student_profile') or self._safe_related_profile(obj, 'staff_profile')
+        return {
+            'Academics': getattr(profile, 'pbas_academics_credit', 0) or 0,
+            'Student Development': getattr(profile, 'pbas_student_development_credit', 0) or 0,
+            'Research and Development': getattr(profile, 'pbas_research_development_credit', 0) or 0,
+            'Institutional Contribution': getattr(profile, 'pbas_institutional_contribution_credit', 0) or 0,
+        } if profile is not None else {
+            'Academics': 0,
+            'Student Development': 0,
+            'Research and Development': 0,
+            'Institutional Contribution': 0,
+        }
+
     def get_profile(self, obj):
         profile_image_url = self.get_profile_image(obj)
         # Minimal profile payload to avoid touching academic serializers
@@ -311,6 +326,7 @@ class MeSerializer(serializers.Serializer):
                 'profile_image_updated': self.get_profile_image_updated(obj),
                 'rfid_uid': getattr(sp, 'rfid_uid', ''),
                 'pbas_credit': getattr(sp, 'pbas_credit', 0) or 0,
+                'pbas_scores': self.get_pbas_scores(obj),
                 'mobile_number': getattr(sp, 'mobile_number', '') or '',
                 'mobile_verified': bool(getattr(sp, 'mobile_number_verified_at', None)),
                 'section_id': getattr(sec_obj, 'id', None),
@@ -332,6 +348,7 @@ class MeSerializer(serializers.Serializer):
                 'profile_image_updated': self.get_profile_image_updated(obj),
                 'rfid_uid': getattr(st, 'rfid_uid', ''),
                 'pbas_credit': getattr(st, 'pbas_credit', 0) or 0,
+                'pbas_scores': self.get_pbas_scores(obj),
                 'mobile_number': getattr(st, 'mobile_number', '') or '',
                 'mobile_verified': bool(getattr(st, 'mobile_number_verified_at', None)),
                 'department': {

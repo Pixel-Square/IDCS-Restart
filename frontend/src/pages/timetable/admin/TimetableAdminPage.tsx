@@ -65,7 +65,7 @@ const normalizeTemplate = (template: TimetableTemplate): TimetableTemplate => {
 };
 
 export default function TimetableAdminPage() {
-  const [activeTab, setActiveTab] = useState<'config' | 'timetable_generator' | 'creator'>('config');
+  const [activeTab, setActiveTab] = useState<'config' | 'timetable_generator' | 'saved_templates' | 'creator'>('timetable_generator');
   const [templates, setTemplates] = useState<TimetableTemplate[]>([]);
   const [semesterTemplates, setSemesterTemplates] = useState<SemesterTemplate[]>([]);
 
@@ -81,17 +81,37 @@ export default function TimetableAdminPage() {
           for (const item of data) {
              let rows = [];
              let columns = [];
-             try {
-                if (item.description) {
-                   const parsedDesc = JSON.parse(item.description);
-                   if (parsedDesc.rows) rows = parsedDesc.rows;
-                   if (parsedDesc.columns) columns = parsedDesc.columns;
-                }
-             } catch(e) {}
+             
+             // First try to load from the new relational tables
+             if (item.config_columns && item.config_columns.length > 0) {
+                 columns = item.config_columns.map((c: any) => ({
+                     id: c.frontend_id,
+                     title: c.title,
+                     period: c.period,
+                     timing: c.timing
+                 }));
+             }
+             if (item.config_rows && item.config_rows.length > 0) {
+                 rows = item.config_rows.map((r: any) => ({
+                     id: r.frontend_id,
+                     day: r.day
+                 }));
+             }
+
+             // Fallback to legacy description JSON string if relational data is not present
+             if (columns.length === 0 && rows.length === 0) {
+                 try {
+                    if (item.description) {
+                       const parsedDesc = JSON.parse(item.description);
+                       if (parsedDesc.rows) rows = parsedDesc.rows;
+                       if (parsedDesc.columns) columns = parsedDesc.columns;
+                    }
+                 } catch(e) {}
+             }
 
              // fallback mapping if empty
              if (columns.length === 0 && item.periods) {
-                 columns = item.periods.map(p => ({
+                 columns = item.periods.map((p: any) => ({
                      id: `col-${p.id}`,
                      title: `Column ${p.index}`,
                      period: p.label || `Period ${p.index}`,
@@ -205,6 +225,16 @@ export default function TimetableAdminPage() {
             Config (Create Template)
           </button>
           <button
+            onClick={() => setActiveTab('creator')}
+            className={`px-6 py-3 rounded-lg font-semibold transition-colors ${
+              activeTab === 'creator'
+                ? 'bg-blue-600 text-white shadow-lg'
+                : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            Creator (Use Template)
+          </button>
+          <button
             onClick={() => setActiveTab('timetable_generator')}
             className={`px-6 py-3 rounded-lg font-semibold transition-colors ${
               activeTab === 'timetable_generator'
@@ -215,14 +245,14 @@ export default function TimetableAdminPage() {
             Timetable Generator
           </button>
           <button
-            onClick={() => setActiveTab('creator')}
+            onClick={() => setActiveTab('saved_templates')}
             className={`px-6 py-3 rounded-lg font-semibold transition-colors ${
-              activeTab === 'creator'
-                ? 'bg-blue-600 text-white shadow-lg'
+              activeTab === 'saved_templates'
+                ? 'bg-purple-600 text-white shadow-lg'
                 : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
             }`}
           >
-            Creator (Use Template)
+            Saved Templates (Drafts)
           </button>
         </div>
 
@@ -230,10 +260,13 @@ export default function TimetableAdminPage() {
         {activeTab === 'config' && (
           <TimetableConfig templates={semesterTemplates} onSaveTemplate={handleSaveSemesterTemplate} onDeleteTemplate={handleDeleteSemesterTemplate} />
         )}
-        {activeTab === 'timetable_generator' && (
-          <TimetableGenerator templates={semesterTemplates} />
-        )}
         {activeTab === 'creator' && <TimetableCreator templates={templates} />}
+        {activeTab === 'timetable_generator' && (
+          <TimetableGenerator templates={semesterTemplates} initialView="generator" />
+        )}
+        {activeTab === 'saved_templates' && (
+          <TimetableGenerator templates={semesterTemplates} initialView="saved" />
+        )}
 
 
       </div>

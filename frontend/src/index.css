@@ -103,6 +103,21 @@ body {
   to { stroke-dashoffset: 0; }
 }
 @keyframes fadeIn {
-  from { opacity: 0; transform: scale(0.9); }
+  from { opacity: 0; transform: scale(0.95); }
   to { opacity: 1; transform: scale(1); }
+}
+@keyframes slideRightIn {
+  from { opacity: 0; transform: translateX(40px) scale(0.98); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes zoomPopupIn {
+  from { opacity: 0; transform: scale(0.92) translateY(12px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.animate-slide-right-in {
+  animation: slideRightIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.animate-zoom-popup-in {
+  animation: zoomPopupIn 0.26s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }

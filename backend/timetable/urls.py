@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import TimetableTemplateViewSet, TimetableSlotViewSet, TimetableAssignmentViewSet, CurriculumBySectionView, MixedSectionCurriculumView, SectionTimetableView, StaffTimetableView, SectionSubjectsStaffView
 from .views import SpecialTimetableViewSet, SpecialTimetableEntryViewSet, PeriodSwapView
 from .views import PeriodSwapRequestView, PeriodSwapRequestActionView, BulkSpecialTimetableEntryCreateView
+from .views import CreditAllocationViewSet, ClassTypeExceptionViewSet, GroupAllocationViewSet, VenueExceptionRuleViewSet, CourseExceptionRuleViewSet, SpecialPeriodRuleViewSet
 
 router = DefaultRouter()
 router.register('templates', TimetableTemplateViewSet, basename='timetable-template')
@@ -10,6 +11,13 @@ router.register('slots', TimetableSlotViewSet, basename='timetable-slot')
 router.register('assignments', TimetableAssignmentViewSet, basename='timetable-assignment')
 router.register('special-timetables', SpecialTimetableViewSet, basename='special-timetable')
 router.register('special-entries', SpecialTimetableEntryViewSet, basename='special-timetable-entry')
+router.register('credit-allocations', CreditAllocationViewSet, basename='credit-allocation')
+router.register('class-type-exceptions', ClassTypeExceptionViewSet, basename='class-type-exception')
+router.register('course-exceptions', CourseExceptionRuleViewSet, basename='course-exception')
+router.register('group-allocations', GroupAllocationViewSet, basename='group-allocation')
+router.register('special-periods', SpecialPeriodRuleViewSet, basename='special-period')
+router.register('venue-exceptions', VenueExceptionRuleViewSet, basename='venue-exception')
+
 
 urlpatterns = [
     path('', include(router.urls)),

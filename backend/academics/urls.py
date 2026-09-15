@@ -48,6 +48,8 @@ from .views import (
     IqacInternalMarksBulkExportView,
     IqacInternalMarksCourseExportView,
     StudentProfileUpdateView,
+    ShiftSemesterView,
+    TransitionLogListView,
 )
 from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView, AttendanceAssignmentRequestView, AttendanceAssignmentRequestActionView, AttendanceNotificationCountView, BulkAttendanceSectionsView, BulkAttendanceDownloadView, BulkAttendanceImportView, BulkAttendanceLockedSessionsView, BulkDailyAttendanceUnlockRequestView, OverallDailyAttendanceReportView
 from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudentsView, MentorMyMenteesView
@@ -198,4 +200,8 @@ urlpatterns = [
     path('ext-staff-form/public/<str:form_code>/', ExtStaffPublicFormView.as_view(), name='ext-staff-form-public'),
     path('ext-staff-form/public/<str:form_code>/check-email/', ExtStaffCheckEmailView.as_view(), name='ext-staff-check-email'),
     path('ext-staff-form/public/<str:form_code>/signup/', ExtStaffSignupView.as_view(), name='ext-staff-signup'),
+
+    # System Transitions (Semester Shift & Logs)
+    path('shift-semester/', ShiftSemesterView.as_view(), name='shift-semester'),
+    path('transition-logs/', TransitionLogListView.as_view(), name='transition-logs'),
 ]

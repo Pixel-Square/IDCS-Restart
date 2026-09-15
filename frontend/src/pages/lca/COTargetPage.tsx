@@ -53,6 +53,10 @@ export default function COTargetPage({
   const [validationErrors, setValidationErrors] = useState<Set<string>>(new Set());
   const [learnerCentricLevelCode, setLearnerCentricLevelCode] = useState<LearnerCentricCode>('-');
 
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
+
   const containerStyle = embedded ? { padding: 12, width: '100%', margin: 0 } as React.CSSProperties : styles.page;
 
   // Display name state — will be set from multiple fallbacks so UI shows as soon as available
@@ -104,18 +108,44 @@ export default function COTargetPage({
 
   const fixedLcaLevels = { l3: 60, l2: 55, l1: 50 };
 
-  // Load previously saved CO Target inputs
+  // Load previously saved CO Target inputs (LocalStorage backup first, then API)
   useEffect(() => {
     let mounted = true;
     const subjectId = String(courseCode || '').trim();
     if (!subjectId) return;
+
+    setIsLoaded(false);
+
+    // 1. Try local storage draft backup first for zero-latency load on refresh
+    try {
+      const localRaw = localStorage.getItem(`co_target_draft_${subjectId}`);
+      if (localRaw) {
+        const local = JSON.parse(localRaw);
+        if (Array.isArray(local.btlSelection) && local.btlSelection.length === 5) {
+          setBtlSelection(local.btlSelection);
+        }
+        if (local.weights && typeof local.weights === 'object') {
+          setWeights((p) => ({ ...p, ...local.weights }));
+        }
+        if (Array.isArray(local.manuals) && local.manuals.length === 5) {
+          setManuals(local.manuals);
+        }
+        if (local.apiSummary && typeof local.apiSummary === 'object') {
+          setApiSummary((p) => ({ ...p, ...local.apiSummary }));
+        }
+      }
+    } catch {
+      // ignore local storage parse errors
+    }
+
+    // 2. Fetch from database API
     (async () => {
       try {
         const res = await fetchCoTargetRevision(subjectId);
         setRevStatus(String((res as any)?.status || 'draft'));
         const d = (res as any)?.data || {};
         if (!mounted) return;
-        // Only restore saved btlSelection if CDAP hasn't overridden it yet
+
         if (Array.isArray(d.btlSelection) && d.btlSelection.length === 5) {
           setBtlSelection(d.btlSelection);
         }
@@ -142,12 +172,55 @@ export default function COTargetPage({
         setSaveNote('Loaded');
       } catch {
         // ignore load failures
+      } finally {
+        if (mounted) setIsLoaded(true);
       }
     })();
     return () => {
       mounted = false;
     };
   }, [courseCode]);
+
+  const readOnly = String(revStatus || '').toLowerCase() === 'published';
+
+  // Automatic saving on state change (instant LocalStorage + debounced API save)
+  useEffect(() => {
+    const subjectId = String(courseCode || '').trim();
+    if (!isLoaded || !subjectId || readOnly) return;
+
+    const payloadData = {
+      btlSelection,
+      weights,
+      manuals,
+      apiSummary,
+      lcaLevels: fixedLcaLevels,
+    };
+
+    // Instant local storage backup
+    try {
+      localStorage.setItem(`co_target_draft_${subjectId}`, JSON.stringify(payloadData));
+    } catch {
+      // ignore
+    }
+
+    setAutoSaveStatus('saving');
+
+    const timer = setTimeout(async () => {
+      try {
+        await saveCoTargetRevision(
+          subjectId,
+          payloadData,
+          revStatus === 'published' ? 'published' : 'draft',
+        );
+        setAutoSaveStatus('saved');
+        setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      } catch (err) {
+        setAutoSaveStatus('error');
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [courseCode, btlSelection, weights, manuals, apiSummary, isLoaded, readOnly, revStatus]);
 
   // Fetch CDAP rows and auto-derive max BTL per CO (CO1..CO5 from unit 1..5)
   useEffect(() => {
@@ -196,8 +269,6 @@ export default function COTargetPage({
     })();
     return () => { mounted = false; };
   }, [courseCode, teachingAssignmentId]);
-
-  const readOnly = String(revStatus || '').toLowerCase() === 'published';
 
   const handlePublish = async () => {
     const missingBtl = btlSelection.map((v, i) => v === null ? i : -1).filter((i) => i >= 0);
@@ -593,6 +664,21 @@ export default function COTargetPage({
           <div>
             {!embedded ? (
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'flex-end' }}>
+                {autoSaveStatus === 'saving' && (
+                  <span style={{ fontSize: 12, color: '#0284c7', fontWeight: 600, padding: '4px 8px', background: '#f0f9ff', borderRadius: 6, border: '1px solid #bae6fd' }}>
+                    Auto-saving...
+                  </span>
+                )}
+                {autoSaveStatus === 'saved' && (
+                  <span style={{ fontSize: 12, color: '#15803d', fontWeight: 600, padding: '4px 8px', background: '#f0fdf4', borderRadius: 6, border: '1px solid #bbf7d0' }}>
+                    ✓ Auto-saved{lastSavedTime ? ` (${lastSavedTime})` : ''}
+                  </span>
+                )}
+                {autoSaveStatus === 'error' && (
+                  <span style={{ fontSize: 12, color: '#b91c1c', fontWeight: 600, padding: '4px 8px', background: '#fef2f2', borderRadius: 6, border: '1px solid #fecaca' }}>
+                    ⚠️ Auto-save error
+                  </span>
+                )}
                 <button
                   type="button"
                   onClick={!readOnly ? handlePublish : () => setEditRequestOpen(true)}
@@ -619,6 +705,21 @@ export default function COTargetPage({
               </div>
             ) : onClose ? (
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'flex-end' }}>
+                {autoSaveStatus === 'saving' && (
+                  <span style={{ fontSize: 12, color: '#0284c7', fontWeight: 600, padding: '4px 8px', background: '#f0f9ff', borderRadius: 6, border: '1px solid #bae6fd' }}>
+                    Auto-saving...
+                  </span>
+                )}
+                {autoSaveStatus === 'saved' && (
+                  <span style={{ fontSize: 12, color: '#15803d', fontWeight: 600, padding: '4px 8px', background: '#f0fdf4', borderRadius: 6, border: '1px solid #bbf7d0' }}>
+                    ✓ Auto-saved{lastSavedTime ? ` (${lastSavedTime})` : ''}
+                  </span>
+                )}
+                {autoSaveStatus === 'error' && (
+                  <span style={{ fontSize: 12, color: '#b91c1c', fontWeight: 600, padding: '4px 8px', background: '#fef2f2', borderRadius: 6, border: '1px solid #fecaca' }}>
+                    ⚠️ Auto-save error
+                  </span>
+                )}
                 <button
                   type="button"
                   onClick={!readOnly ? handlePublish : () => setEditRequestOpen(true)}

@@ -166,6 +166,7 @@ class DepartmentAnalysisView(APIView):
             else:
                 distribution["90-100"] += 1
 
+        from academic_v2.marks_helper import get_remark
         student_list = []
         for s in student_qs.select_related("user", "section")[:200]:
             avg = student_avg.get(s.id, None)
@@ -175,7 +176,7 @@ class DepartmentAnalysisView(APIView):
                 "name": s.user.get_full_name() or s.user.username,
                 "section": s.section.name if s.section else "",
                 "avg_marks": round(avg, 1) if avg is not None else None,
-                "result": "Pass" if (avg is not None and avg >= 50.0) else ("Fail" if avg is not None else "N/A"),
+                "result": get_remark(avg) if avg is not None else "—",
             })
 
         dept_name = ""

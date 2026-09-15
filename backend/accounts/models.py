@@ -185,6 +185,10 @@ def validate_roles_for_user(user, roles):
         'CODE_ADMIN',
         'CODE_COURSE_INCHARGE',
         'CODE_SECTION_INCHARGE',
+        'DISCIPLINE_COMMITTEE',
+        'DISCIPLINE_COMMITTEE_ADMIN',
+        'DISCIPLINE COMMITTEE',
+        'DISCIPLINECOMMITTEEADMIN',
     }
     
     # External staff can only have EXT_STAFF role

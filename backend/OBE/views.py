@@ -107,7 +107,7 @@ from .models import CdapRevision, CdapActiveLearningAnalysisMapping, ObeAssessme
 from .serializers import CourseQuestionBankSerializer, CourseQuestionBankLogSerializer
 from .services.cdap_parser import parse_cdap_excel
 from .services.articulation_parser import parse_articulation_matrix_excel
-from .services.articulation_from_revision import build_articulation_matrix_from_revision_rows
+from .services.articulation_from_revision import build_articulation_matrix_from_revision_rows, _calc_row_hours
 from accounts.utils import get_user_permissions
 from django.core.files.storage import default_storage
 from django.conf import settings
@@ -1565,6 +1565,23 @@ def _touch_lock_after_publish(request, *, subject_code: str, subject_name: str, 
             'updated_at',
         ]
     )
+
+    # Also consume any active edit request approval windows so the UI lock state updates immediately post-publish.
+    try:
+        from django.utils import timezone
+        from .models import ObeEditRequest
+
+        now = timezone.now()
+        ObeEditRequest.objects.filter(
+            staff_user=getattr(request, 'user', None),
+            subject_code=str(subject_code),
+            assessment=str(assessment).lower(),
+            status='APPROVED',
+            approved_until__gt=now,
+        ).update(approved_until=now)
+    except Exception:
+        pass
+
     return lock
 
 
@@ -1602,8 +1619,26 @@ def _enforce_mark_entry_not_blocked(
     except Exception:
         lock = None
 
-    if lock is None:
-        return None
+    # Check if an active approved edit request exists for this staff+subject+assessment
+    try:
+        from django.utils import timezone
+        from .models import ObeEditRequest
+
+        now = timezone.now()
+        edit_req_qs = ObeEditRequest.objects.filter(
+            subject_code=str(subject_code),
+            assessment=str(assessment).lower(),
+            status='APPROVED',
+            approved_until__gt=now,
+        )
+        if user and hasattr(user, 'id'):
+            edit_req_qs = edit_req_qs.filter(staff_user=user)
+
+        if edit_req_qs.exists():
+            # Active IQAC approval window is open; allow edit/publish
+            return None
+    except Exception:
+        pass
 
     try:
         lock.recompute_blocks()
@@ -7470,7 +7505,7 @@ def _resolve_pso_vals(hours_value, extra_pso=None, existing_pso=None) -> list:
             is_checked = True
         elif isinstance(existing_pso, list) and i < len(existing_pso) and existing_pso[i] not in ('-', None, '', False, 0):
             is_checked = True
-        pso_vals.append(hours_value if is_checked else '-')
+        pso_vals.append(1 if is_checked else '-')
     return pso_vals
 
 
@@ -7487,45 +7522,42 @@ def _resolve_active_learning_po_vals(co_mapped, topic_name, hours_value, al_grid
     """Resolve 11 PO values for an active-learning/special row.
 
     Priority:
-      1. CDAP Active Learning Mapping grid (al_grid) — the ticks the faculty entered
-      2. Global OBE Master mapping (by topic name)
-      3. articulation_extras po values (from uploaded Excel page 2)
+      1. CDAP Active Learning Mapping grid (al_grid) — exact ticks the faculty entered in CDAP
+      2. Global OBE Master mapping (by topic name) - only if faculty grid row has no data
+      3. articulation_extras po values
       4. existing_po already on the row
     """
     co_mapped_norm = _normalize_al_key(co_mapped)
     topic_name_norm = _normalize_al_key(topic_name)
 
-    # 1. Build from al_grid using the co_mapped → grid-row mapping
     grid_indices = _co_mapped_to_al_indices(co_mapped_norm)
-    grid_bool = _build_al_po_from_grid(grid_indices, al_grid)
-    has_grid_data = any(grid_bool)
+    grid_bool = [False] * 11
+    has_grid_row = False
 
-    # 2. Global mapping by topic name
+    for idx in grid_indices:
+        if idx < len(al_grid) and isinstance(al_grid[idx], list):
+            has_grid_row = True
+            row = al_grid[idx]
+            for c in range(min(11, len(row))):
+                if row[c]:
+                    grid_bool[c] = True
+
+    if has_grid_row:
+        # User entered ticks in the CDAP Active Learning Mapping grid. Use exact ticks as 1 or '-'!
+        return [1 if grid_bool[i] else '-' for i in range(11)]
+
+    # Fallback only if faculty grid row doesn't exist:
     global_po = _global_po_for_topic(topic_name_norm, global_mapping)
+    if global_po:
+        return [1 if (i < len(global_po) and global_po[i]) else '-' for i in range(11)]
 
-    # 3. Also try by dropdown topic match if topic was empty
-    if not has_grid_data and not global_po and al_dropdowns:
-        for idx, drop_val in enumerate(al_dropdowns):
-            if drop_val and _normalize_al_key(drop_val) == topic_name_norm:
-                if idx < len(al_grid) and isinstance(al_grid[idx], list):
-                    for c in range(min(11, len(al_grid[idx]))):
-                        if al_grid[idx][c]:
-                            grid_bool[c] = True
-                    has_grid_data = any(grid_bool)
-                    break
+    if isinstance(extra_po, list):
+        return [1 if (i < len(extra_po) and extra_po[i] not in ('-', None, '', False, 0)) else '-' for i in range(11)]
 
-    # Build final po_vals
-    po_vals = []
-    for i in range(11):
-        is_checked = (
-            (has_grid_data and grid_bool[i]) or
-            (global_po and i < len(global_po) and global_po[i]) or
-            (isinstance(extra_po, list) and i < len(extra_po) and extra_po[i] not in ('-', None, '', False, 0)) or
-            (isinstance(existing_po, list) and i < len(existing_po) and existing_po[i] not in ('-', None, '', False, 0))
-        )
-        po_vals.append(hours_value if is_checked else '-')
+    if isinstance(existing_po, list):
+        return [1 if (i < len(existing_po) and existing_po[i] not in ('-', None, '', False, 0)) else '-' for i in range(11)]
 
-    return po_vals
+    return ['-'] * 11
 
 
 def _resolve_active_learning_pso_vals(hours_value, extra_pso=None, existing_pso=None):
@@ -7589,8 +7621,6 @@ def articulation_matrix(request, subject_id: str):
                     k in co_m.lower() or k in top_n.lower()
                     for k in ['ssa', 'active learning', 'special']
                 )
-                if not is_special:
-                    continue
 
                 # Determine grid indices for this row type
                 grid_indices = _co_mapped_to_al_indices(co_norm)
@@ -7610,19 +7640,21 @@ def articulation_matrix(request, subject_id: str):
                         top_n = str(extra_topic).strip()
                         r['topic_name'] = top_n
 
-                h_val = r.get('hours') or (extra_rr.get('hours') if isinstance(extra_rr, dict) else 2) or 2
-                try:
-                    h_val = int(h_val) if str(h_val) != '-' else 2
-                except Exception:
-                    h_val = 2
+                if is_special:
+                    h_val = r.get('hours') or (extra_rr.get('hours') if isinstance(extra_rr, dict) else 2) or 2
+                    try:
+                        h_val = int(h_val) if str(h_val) != '-' else 2
+                    except Exception:
+                        h_val = 2
+                    extra_po = extra_rr.get('po') if isinstance(extra_rr, dict) else None
+                    extra_pso = extra_rr.get('pso') if isinstance(extra_rr, dict) else None
 
-                extra_po = extra_rr.get('po') if isinstance(extra_rr, dict) else None
-                extra_pso = extra_rr.get('pso') if isinstance(extra_rr, dict) else None
+                    r['po'] = _resolve_active_learning_po_vals(
+                        co_m, top_n, h_val, al_grid, al_dropdowns, global_mapping, extra_po, r.get('po')
+                    )
+                    r['pso'] = _resolve_active_learning_pso_vals(h_val, extra_pso, r.get('pso'))
 
-                r['po'] = _resolve_active_learning_po_vals(
-                    co_m, top_n, h_val, al_grid, al_dropdowns, global_mapping, extra_po, r.get('po')
-                )
-                r['pso'] = _resolve_active_learning_pso_vals(h_val, extra_pso, r.get('pso'))
+                r['hours'] = _calc_row_hours(r.get('po', []), r.get('pso', []))
 
             # 2) Add any missing picked rows from articulation_extras
             if isinstance(picked, list) and picked:
@@ -7645,16 +7677,17 @@ def articulation_matrix(request, subject_id: str):
                         activity_name = _pick_topic_from_dropdowns(grid_indices, al_dropdowns)
 
                     next_serial += 1
-                    hours_value = rr.get('hours') or rr.get('class_session_hours') or 2
+                    h_val = rr.get('hours') or 2
                     try:
-                        hours_value = int(hours_value) if str(hours_value) != '-' else 2
+                        h_val = int(h_val) if str(h_val) != '-' else 2
                     except Exception:
-                        hours_value = 2
+                        h_val = 2
 
                     po_vals = _resolve_active_learning_po_vals(
-                        co_mapped, activity_name, hours_value, al_grid, al_dropdowns, global_mapping, rr.get('po')
+                        co_mapped, activity_name, h_val, al_grid, al_dropdowns, global_mapping, rr.get('po')
                     )
-                    pso_vals = _resolve_active_learning_pso_vals(hours_value, rr.get('pso'))
+                    pso_vals = _resolve_active_learning_pso_vals(h_val, rr.get('pso'))
+                    row_hrs = _calc_row_hours(po_vals, pso_vals)
 
                     u.setdefault('rows', []).append({
                         'excel_row': rr.get('excel_row'),
@@ -7664,8 +7697,13 @@ def articulation_matrix(request, subject_id: str):
                         'topic_name': activity_name,
                         'po': po_vals,
                         'pso': pso_vals,
-                        'hours': hours_value,
+                        'hours': row_hrs,
                     })
+
+            # 3) Recalculate hours dynamically for all rows in the unit
+            u_rows = u.get('rows') or []
+            for r in u_rows:
+                r['hours'] = _calc_row_hours(r.get('po', []), r.get('pso', []))
 
     matrix['meta'] = {**(matrix.get('meta') or {}), 'subject_id': str(subject_id)}
     return Response(matrix)

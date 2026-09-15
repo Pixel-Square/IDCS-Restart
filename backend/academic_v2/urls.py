@@ -6,6 +6,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    AcV2VersionViewSet,
     AcV2SemesterConfigViewSet,
     AcV2SemesterGroupViewSet,
     AcV2ClassTypeViewSet,
@@ -85,6 +86,7 @@ from .views import (
 app_name = 'academic_v2'
 
 router = DefaultRouter()
+router.register(r'versions', AcV2VersionViewSet, basename='version')
 router.register(r'semester-configs', AcV2SemesterConfigViewSet, basename='semester-config')
 router.register(r'semester-groups', AcV2SemesterGroupViewSet, basename='semester-group')
 router.register(r'class-types', AcV2ClassTypeViewSet, basename='class-type')
@@ -119,6 +121,7 @@ urlpatterns = [
     path('google-sheets/oauth/status/', google_sheets_oauth_status, name='google-sheets-oauth-status'),
     path('google-sheets/oauth/start/', google_sheets_oauth_start, name='google-sheets-oauth-start'),
     path('google-sheets/oauth/callback/', google_sheets_oauth_callback, name='google-sheets-oauth-callback'),
+    path('google-sheets/oauth/callback', google_sheets_oauth_callback, name='google-sheets-oauth-callback-noslash'),
     path('faculty/courses/', faculty_courses_status, name='faculty-courses-status'),
     path('faculty/courses/<int:ta_id>/', faculty_course_info, name='faculty-course-info'),
     path('exams/<uuid:exam_id>/', faculty_exam_info, name='faculty-exam-info'),
@@ -217,7 +220,6 @@ from .academic_performance_views import (
     PublishedDashboardsListView,
     AcademicPerformanceAnalyticsView,
     StudentSearchView,
-    StudentProgressReportView,
     StudentCompareView,
     FacultyWiseAnalyticsView,
     ClassAdvisorDeepDiveView,
@@ -234,7 +236,6 @@ urlpatterns += [
     path('performance/dashboards/', PublishedDashboardsListView.as_view(), name='academic-performance-dashboards'),
     path('performance/analytics/', AcademicPerformanceAnalyticsView.as_view(), name='academic-performance-analytics'),
     path('performance/student-search/', StudentSearchView.as_view(), name='academic-performance-student-search'),
-    path('performance/student/<str:student_id>/', StudentProgressReportView.as_view(), name='academic-performance-student-report'),
     path('performance/student-compare/', StudentCompareView.as_view(), name='academic-performance-student-compare'),
     path('performance/faculty-wise/', FacultyWiseAnalyticsView.as_view(), name='academic-performance-faculty-wise'),
     path('performance/class-advisor/<str:section_id>/', ClassAdvisorDeepDiveView.as_view(), name='academic-performance-class-advisor'),
@@ -246,5 +247,22 @@ urlpatterns += [
     path('performance/student-report-pdf/<str:student_id>/', StudentReportPDFView.as_view(), name='academic-performance-student-report-pdf'),
     path('performance/department-analysis/', DepartmentAnalysisView.as_view(), name='academic-performance-department-analysis'),
     path('performance/subject-wise/', SubjectWiseAnalysisView.as_view(), name='academic-performance-subject-wise'),
+]
+
+from .ssa_views import (
+    ssa_student_assignments,
+    ssa_student_assignment_detail,
+    ssa_student_submit,
+    ssa_student_submission_status,
+    ssa_student_submission_file,
+)
+
+urlpatterns += [
+    # Student SSA endpoints
+    path('ssa/student/assignments/', ssa_student_assignments, name='ssa-student-assignments'),
+    path('ssa/student/assignment/<uuid:exam_id>/', ssa_student_assignment_detail, name='ssa-student-assignment-detail'),
+    path('ssa/student/assignment/<uuid:exam_id>/submit/', ssa_student_submit, name='ssa-student-submit'),
+    path('ssa/student/assignment/<uuid:exam_id>/status/', ssa_student_submission_status, name='ssa-student-submission-status'),
+    path('ssa/student/submission/<uuid:submission_id>/file/', ssa_student_submission_file, name='ssa-student-submission-file'),
 ]
 

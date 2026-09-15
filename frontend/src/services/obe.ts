@@ -11,6 +11,8 @@ export type TeachingAssignmentItem = {
   section_id?: number | null;
   section_name?: string | null;
   academic_year?: string;
+  academic_year_id?: number | null;
+  academic_year_parity?: string | null;
   semester?: number | null;
   department?: { id: number; code?: string | null; name?: string | null; short_name?: string | null } | null;
   batch?: any;
@@ -21,8 +23,11 @@ import { apiClient } from './auth';
 import axios from 'axios';
 import { getApiBase } from './apiBase';
 
-export async function fetchMyTeachingAssignments(): Promise<TeachingAssignmentItem[]> {
-  const url = `${apiBase()}/api/academics/my-teaching-assignments/`;
+export async function fetchMyTeachingAssignments(academicYearId?: number | string): Promise<TeachingAssignmentItem[]> {
+  const query = academicYearId !== undefined && academicYearId !== null && academicYearId !== ''
+    ? `?academic_year_id=${encodeURIComponent(String(academicYearId))}`
+    : '';
+  const url = `${apiBase()}/api/academics/my-teaching-assignments/${query}`;
   try {
     const res = await apiClient.get(url);
     const data = (res as any)?.data;

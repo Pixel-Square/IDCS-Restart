@@ -168,107 +168,30 @@ export function getCoMaxWeight(data: any, coNum: number): number {
   if (!data) return 0;
   let finalCoMaxWeight = 0;
   const examList = data?.exams || [];
-  const customVars = data?.cqi_config?.custom_vars || [];
 
-  const checkedExams: string[] = [];
-  if (data?.cqi_config && Array.isArray(data.cqi_config.exams) && data.cqi_config.exams.length > 0) {
-    checkedExams.push(...data.cqi_config.exams);
-  } else {
-    customVars.forEach((v: any) => {
-      if (v && v.exam && !checkedExams.includes(v.exam)) {
-        checkedExams.push(v.exam);
+  examList.forEach((ex: any) => {
+    if (String(ex?.kind || '').toLowerCase() === 'cqi') return;
+    const covered = Array.isArray(ex?.covered_cos) ? ex.covered_cos : [];
+    if (covered.length > 0 && !covered.includes(coNum)) return;
+
+    const exTotalWeight = Number(ex?.weight ?? 0);
+    let parsedWeight = 0;
+    if (ex.co_weights && typeof ex.co_weights === 'object') {
+      const directWeight = ex.co_weights[String(coNum)] ?? ex.co_weights[coNum];
+      if (directWeight !== undefined && directWeight !== null && !isNaN(Number(directWeight)) && Number(directWeight) > 0) {
+        parsedWeight = Number(directWeight);
       }
-    });
-  }
-
-  if (checkedExams.length > 0 && examList.length > 0) {
-    const matchedExams = examList.filter((ex: any) => {
-      const name = String(ex?.name || '').trim().toLowerCase();
-      const shortName = String(ex?.short_name || '').trim().toLowerCase();
-      const displayName = String(ex?.exam_display_name || '').trim().toLowerCase();
-      const code = String(ex?.code || '').trim().toLowerCase();
-      const examCode = String(ex?.exam || '').trim().toLowerCase();
-      const examId = String(ex?.id || '').trim().toLowerCase();
-
-      return checkedExams.some((chk) => {
-        const c = String(chk || '').trim().toLowerCase();
-        return c === name || c === shortName || c === displayName || c === code || c === examCode || c === examId;
-      });
-    });
-
-    if (matchedExams.length > 0) {
-      matchedExams.forEach((ex: any) => {
-        const covered = Array.isArray(ex?.covered_cos) ? ex.covered_cos : [];
-        if (covered.includes(coNum)) {
-          const exTotalWeight = Number(ex?.weight ?? 0);
-          let parsedWeight = 0;
-          if (ex.co_weights && typeof ex.co_weights === 'object') {
-            const directWeight = ex.co_weights[String(coNum)] ?? ex.co_weights[coNum];
-            if (directWeight !== undefined && directWeight !== null && !isNaN(Number(directWeight))) {
-              parsedWeight = Number(directWeight);
-            }
-            if (parsedWeight > 0 && exTotalWeight > 0) {
-              const totalCoWeightSum = Number((Object.values(ex.co_weights) as any[]).reduce((acc: number, curr: any) => acc + (Number(curr) || 0), 0));
-              if (Math.abs(totalCoWeightSum - exTotalWeight) > 0.05) {
-                parsedWeight = 0;
-              }
-            }
-          }
-          if (parsedWeight > 0) {
-            finalCoMaxWeight += parsedWeight;
-          } else {
-            finalCoMaxWeight += exTotalWeight / Math.max(covered.length, 1);
-          }
-        }
-      });
-      finalCoMaxWeight = Number(finalCoMaxWeight.toFixed(4));
     }
-  }
-
-  if (finalCoMaxWeight <= 0 && examList.length > 0) {
-    let nonCqiExamsWithWeights = 0;
-    examList.forEach((ex: any) => {
-      if (String(ex?.kind || '').toLowerCase() === 'cqi') return;
-      const covered = Array.isArray(ex?.covered_cos) ? ex.covered_cos : [];
-      if (covered.includes(coNum)) {
-        const exTotalWeight = Number(ex?.weight ?? 0);
-        let parsedWeight = 0;
-        if (ex.co_weights && typeof ex.co_weights === 'object') {
-          const directWeight = ex.co_weights[String(coNum)] ?? ex.co_weights[coNum];
-          if (directWeight !== undefined && directWeight !== null && !isNaN(Number(directWeight))) {
-            parsedWeight = Number(directWeight);
-          }
-          if (parsedWeight > 0 && exTotalWeight > 0) {
-            const totalCoWeightSum = Number((Object.values(ex.co_weights) as any[]).reduce((acc: number, curr: any) => acc + (Number(curr) || 0), 0));
-            if (Math.abs(totalCoWeightSum - exTotalWeight) > 0.05) {
-              parsedWeight = 0;
-            }
-          }
-        }
-        if (parsedWeight > 0) {
-          finalCoMaxWeight += parsedWeight;
-          nonCqiExamsWithWeights++;
-        } else if (exTotalWeight > 0) {
-          finalCoMaxWeight += exTotalWeight / Math.max(covered.length, 1);
-          nonCqiExamsWithWeights++;
-        }
-      }
-    });
-    finalCoMaxWeight = Number(finalCoMaxWeight.toFixed(4));
-
-    if (finalCoMaxWeight <= 0 && nonCqiExamsWithWeights === 0) {
-      examList.forEach((ex: any) => {
-        if (String(ex?.kind || '').toLowerCase() === 'cqi') return;
-        const covered = Array.isArray(ex?.covered_cos) ? ex.covered_cos : [];
-        if (covered.includes(coNum)) {
-          finalCoMaxWeight += Number(ex?.weight ?? 0) / Math.max(covered.length, 1);
-        }
-      });
-      finalCoMaxWeight = Number(finalCoMaxWeight.toFixed(4));
+    if (parsedWeight > 0) {
+      finalCoMaxWeight += parsedWeight;
+    } else if (exTotalWeight > 0) {
+      finalCoMaxWeight += exTotalWeight / Math.max(covered.length || (data.co_count || 5), 1);
     }
-  }
+  });
+
+  finalCoMaxWeight = Number(finalCoMaxWeight.toFixed(4));
   if (finalCoMaxWeight <= 0 && data) {
-    const totalInternal = Number(data.total_internal_marks || data.class_type?.total_internal_marks || 40);
+    const totalInternal = Number(data.total_internal_marks || data.class_type?.total_internal_marks || 50);
     finalCoMaxWeight = Number((totalInternal / (data.co_count || 5)).toFixed(2));
   }
   return finalCoMaxWeight;
@@ -276,40 +199,51 @@ export function getCoMaxWeight(data: any, coNum: number): number {
 
 export function getWeightedTotal(data: any, student: any, coNum: number): number {
   if (!data) return 0;
+  const examMarks = student?.exam_marks || {};
+  const exams = data?.exams || [];
+  let weightedSum = 0;
+  let hasExamMarks = false;
+
+  exams.forEach((ex: any) => {
+    if (String(ex?.kind || '').toLowerCase() === 'cqi') return;
+    const em = examMarks[ex.id];
+    if (!em || em.is_absent) return;
+    const covered = Array.isArray(ex?.covered_cos) ? ex.covered_cos : [];
+    if (covered.length > 0 && !covered.includes(coNum)) return;
+
+    const coVal = Number(em[`co${coNum}`] ?? 0);
+    const maxMarks = getExamCoMaxMarks(data, ex.id, coNum);
+    let weight = 0;
+    if (ex.co_weights && typeof ex.co_weights === 'object') {
+      const customW = ex.co_weights[String(coNum)] ?? ex.co_weights[coNum];
+      if (customW !== undefined && customW !== null && !isNaN(Number(customW)) && Number(customW) > 0) {
+        weight = Number(customW);
+      }
+    }
+    if (weight <= 0 && Number(ex.weight || 0) > 0) {
+      weight = Number(ex.weight) / Math.max(covered.length || (data.co_count || 5), 1);
+    }
+
+    if (maxMarks > 0 && weight > 0) {
+      hasExamMarks = true;
+      weightedSum += (coVal / maxMarks) * weight;
+    }
+  });
+
+  if (hasExamMarks) {
+    return Number.isInteger(weightedSum) ? weightedSum : Number(weightedSum.toFixed(2));
+  }
+
   if (Array.isArray(student?.co_totals) && student.co_totals[coNum - 1] !== undefined) {
     const val = Number(student.co_totals[coNum - 1] ?? 0);
     return Number.isInteger(val) ? val : Number(val.toFixed(2));
   }
-  const examMarks = student?.exam_marks || {};
-  const exams = data?.exams || [];
-  let weightedSum = 0;
-  exams.forEach((ex: any) => {
-    const em = examMarks[ex.id];
-    if (!em || em.is_absent) return;
-    const coVal = Number(em[`co${coNum}`] ?? 0);
-    const maxMarks = Number(ex.max_marks || 0);
-    let weight = Number(ex.weight || 0);
-    if (ex.co_weights && typeof ex.co_weights === 'object') {
-      const customW = ex.co_weights[String(coNum)] ?? ex.co_weights[coNum];
-      if (customW !== undefined && customW !== null) {
-        weight = Number(customW);
-      }
-    }
-    if (maxMarks > 0 && weight > 0) {
-      weightedSum += (coVal / maxMarks) * weight;
-    }
-  });
-  return Number.isInteger(weightedSum) ? weightedSum : Number(weightedSum.toFixed(2));
+  return 0;
 }
 
 export function getCalculatedAttainment(data: any, student: any, coNum: number): number | '-' {
   const finalCoMaxWeight = getCoMaxWeight(data, coNum);
-  let coObtWeight = 0;
-  if (Array.isArray(student?.co_totals) && student.co_totals[coNum - 1] !== undefined) {
-    coObtWeight = Number(student.co_totals[coNum - 1] ?? 0);
-  } else {
-    coObtWeight = getWeightedTotal(data, student, coNum);
-  }
+  const coObtWeight = getWeightedTotal(data, student, coNum);
   if (finalCoMaxWeight > 0 && coObtWeight >= 0) {
     const calc = (coObtWeight / finalCoMaxWeight) * 50;
     return Number.isInteger(calc) ? calc : Number(calc.toFixed(2));
@@ -324,9 +258,7 @@ export function computeStudentRowValues(
   coNum: number
 ): Record<string, number | '-'> {
   const rowValues: Record<string, number | '-'> = {};
-  const obtWeight = Array.isArray(student?.co_totals) && student.co_totals[coNum - 1] !== undefined
-    ? Number(student.co_totals[coNum - 1] ?? 0)
-    : getWeightedTotal(data, student, coNum);
+  const obtWeight = getWeightedTotal(data, student, coNum);
   const maxWeight = getCoMaxWeight(data, coNum);
   const rawTotal = getRawTotal(data, student, coNum);
   const weightedTotal = getWeightedTotal(data, student, coNum);

@@ -12,7 +12,6 @@ import {
   Search,
   Filter,
   CheckCircle2,
-  XCircle,
   Clock,
   ArrowRight,
   BookOpen,
@@ -45,7 +44,6 @@ import {
 import { apiClient } from '../../services/auth';
 import {
   fetchPerformanceAnalytics,
-  fetchStudentProgressReport,
   fetchPublishedDashboards,
   searchStudents,
   compareStudents,
@@ -185,10 +183,7 @@ export default function AcademicPerformancePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedYear]);
 
-  // Search & Progress Report Modal
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
-  const [studentReport, setStudentReport] = useState<StudentProgressReportResponse | null>(null);
-  const [reportLoading, setReportLoading] = useState<boolean>(false);
 
   // Faculty-Wise Data State
   const [faculties, setFaculties] = useState<FacultyWiseRow[]>([]);
@@ -641,6 +636,10 @@ export default function AcademicPerformancePage() {
     try {
       const response = await apiClient.get(`/api/academic-v2/performance/student-report-pdf/${studentId}/`, {
         responseType: 'blob',
+        params: {
+          exam: selectedExamType,
+          subject: selectedSubject,
+        }
       });
       // Determine filename, preferring Content-Disposition header
       let filename = `Academic_Performance_${studentChartsData?.reg_no || 'Report'}.pdf`;
@@ -716,18 +715,7 @@ export default function AcademicPerformancePage() {
     }
   };
 
-  const handleOpenReport = async (studentId: string) => {
-    setSelectedStudentId(studentId);
-    setReportLoading(true);
-    try {
-      const rep = await fetchStudentProgressReport(studentId, selectedExamType);
-      setStudentReport(rep);
-    } catch {
-      setStudentReport(null);
-    } finally {
-      setReportLoading(false);
-    }
-  };
+
 
   // Open Department Drill Down — the department is added to the current filter
   // context while preserving the selected Year / Semester / Assessment / Section.
@@ -1928,7 +1916,7 @@ return (
                   error={subjectError}
                   sectionFilter={subjectSectionFilter}
                   onSectionClick={setSubjectSectionFilter}
-                  onViewStudent={handleOpenReport}
+                  onViewStudent={handleOpenStudentCharts}
                 />
               )}
               {facultyDrill && !subjectDrill && (
@@ -2052,7 +2040,7 @@ return (
                                   <td className="py-3 px-4 text-right">
                                     <button
                                       type="button"
-                                      onClick={() => handleOpenReport(st.student_id)}
+                                      onClick={() => handleOpenStudentCharts(st.student_id)}
                                       className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-700"
                                     >
                                       View Analysis <ChevronRight className="w-3.5 h-3.5" />
@@ -2177,7 +2165,7 @@ return (
                             <th className="py-3 px-4">Student Name</th>
                             <th className="py-3 px-4 text-center">Section</th>
                             <th className="py-3 px-4 text-center">Average Marks</th>
-                            <th className="py-3 px-4 text-center">Result</th>
+                            <th className="py-3 px-4 text-center">Remarks</th>
                             <th className="py-3 px-4 text-right">Action</th>
                           </tr>
                         </thead>
@@ -2194,12 +2182,17 @@ return (
                                                                     { st.avg_marks != null ? st.avg_marks : '—'}
                                 </td>
                                 <td className="py-3 px-4 text-center">
-                                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${st.result === 'Pass' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-600'}`}>{st.result}</span>
+                                  {/* Using result field as remarks if we calculate it in backend, else fallback */}
+                                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                                    (st.result === 'Pass' || st.result === 'Excellent' || st.result === 'Very Good' || st.result === 'Good' || st.result === 'Satisfactory') 
+                                    ? 'bg-emerald-50 text-emerald-700' 
+                                    : 'bg-rose-50 text-rose-600'
+                                  }`}>{st.result}</span>
                                 </td>
                                 <td className="py-3 px-4 text-right">
                                   <button
                                     type="button"
-                                    onClick={() => handleOpenReport(st.student_id)}
+                                    onClick={() => handleOpenStudentCharts(st.student_id)}
                                     className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-700"
                                   >
                                     View Analysis <ChevronRight className="w-3.5 h-3.5" />
@@ -2218,94 +2211,6 @@ return (
           </div>
         </div>
       )}
-
-      {/* Student Progress Report Modal */}
-
-      {/* Student Progress Report Modal */}
-      {selectedStudentId && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-2xl w-full p-6 space-y-5 animate-in zoom-in-95">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <h3 className="text-base font-extrabold text-slate-900">
-                  {studentReport?.student_info?.name || 'Student Progress Report'}
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Reg No: {studentReport?.student_info?.reg_no} • Dept: {studentReport?.student_info?.dept} • Sec {studentReport?.student_info?.section}
-                </p>
-              </div>
-              <button
-                onClick={() => setSelectedStudentId(null)}
-                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-xl hover:bg-slate-100"
-              >
-                <XCircle className="w-5 h-5" />
-              </button>
-            </div>
-
-            {reportLoading ? (
-              <div className="py-12 text-center">
-                <RefreshCw className="w-6 h-6 text-blue-600 animate-spin mx-auto mb-2" />
-                <p className="text-xs font-bold text-slate-500">Fetching student academic records...</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-center">
-                    <span className="text-xs text-slate-400 block font-bold">Overall Average</span>
-                    <span className="text-lg font-black text-blue-600">{studentReport?.student_info?.overall_score_pct}%</span>
-                  </div>
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-center">
-                    <span className="text-xs text-slate-400 block font-bold">Pass Rate</span>
-                    <span className="text-lg font-black text-emerald-600">{studentReport?.student_info?.pass_rate_pct}%</span>
-                  </div>
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-center">
-                    <span className="text-xs text-slate-400 block font-bold">Status</span>
-                    <span className="text-xs font-black text-slate-800 mt-1 block">{studentReport?.student_info?.status}</span>
-                  </div>
-                </div>
-
-                <div>
-                  <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Subject Breakdown</h4>
-                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                    {studentReport?.subject_results.map((sub, i) => (
-                      <div key={i} className="p-2.5 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-xs">
-                        <div>
-                          <span className="font-bold text-slate-900">{sub.course_name}</span>
-                          <span className="text-[11px] text-slate-400 block">{sub.course_code} • {sub.faculty}</span>
-                        </div>
-                        <div className="text-right">
-                          <span className={`font-bold ${sub.is_pass ? 'text-emerald-600' : 'text-rose-600'}`}>
-                            {sub.total_mark} / {sub.max_mark}
-                          </span>
-                          <span className={`text-[10px] block font-bold ${sub.is_pass ? 'text-emerald-700' : 'text-rose-700'}`}>
-                            {sub.is_pass ? 'Passed' : 'Failed'}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="mt-6 pt-4 border-t border-slate-100">
-                  <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-4">Performance Analysis</h4>
-                  <div className="h-64 w-full min-w-0" style={{ minHeight: '250px', width: '100%' }}>
-                    <ResponsiveContainer width="99%" height="100%" minWidth={0} minHeight={200}>
-                      <BarChart data={studentReport?.subject_results || []} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                        <XAxis dataKey="course_code" tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                        <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                        <Tooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
-                        <Bar dataKey="total_mark" name="Marks Obtained" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={30} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Individual Student Charts Modal */}
       {isStudentChartsModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
@@ -2383,20 +2288,12 @@ return (
               ) : (
                 <div>
                   {/* Avg / Pass metric cards */}
-                  <div className="grid grid-cols-2 gap-4 mb-6">
+                  <div className="grid grid-cols-1 gap-4 mb-6">
                     <div className="bg-indigo-50/60 border border-indigo-100 rounded-2xl p-5 text-center">
                       <p className="text-xs font-bold text-indigo-500 uppercase tracking-wider">Average Marks</p>
                       <h3 className="text-3xl font-black text-indigo-700 mt-1">
                         {studentChartsData?.avg_pct !== undefined && studentChartsData?.avg_pct !== null
                           ? `${studentChartsData.avg_pct}%`
-                          : '—'}
-                      </h3>
-                    </div>
-                    <div className="bg-emerald-50/60 border border-emerald-100 rounded-2xl p-5 text-center">
-                      <p className="text-xs font-bold text-emerald-500 uppercase tracking-wider">Pass Percentage</p>
-                      <h3 className="text-3xl font-black text-emerald-700 mt-1">
-                        {studentChartsData?.pass_pct !== undefined && studentChartsData?.pass_pct !== null
-                          ? `${studentChartsData.pass_pct}%`
                           : '—'}
                       </h3>
                     </div>
@@ -2435,27 +2332,36 @@ return (
                             <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Subject Code</th>
                             <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Subject Name</th>
                             <th scope="col" className="px-4 py-3 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Marks Obtained</th>
-                            <th scope="col" className="px-4 py-3 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Result</th>
+                            <th scope="col" className="px-4 py-3 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Remarks</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 bg-white">
                           {studentChartsData?.marks_data && studentChartsData.marks_data.length > 0 ? (
-                            studentChartsData.marks_data.map((mark: any, idx: number) => (
-                              <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                                <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-700">{mark.subject_code}</td>
-                                <td className="px-4 py-3 text-slate-600">{mark.subject_name}</td>
-                                <td className="whitespace-nowrap px-4 py-3 text-right font-black text-slate-900">{mark.score}</td>
-                                <td className="whitespace-nowrap px-4 py-3 text-right">
-                                  {mark.result === 'Pass' ? (
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700">Pass</span>
-                                  ) : mark.result === 'Fail' ? (
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700">Fail</span>
-                                  ) : (
-                                    <span className="text-slate-400 text-[11px] font-medium">—</span>
-                                  )}
-                                </td>
-                              </tr>
-                            ))
+                            studentChartsData.marks_data.map((mark: any, idx: number) => {
+                              const remarkText = mark.remark || '—';
+                              const remarkStyles: Record<string, { bg: string; textCol: string }> = {
+                                'Excellent': { bg: 'bg-emerald-50', textCol: 'text-emerald-700' },
+                                'Very Good': { bg: 'bg-blue-50', textCol: 'text-blue-700' },
+                                'Good': { bg: 'bg-indigo-50', textCol: 'text-indigo-700' },
+                                'Satisfactory': { bg: 'bg-amber-50', textCol: 'text-amber-700' },
+                                'Needs Improvement': { bg: 'bg-orange-50', textCol: 'text-orange-700' },
+                                'Needs Significant Improvement': { bg: 'bg-rose-50', textCol: 'text-rose-700' },
+                              };
+                              const style = remarkStyles[remarkText] || { bg: 'bg-slate-50', textCol: 'text-slate-500' };
+
+                              return (
+                                <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                                  <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-700">{mark.subject_code}</td>
+                                  <td className="px-4 py-3 text-slate-600">{mark.subject_name}</td>
+                                  <td className="whitespace-nowrap px-4 py-3 text-right font-black text-slate-900">{mark.score}</td>
+                                  <td className="whitespace-nowrap px-4 py-3 text-right">
+                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold ${style.bg} ${style.textCol}`}>
+                                      {remarkText}
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })
                           ) : (
                             <tr>
                               <td colSpan={4} className="px-4 py-8 text-center text-slate-400 font-medium">No subject marks available</td>

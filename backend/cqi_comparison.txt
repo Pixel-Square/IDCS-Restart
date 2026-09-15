@@ -1,0 +1,171 @@
+================================================================================
+1. ALL AcV2CqiExam RECORDS:
+================================================================================
+ID: 6dfd1d20-70a1-4673-a98f-f8978249714d | ClassType: PMBL (ID: c2447cd5-8997-443d-801c-1c0670505c18) | QP Type Code: 'QP1' | Exam Code: 'CQI1' | Display: 'CQI 1' | Active: True
+   COs: [1, 2]
+   Considered Exams: ['CIA_1', 'FORMATIVE_1', 'SSA_1']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: b7ddd1f5-a072-4faf-a44e-f78a9ffcf6ef | ClassType: TCPL (ID: 91f239db-c978-442d-9578-f04321dd4750) | QP Type Code: 'QP1_TCPL' | Exam Code: 'CQI2754' | Display: 'CQI 2' | Active: True
+   COs: [3, 4, 5, 6]
+   Considered Exams: ['CIA_2', 'LAB_2', 'MODEL', 'SSA_2', 'TCPL_MODEL_LAB_OPTIONAL']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-SSA_2-WEIGHT] + [COX-LAB_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT] + [COX-TCPL_MODEL_LAB_OPTIONAL-WEIGHT])<([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT] + [COX-LAB_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT] + [COX-TCPL_MODEL_LAB_OPTIONAL-WEIGHT])<([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_2-WEIGHT] + [COX-LAB_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT] + [COX-TCPL_MODEL_LAB_OPTIONAL-WEIGHT])<([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT] + [COX-LAB_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT] + [COX-TCPL_MODEL_LAB_OPTIONAL-WEIGHT])<([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: c8eddbeb-a7ee-4a6f-896c-14228ee02327 | ClassType: TCPR (ID: 0a3977d1-fae2-4b70-bfae-01959af27188) | QP Type Code: 'TCPR_QP1' | Exam Code: 'CQI1' | Display: 'CQI 1' | Active: False
+   COs: [1, 2]
+   Considered Exams: ['CIA_1', 'REVIEW_1', 'SSA_1']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-SSA_1-WEIGHT] + [COX-REVIEW_1-WEIGHT] + [COX-CIA_1-WEIGHT])<([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#ea8080', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT] + [COX-REVIEW_1-WEIGHT] + [COX-CIA_1-WEIGHT])<([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True, 'cap_percent': 58}, {'if': '(([COX-SSA_1-WEIGHT] + [COX-REVIEW_1-WEIGHT] + [COX-CIA_1-WEIGHT])<([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#e4dd90', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT] + [COX-REVIEW_1-WEIGHT] + [COX-CIA_1-WEIGHT])<([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: 89f78282-6a58-4d72-b096-37d4248e0727 | ClassType: TCPR (ID: 0a3977d1-fae2-4b70-bfae-01959af27188) | QP Type Code: 'TCPR_QP1' | Exam Code: 'CQI2' | Display: 'CQI 2' | Active: False
+   COs: [3, 4, 5]
+   Considered Exams: ['CIA_2', 'MODEL', 'REVIEW_2', 'SSA_2']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-SSA_2-WEIGHT] + [COX-REVIEW_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])<([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6 ', 'color': '#f28787', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT] + [COX-REVIEW_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])<([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_2-WEIGHT] + [COX-REVIEW_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])<([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#e4dc8b', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT] + [COX-REVIEW_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])<([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: 4f5ce4b5-31f2-405a-8237-46453ccc9090 | ClassType: PRBL (ID: 31a73126-e2a9-4c47-ae94-1bf3c2fd3d99) | QP Type Code: '6' | Exam Code: 'CQI18858' | Display: 'CQI 1' | Active: True
+   COs: [1]
+   Considered Exams: ['CIA_1', 'FORMATIVE_1', 'REVIEW_PRBL_1', 'REVIEW_PRBL_2', 'SSA_1', 'SSA_2']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-SSA_1-WEIGHT]+ [COX-SSA_2-WEIGHT]+ [COX-REVIEW_PRBL_1-WEIGHT]+ [COX-REVIEW_PRBL_2-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6\n ', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-SSA_2-WEIGHT]+ [COX-REVIEW_PRBL_1-WEIGHT]+ [COX-REVIEW_PRBL_2-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_1-WEIGHT]+ [COX-SSA_2-WEIGHT]+ [COX-REVIEW_PRBL_1-WEIGHT]+ [COX-REVIEW_PRBL_2-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-SSA_2-WEIGHT]+ [COX-REVIEW_PRBL_1-WEIGHT]+ [COX-REVIEW_PRBL_2-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: 0e8c6db1-d35c-4622-a5de-29fd39018d2d | ClassType: PROJECT (ID: da485d15-8fa5-48ae-b01b-da8cdcf231bb) | QP Type Code: '7' | Exam Code: 'CQI18421' | Display: 'CQI 1' | Active: True
+   COs: [1, 2, 3, 4, 5, 6]
+   Considered Exams: ['CIA_1', 'FORMATIVE_1', 'REVIEW_1', 'REVIEW_2', 'SSA_1']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-REVIEW_1-WEIGHT] + [COX-REVIEW_2-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6\n ', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-REVIEW_1-WEIGHT] + [COX-REVIEW_2-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-REVIEW_1-WEIGHT] + [COX-REVIEW_2-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-REVIEW_1-WEIGHT] + [COX-REVIEW_2-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: e58b1fd5-8ebc-41fc-b115-c87b200a2093 | ClassType: PURE LAB (ID: dd619836-91cf-42de-b0cb-77d52e077b85) | QP Type Code: 'LAB_QP1' | Exam Code: 'CQI1858' | Display: 'CQI 1' | Active: True
+   COs: [1, 2, 3, 4, 5]
+   Considered Exams: ['CIA_1', 'FORMATIVE_1', 'LAB_1', 'SSA_1']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-LAB_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6\n', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-LAB_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-LAB_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-LAB_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: 68a7a03b-bc7c-4f5b-aa1e-7f948f7dfa32 | ClassType: THEORY_1 (ID: 78462b24-a749-466d-9676-4794224e71f2) | QP Type Code: 'QPT1' | Exam Code: '58465' | Display: 'CQI 1' | Active: True
+   COs: [1, 2]
+   Considered Exams: ['CIA_1', 'FORMATIVE_1', 'SSA_1']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: 5f63a056-3fb0-425f-b1f6-dcc2a8f9aded | ClassType: THEORY_1 (ID: 78462b24-a749-466d-9676-4794224e71f2) | QP Type Code: 'QPT2' | Exam Code: '544688' | Display: 'CQI 2' | Active: True
+   COs: [3, 4, 5, 6]
+   Considered Exams: ['CIA_2', 'FORMATIVE_2', 'MODEL', 'SSA_2']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: 2960dca6-7806-4b64-9498-ca7fd60a6937 | ClassType: THEORY_1 (ID: 78462b24-a749-466d-9676-4794224e71f2) | QP Type Code: 'CSD' | Exam Code: 'CQI1565' | Display: 'CQI 1' | Active: True
+   COs: [1, 2]
+   Considered Exams: ['CIA_1', 'FORMATIVE_1', 'SSA_1']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: 1c114310-ea65-4f76-bd20-f86c0804c08b | ClassType: TCPL (ID: 91f239db-c978-442d-9578-f04321dd4750) | QP Type Code: 'QP1_TCPL' | Exam Code: 'CQI1' | Display: 'CQI 1' | Active: True
+   COs: [1, 2]
+   Considered Exams: ['CIA_1', 'FORMATIVE_1', 'LAB_1', 'SSA_1']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-SSA_1-WEIGHT]+ [COX-LAB_1-WEIGHT]+ [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6\n ', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-LAB_1-WEIGHT]+ [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_1-WEIGHT]+ [COX-LAB_1-WEIGHT]+ [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-LAB_1-WEIGHT]+ [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: 8e5ab9ca-548b-4627-a398-4db12fa4fdcd | ClassType: THEORY_1 (ID: 78462b24-a749-466d-9676-4794224e71f2) | QP Type Code: 'CSD' | Exam Code: 'CQI2' | Display: 'CQI 2' | Active: True
+   COs: [3, 4, 5, 6]
+   Considered Exams: ['CIA_2', 'FORMATIVE_2', 'MODEL', 'SSA_2']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: 795bef96-a941-4ffc-ab37-83530434b219 | ClassType: THEORY_1 (ID: 78462b24-a749-466d-9676-4794224e71f2) | QP Type Code: 'QPT1' | Exam Code: 'CQI2' | Display: 'CQI 2' | Active: True
+   COs: [3, 4, 5, 6]
+   Considered Exams: ['CIA_2', 'FORMATIVE_2', 'MODEL', 'SSA_2']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: 3fe505d2-bbba-49de-835b-9c632fa7de48 | ClassType: TCPR (ID: 0a3977d1-fae2-4b70-bfae-01959af27188) | QP Type Code: 'QP_1_TCPR' | Exam Code: 'CQI2TCPR45' | Display: 'CQI 2' | Active: True
+   COs: [3, 4, 5, 6]
+   Considered Exams: ['CIA_2', 'FORMATIVE_2', 'MODEL', 'SSA_2', 'TCPR_REVIEW_2']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-SSA_2-WEIGHT]+ [TCPR_REVIEW_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT] )< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6 \n', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [TCPR_REVIEW_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT] )< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_2-WEIGHT]+ [TCPR_REVIEW_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT] )< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [TCPR_REVIEW_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT] )< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: 7830f766-27ee-4b25-8ecb-7b7e7a9e5106 | ClassType: TCPR (ID: 0a3977d1-fae2-4b70-bfae-01959af27188) | QP Type Code: 'QP_1_TCPR' | Exam Code: 'CQI1555' | Display: 'CQI 1' | Active: True
+   COs: [1, 2]
+   Considered Exams: ['CIA_1', 'FORMATIVE_1', 'SSA_1', 'TCPR_REVIEW']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-SSA_1-WEIGHT]+ [COX-TCPR_REVIEW-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6\n ', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-TCPR_REVIEW-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_1-WEIGHT]+ [COX-TCPR_REVIEW-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-TCPR_REVIEW-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: c6818782-cbea-4b58-84fa-4bb2ab32aa1a | ClassType: PMBL (ID: c2447cd5-8997-443d-801c-1c0670505c18) | QP Type Code: 'QP1' | Exam Code: 'CQI2' | Display: 'CQI 2' | Active: True
+   COs: [3, 4, 5, 6]
+   Considered Exams: ['CIA_2', 'FORMATIVE_2', 'MODEL', 'SSA_2']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+ID: 7f009a89-e02a-49aa-ae45-7e9cc0fdbfd7 | ClassType: THEORY_1 (ID: 78462b24-a749-466d-9676-4794224e71f2) | QP Type Code: 'QPT2' | Exam Code: '8551' | Display: 'CQI 1' | Active: True
+   COs: [1, 2]
+   Considered Exams: ['CIA_1', 'FORMATIVE_1', 'SSA_1']
+   Conditions count: 2
+   Conditions: [{'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Formula: 
+
+================================================================================
+2. COURSE COMPARISON: ECC1395 vs EEB1222
+================================================================================
+
+>> Course: ECC1395 - AI in Chip Design
+   ClassType: PMBL (ID: c2447cd5-8997-443d-801c-1c0670505c18)
+   Course QP Type: 'QP1'
+   AcV2CqiExam count for ClassType 'PMBL': 2
+     * CQI Exam: 'CQI 1' (Code: 'CQI1') | qp_type_code: 'QP1' | Matches Course QP 'QP1'?: True
+       COs: [1, 2] | Exams: ['CIA_1', 'FORMATIVE_1', 'SSA_1'] | Formula: 
+       Conditions: [{'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+     * CQI Exam: 'CQI 2' (Code: 'CQI2') | qp_type_code: 'QP1' | Matches Course QP 'QP1'?: True
+       COs: [3, 4, 5, 6] | Exams: ['CIA_2', 'FORMATIVE_2', 'MODEL', 'SSA_2'] | Formula: 
+       Conditions: [{'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Section: A (ID: 7d081a63-3c37-45aa-bdc6-1115561bebf4, TA: 158)
+     Exam Assignments in Section (12 total):
+       - Exam: 'SSA_1' ('SSA 1') | qp_type: 'QP1' | is_cqi: False | Marks entered: 0 | Status: DRAFT
+       - Exam: 'CIA_2' ('CIA 2') | qp_type: 'QP1' | is_cqi: False | Marks entered: 42 | Status: DRAFT
+       - Exam: 'END_SEMESTER_EXAMINATION' ('End Semester Examination') | qp_type: 'QP1' | is_cqi: False | Marks entered: 42 | Status: DRAFT
+       - Exam: 'COURSE_EXIT_SURVEY' ('Course Exit Survey') | qp_type: 'QP1' | is_cqi: False | Marks entered: 0 | Status: DRAFT
+       - Exam: 'FORMATIVE_1' ('FORMATIVE 1') | qp_type: 'QP1' | is_cqi: False | Marks entered: 42 | Status: DRAFT
+       - Exam: 'CQI1' ('CQI 1') | qp_type: 'QP1' | is_cqi: True | Marks entered: 0 | Status: DRAFT
+       - Exam: 'CQI2' ('CQI 2') | qp_type: 'QP1' | is_cqi: True | Marks entered: 0 | Status: DRAFT
+       - Exam: 'MODEL' ('Model') | qp_type: 'QP1' | is_cqi: False | Marks entered: 42 | Status: DRAFT
+       - Exam: 'CIA_1' ('CIA 1') | qp_type: 'QP1' | is_cqi: False | Marks entered: 42 | Status: DRAFT
+       - Exam: 'SSA_2' ('SSA 2') | qp_type: 'QP1' | is_cqi: False | Marks entered: 42 | Status: DRAFT
+       - Exam: 'FORMATIVE_2' ('FORMATIVE 2') | qp_type: 'QP1' | is_cqi: False | Marks entered: 42 | Status: DRAFT
+       - Exam: 'ACTIVITY' ('ACTIVITY') | qp_type: 'QP1' | is_cqi: False | Marks entered: 42 | Status: DRAFT
+
+>> Course: EEB1222 - Generation, Transmission and Distribution
+   ClassType: THEORY_1 (ID: 78462b24-a749-466d-9676-4794224e71f2)
+   Course QP Type: 'QPT2'
+   AcV2CqiExam count for ClassType 'THEORY_1': 6
+     * CQI Exam: 'CQI 1' (Code: '58465') | qp_type_code: 'QPT1' | Matches Course QP 'QPT2'?: False
+       COs: [1, 2] | Exams: ['CIA_1', 'FORMATIVE_1', 'SSA_1'] | Formula: 
+       Conditions: [{'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+     * CQI Exam: 'CQI 2' (Code: '544688') | qp_type_code: 'QPT2' | Matches Course QP 'QPT2'?: True
+       COs: [3, 4, 5, 6] | Exams: ['CIA_2', 'FORMATIVE_2', 'MODEL', 'SSA_2'] | Formula: 
+       Conditions: [{'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+     * CQI Exam: 'CQI 1' (Code: 'CQI1565') | qp_type_code: 'CSD' | Matches Course QP 'QPT2'?: False
+       COs: [1, 2] | Exams: ['CIA_1', 'FORMATIVE_1', 'SSA_1'] | Formula: 
+       Conditions: [{'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+     * CQI Exam: 'CQI 2' (Code: 'CQI2') | qp_type_code: 'CSD' | Matches Course QP 'QPT2'?: False
+       COs: [3, 4, 5, 6] | Exams: ['CIA_2', 'FORMATIVE_2', 'MODEL', 'SSA_2'] | Formula: 
+       Conditions: [{'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+     * CQI Exam: 'CQI 2' (Code: 'CQI2') | qp_type_code: 'QPT1' | Matches Course QP 'QPT2'?: False
+       COs: [3, 4, 5, 6] | Exams: ['CIA_2', 'FORMATIVE_2', 'MODEL', 'SSA_2'] | Formula: 
+       Conditions: [{'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_2-WEIGHT]+ [COX-FORMATIVE_2-WEIGHT] + [COX-CIA_2-WEIGHT] + [COX-MODEL-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+     * CQI Exam: 'CQI 1' (Code: '8551') | qp_type_code: 'QPT2' | Matches Course QP 'QPT2'?: True
+       COs: [1, 2] | Exams: ['CIA_1', 'FORMATIVE_1', 'SSA_1'] | Formula: 
+       Conditions: [{'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] < 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.6', 'color': '#f08f8f', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '<'}], 'cap_enabled': True}, {'if': '(([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)) && ([TOTAL_CQI] >= 58)', 'then': '(([CQI]/10)*[COX-EXAMS-MAX-WEIGHT])*0.15', 'color': '#eff17e', 'title': '', 'if_clauses': [{'rhs': '([COX-SSA_1-WEIGHT]+ [COX-FORMATIVE_1-WEIGHT] + [COX-CIA_1-WEIGHT])< ([COX-EXAMS-MAX-WEIGHT]*0.58)', 'token': ''}, {'rhs': '58', 'token': 'TOTAL_CQI', 'operator': '>='}], 'cap_enabled': False}]
+   Section: A (ID: 50dc4ccc-e3c6-4655-a38f-5ef2c755090b, TA: 81)
+     Exam Assignments in Section (12 total):
+       - Exam: '8551' ('CQI 1') | qp_type: 'QPT2' | is_cqi: True | Marks entered: 0 | Status: DRAFT
+       - Exam: 'CIA 1' ('CIA 1') | qp_type: 'QPT2' | is_cqi: False | Marks entered: 68 | Status: DRAFT
+       - Exam: '544688' ('CQI 2') | qp_type: 'QPT2' | is_cqi: True | Marks entered: 0 | Status: DRAFT
+       - Exam: 'ACTIVITY' ('ACTIVITY') | qp_type: 'QPT2' | is_cqi: False | Marks entered: 0 | Status: DRAFT
+       - Exam: 'Model' ('Model') | qp_type: 'QPT2' | is_cqi: False | Marks entered: 68 | Status: DRAFT
+       - Exam: 'SSA 1' ('SSA 1') | qp_type: 'QPT2' | is_cqi: False | Marks entered: 68 | Status: DRAFT
+       - Exam: 'FORMATIVE 1' ('FORMATIVE 1') | qp_type: 'QPT2' | is_cqi: False | Marks entered: 68 | Status: DRAFT
+       - Exam: 'SSA 2' ('SSA 2') | qp_type: 'QPT2' | is_cqi: False | Marks entered: 68 | Status: DRAFT
+       - Exam: 'FORMATIVE 2' ('FORMATIVE 2') | qp_type: 'QPT2' | is_cqi: False | Marks entered: 68 | Status: DRAFT
+       - Exam: 'CIA 2' ('CIA 2') | qp_type: 'QPT2' | is_cqi: False | Marks entered: 68 | Status: DRAFT
+       - Exam: 'END_SEMESTER_EXAMINATION' ('End Semester Examination') | qp_type: 'QPT2' | is_cqi: False | Marks entered: 68 | Status: DRAFT
+       - Exam: 'COURSE_EXIT_SURVEY' ('Course Exit Survey') | qp_type: 'QPT2' | is_cqi: False | Marks entered: 0 | Status: DRAFT

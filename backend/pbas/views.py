@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from django.db import transaction
+from django.http import FileResponse
 from django.db.models import Q
 from rest_framework import status, viewsets
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -293,7 +294,7 @@ def _viewer_or_403(request, viewer_param: str | None) -> str:
 
 def _is_iqac_manager(user) -> bool:
     try:
-        if getattr(user, 'is_superuser', False):
+        if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
             return True
         # Be case-insensitive to match permissions.IsIQACManager behavior
         for n in ['IQAC', 'ADMIN', 'PRINCIPAL', 'PS', 'PBAS_ADMIN', 'PBAS_MANAGER', 'PBASADMIN']:
@@ -472,6 +473,7 @@ class PBASCustomDepartmentTreeView(APIView):
                     uploaded_name=raw.get('uploaded_name') or None,
                     limit=raw.get('limit') if raw.get('limit') not in ('', None) else None,
                     pbas_credit=raw.get('pbas_credit') if raw.get('pbas_credit') not in ('', None) else None,
+                    mentor_credit=raw.get('mentor_credit') if raw.get('mentor_credit') not in ('', None) else None,
                     college_required=bool(raw.get('college_required') or False),
                     position=int(raw.get('position') if raw.get('position') not in (None, '') else idx),
                 )
@@ -718,6 +720,55 @@ def _get_node_parent_path(node: PBASNode) -> str:
     return ' > '.join(parts) if parts else 'Root Category'
 
 
+PBAS_APPROVAL_CATEGORIES = (
+    'Academics',
+    'Student Development',
+    'Research and Development',
+    'Institutional Contribution',
+)
+
+PBAS_CATEGORY_SCORE_FIELDS = {
+    'Academics': 'pbas_academics_credit',
+    'Student Development': 'pbas_student_development_credit',
+    'Research and Development': 'pbas_research_development_credit',
+    'Institutional Contribution': 'pbas_institutional_contribution_credit',
+}
+
+
+def _get_node_category(node: PBASNode) -> str:
+    current = node
+    while current:
+        title = ' '.join((current.label or '').strip().lower().split())
+        if 'research' in title and 'development' in title:
+            return 'Research and Development'
+        if 'institutional' in title and 'contribution' in title:
+            return 'Institutional Contribution'
+        if 'student' in title and 'development' in title:
+            return 'Student Development'
+        if 'academic' in title:
+            return 'Academics'
+        current = current.parent
+    return 'Other'
+
+
+def _get_node_ancestor_ids(node: PBASNode) -> list[str]:
+    ids = []
+    current = node
+    while current:
+        ids.append(str(current.id))
+        current = current.parent
+    return ids
+
+
+def _get_submission_applicant_type(user) -> str:
+    try:
+        if getattr(user, 'student_profile', None) is not None:
+            return 'student'
+    except Exception:
+        pass
+    return 'staff'
+
+
 def _get_user_accessible_submissions(user, status_filter='pending'):
     is_manager = _is_iqac_manager(user)
 
@@ -747,6 +798,10 @@ def _get_user_accessible_submissions(user, status_filter='pending'):
     return qs.select_related('node', 'user', 'college', 'approved_by').order_by('-created_at')
 
 
+def _user_can_access_submission(user, submission: PBASSubmission) -> bool:
+    return _get_user_accessible_submissions(user, 'all').filter(pk=submission.pk).exists()
+
+
 class PBASApprovalsListView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -757,13 +812,34 @@ class PBASApprovalsListView(APIView):
         items = []
         for sub in submissions:
             u = sub.user
+            academic_department = None
+            try:
+                academic_department = sub.node.department.academic_department
+            except Exception:
+                pass
+            if academic_department is None:
+                try:
+                    academic_department = u.staff_profile.department
+                except Exception:
+                    pass
+            if academic_department is None:
+                try:
+                    academic_department = u.student_profile.home_department
+                except Exception:
+                    pass
             full_name = u.get_full_name().strip() or u.username
             reg_or_staff = user_student_reg_no(u) or user_staff_id(u) or u.username
 
             # Get user avatar
             profile_img = None
-            sp = getattr(u, 'staff_profile', None)
-            stp = getattr(u, 'student_profile', None)
+            try:
+                sp = getattr(u, 'staff_profile', None)
+            except Exception:
+                sp = None
+            try:
+                stp = getattr(u, 'student_profile', None)
+            except Exception:
+                stp = None
             if sp and sp.profile_image:
                 profile_img = request.build_absolute_uri(sp.profile_image.url)
             elif stp and stp.profile_image:
@@ -781,7 +857,13 @@ class PBASApprovalsListView(APIView):
                     'profile_image': profile_img,
                 },
                 'leaf_title': sub.node.label,
+                'node_id': str(sub.node_id),
+                'node_ancestor_ids': _get_node_ancestor_ids(sub.node),
                 'parent_path': _get_node_parent_path(sub.node),
+                'category': _get_node_category(sub.node),
+                'applicant_type': _get_submission_applicant_type(u),
+                'department_code': getattr(academic_department, 'short_name', None) or getattr(academic_department, 'code', None),
+                'department_name': getattr(academic_department, 'name', None),
                 'submission_type': sub.submission_type,
                 'form_data': sub.form_data or {},
                 'form_schema': sub.node.form_schema or [],
@@ -799,6 +881,120 @@ class PBASApprovalsListView(APIView):
         return Response({'submissions': items})
 
 
+class PBASSubmissionDocumentView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, submission_id):
+        submission = _get_user_accessible_submissions(request.user, 'all').filter(pk=submission_id).first()
+        if not submission:
+            return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
+        if not submission.file:
+            return Response({'detail': 'No document is attached to this submission.'}, status=status.HTTP_404_NOT_FOUND)
+
+        response = FileResponse(
+            submission.file.open('rb'),
+            as_attachment=False,
+            filename=submission.file_name or submission.file.name.rsplit('/', 1)[-1],
+        )
+        response['Content-Disposition'] = 'inline'
+        return response
+
+
+from .models import PBASCustomDepartment, PBASNode, PBASSubmission, PBASVerificationTicket, PBASNodeApproverHistory, PBASApprovalFlow
+
+
+class PBASApprovalFlowView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        flow = PBASApprovalFlow.objects.first()
+        if not flow:
+            flow = PBASApprovalFlow.objects.create(staff_flow=[], student_flow=[])
+        return Response({
+            'staff_flow': flow.staff_flow or [],
+            'student_flow': flow.student_flow or [],
+        })
+
+    def post(self, request):
+        if not _is_iqac_manager(request.user):
+            return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
+        staff_flow = request.data.get('staff_flow')
+        student_flow = request.data.get('student_flow')
+
+        if not isinstance(staff_flow, list) or not isinstance(student_flow, list):
+            return Response({'detail': 'staff_flow and student_flow must be lists.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        flow = PBASApprovalFlow.objects.first()
+        if not flow:
+            flow = PBASApprovalFlow.objects.create(staff_flow=staff_flow, student_flow=student_flow)
+        else:
+            flow.staff_flow = staff_flow
+            flow.student_flow = student_flow
+            flow.save()
+
+        return Response({
+            'status': 'ok',
+            'staff_flow': flow.staff_flow,
+            'student_flow': flow.student_flow,
+        })
+
+
+class PBASMenteesListView(APIView):
+    """Returns the list of mentees mapped to the requesting staff member, along with each mentee's submission logs."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        sp = getattr(request.user, 'staff_profile', None)
+        if not sp:
+            # Fallback: check if StaffProfile matches email/username or if superuser show all active mappings
+            sp = StaffProfile.objects.filter(user=request.user).first()
+
+        if not sp:
+            if request.user.is_superuser:
+                mappings = StudentMentorMap.objects.filter(is_active=True).select_related('student__user', 'student__department', 'student__program', 'student__section', 'mentor__user')
+            else:
+                return Response({'mentees': []})
+        else:
+            mappings = StudentMentorMap.objects.filter(mentor=sp, is_active=True).select_related('student__user', 'student__department', 'student__program', 'student__section')
+
+        mentees_data = []
+
+        for m in mappings:
+            st = m.student
+            u = st.user if st else None
+            if not u:
+                continue
+
+            # Fetch all submissions for this student
+            subs = PBASSubmission.objects.filter(user=u).select_related('node', 'college', 'approved_by').order_by('-created_at')
+            logs = PBASSubmissionSerializer(subs, many=True).data
+
+            # Calculate total student credits and mentor credits for approved submissions
+            approved_student_credits = sum((s.node.pbas_credit or 0) for s in subs if s.status == PBASSubmission.Status.APPROVED and s.node)
+            approved_mentor_credits = sum((s.node.mentor_credit or 0) for s in subs if s.status == PBASSubmission.Status.APPROVED and s.node)
+
+            profile_img = None
+            if st.profile_image:
+                profile_img = request.build_absolute_uri(st.profile_image.url)
+
+            mentees_data.append({
+                'student_id': st.id,
+                'user_id': u.id,
+                'name': u.get_full_name().strip() or u.username,
+                'username': u.username,
+                'reg_no': st.reg_no,
+                'department_name': st.department.name if st.department else 'N/A',
+                'section_name': st.section.name if st.section else 'N/A',
+                'profile_image': profile_img,
+                'pbas_credit': st.pbas_credit or 0,
+                'total_student_credits': approved_student_credits,
+                'total_mentor_credits': approved_mentor_credits,
+                'submissions': logs,
+            })
+
+        return Response({'mentees': mentees_data})
+
+
 class PBASSubmissionActionView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -807,21 +1003,8 @@ class PBASSubmissionActionView(APIView):
         if not sub:
             return Response({'detail': 'Submission not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Check authorization over this submission
-        is_manager = _is_iqac_manager(request.user)
-        if not is_manager:
-            accessible_ids = set()
-            approver_nodes = list(PBASNode.objects.filter(approvers=request.user))
-            def get_all_descendants(node):
-                ids = [node.id]
-                for child in node.children.all():
-                    ids.extend(get_all_descendants(child))
-                return ids
-            for n in approver_nodes:
-                accessible_ids.update(get_all_descendants(n))
-
-            if sub.node.id not in accessible_ids:
-                return Response({'detail': 'You are not an authorized approver for this submission.'}, status=status.HTTP_403_FORBIDDEN)
+        if not _user_can_access_submission(request.user, sub):
+            return Response({'detail': 'You are not an authorized approver for this submission.'}, status=status.HTTP_403_FORBIDDEN)
 
         action = (request.data.get('action') or '').lower()
         reason = (request.data.get('reason') or '').strip()
@@ -831,30 +1014,84 @@ class PBASSubmissionActionView(APIView):
 
         with transaction.atomic():
             if action == 'approve':
+                was_already_approved = sub.status == PBASSubmission.Status.APPROVED
                 sub.status = PBASSubmission.Status.APPROVED
                 sub.approved_by = request.user
                 sub.reviewed_at = timezone.now()
+                sub.current_step = 'AUTH'
+                history = list(sub.approval_history or [])
+                history.append({
+                    'action': 'approved',
+                    'step': 'AUTH',
+                    'user_id': request.user.id,
+                    'user_name': request.user.get_full_name() or request.user.username,
+                    'timestamp': timezone.now().isoformat(),
+                })
+                sub.approval_history = history
                 sub.save()
 
-                # Accumulate PBAS Credit to StaffProfile or StudentProfile
-                credit_points = sub.node.pbas_credit or 0
-                if credit_points > 0:
-                    submitter = sub.user
+                submitter = sub.user
+                try:
                     sp = getattr(submitter, 'staff_profile', None)
+                except Exception:
+                    sp = None
+                try:
                     stp = getattr(submitter, 'student_profile', None)
+                except Exception:
+                    stp = None
 
-                    if sp:
-                        sp.pbas_credit = (sp.pbas_credit or 0) + credit_points
-                        sp.save(update_fields=['pbas_credit'])
-                    elif stp:
-                        stp.pbas_credit = (stp.pbas_credit or 0) + credit_points
-                        stp.save(update_fields=['pbas_credit'])
+                if not was_already_approved:
+                    category = _get_node_category(sub.node)
+                    category_field = PBAS_CATEGORY_SCORE_FIELDS.get(category)
+
+                    # Accumulate student/staff score in the submitted category.
+                    if stp:
+                        student_credit_points = sub.node.pbas_credit or 0
+                        if student_credit_points > 0:
+                            update_fields = ['pbas_credit']
+                            stp.pbas_credit = (stp.pbas_credit or 0) + student_credit_points
+                            if category_field:
+                                setattr(stp, category_field, (getattr(stp, category_field, 0) or 0) + student_credit_points)
+                                update_fields.append(category_field)
+                            stp.save(update_fields=update_fields)
+
+                        # Mentor credits follow the student's submitted category.
+                        mentor_credit_points = sub.node.mentor_credit or 0
+                        if mentor_credit_points > 0:
+                            mapping = StudentMentorMap.objects.filter(student=stp, is_active=True).select_related('mentor').first()
+                            if mapping and mapping.mentor:
+                                mentor_sp = mapping.mentor
+                                update_fields = ['pbas_credit']
+                                mentor_sp.pbas_credit = (mentor_sp.pbas_credit or 0) + mentor_credit_points
+                                if category_field:
+                                    setattr(mentor_sp, category_field, (getattr(mentor_sp, category_field, 0) or 0) + mentor_credit_points)
+                                    update_fields.append(category_field)
+                                mentor_sp.save(update_fields=update_fields)
+
+                    elif sp:
+                        staff_credit_points = sub.node.pbas_credit or 0
+                        if staff_credit_points > 0:
+                            update_fields = ['pbas_credit']
+                            sp.pbas_credit = (sp.pbas_credit or 0) + staff_credit_points
+                            if category_field:
+                                setattr(sp, category_field, (getattr(sp, category_field, 0) or 0) + staff_credit_points)
+                                update_fields.append(category_field)
+                            sp.save(update_fields=update_fields)
 
             elif action == 'reject':
                 sub.status = PBASSubmission.Status.REJECTED
                 sub.approved_by = request.user
                 sub.reviewed_at = timezone.now()
                 sub.rejection_reason = reason
+                history = list(sub.approval_history or [])
+                history.append({
+                    'action': 'rejected',
+                    'reason': reason,
+                    'user_id': request.user.id,
+                    'user_name': request.user.get_full_name() or request.user.username,
+                    'timestamp': timezone.now().isoformat(),
+                })
+                sub.approval_history = history
                 sub.save()
 
         return Response({

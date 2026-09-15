@@ -30,6 +30,22 @@ class AcademicYear(models.Model):
         return f"{self.name}{' (' + self.parity + ')' if self.parity else ''}"
 
 
+class SystemTransitionLog(models.Model):
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, related_name='transition_logs')
+    performed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    performed_at = models.DateTimeField(auto_now_add=True)
+    updated_count = models.PositiveIntegerField(default=0)
+    details = models.TextField(blank=True)
+
+    class Meta:
+        verbose_name = 'System Transition Log'
+        verbose_name_plural = 'System Transition Logs'
+        ordering = ('-performed_at',)
+
+    def __str__(self):
+        return f"{self.academic_year} transition on {self.performed_at}"
+
+
 # When an AcademicYear is saved and marked active, update timetable templates
 # so a template matching the active year's parity becomes the active template.
 from django.db.models.signals import post_save
@@ -261,7 +277,9 @@ class Section(models.Model):
                 offset = 1 if (ay.parity or '').upper() == 'ODD' else 2
                 sem_number = delta * 2 + offset
                 if sem_number and sem_number > 0:
-                    sem_obj, _ = Semester.objects.get_or_create(number=sem_number)
+                    # B.E. / B.Tech degree is 8 semesters max. Cap at 8 for completed/graduated batches.
+                    effective_sem = min(sem_number, 8)
+                    sem_obj, _ = Semester.objects.get_or_create(number=effective_sem)
                     self.semester = sem_obj
             except Exception:
                 # fail silently and continue saving without semester
@@ -524,6 +542,10 @@ class StudentProfile(models.Model):
     rfid_uid = models.CharField(max_length=32, blank=True, default='', db_index=True,
                                 help_text='RFID card UID (e.g. 539EA5BB) assigned by the physical scanner.')
     pbas_credit = models.IntegerField(default=0)
+    pbas_academics_credit = models.IntegerField(default=0)
+    pbas_student_development_credit = models.IntegerField(default=0)
+    pbas_research_development_credit = models.IntegerField(default=0)
+    pbas_institutional_contribution_credit = models.IntegerField(default=0)
 
     def __str__(self):
         return f"Student {self.reg_no} ({self.user.username})"
@@ -819,6 +841,10 @@ class StaffProfile(models.Model):
     rfid_uid = models.CharField(max_length=32, blank=True, default='', db_index=True,
                                 help_text='RFID card UID (e.g. 539EA5BB) assigned by the physical scanner.')
     pbas_credit = models.IntegerField(default=0)
+    pbas_academics_credit = models.IntegerField(default=0)
+    pbas_student_development_credit = models.IntegerField(default=0)
+    pbas_research_development_credit = models.IntegerField(default=0)
+    pbas_institutional_contribution_credit = models.IntegerField(default=0)
 
     def __str__(self):
         """Return staff name and ID for display in dropdowns and admin."""

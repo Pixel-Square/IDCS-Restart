@@ -871,6 +871,10 @@ export default function CqiEntryPage() {
   const [draftLog, setDraftLog] = useState<{ updated_at?: string | null; updated_by?: number | null } | null>(null);
   const [publishedLog, setPublishedLog] = useState<{ published_at?: string | null } | null>(null);
   const [entries, setEntries] = useState<CqiEntries>(() => readCqiCache(examId ?? null, courseIdParam ?? null) || {});
+  const entriesRef = useRef<CqiEntries>(entries);
+  useEffect(() => {
+    entriesRef.current = entries;
+  }, [entries]);
   const [dirty, setDirty] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
   const [announcementNotif, setAnnouncementNotif] = useState<{ studentCount: number; timestamp: number } | null>(null);
@@ -940,7 +944,8 @@ export default function CqiEntryPage() {
   );
 
   const consideredExams = useMemo(() => {
-    const exams = coSummary?.exams || [];
+    const allExams = coSummary?.exams || [];
+    const exams = allExams.filter((e) => (e as any)?.kind !== 'cqi');
     const selected = Array.isArray(cqiConfig?.exams)
       ? (cqiConfig!.exams as any[]).map((x) => normalizeExamCode(String(x || ''))).filter(Boolean)
       : [];
@@ -1067,7 +1072,8 @@ export default function CqiEntryPage() {
         throw new Error(detail);
       }
 
-      setCoSummary((await coRes.value.json()) as COSummary);
+      const coSummaryData = (await coRes.value.json()) as COSummary;
+      setCoSummary(coSummaryData);
 
       const draftRes = draftResult.status === 'fulfilled' && draftResult.value.ok ? draftResult.value : null;
       const pubRes = pubResult.status === 'fulfilled' && pubResult.value.ok ? pubResult.value : null;
@@ -1090,32 +1096,62 @@ export default function CqiEntryPage() {
           });
         }
       } catch { /* ignore */ }
-      const cachedEntries = readCqiCache(examId ?? null, effectiveTaId ?? null);
-      if (pubJson?.published?.entries) {
-        const nextEntries = (pubJson.published.entries as any) || {};
-        setEntries(nextEntries);
-        writeCqiCache(nextEntries, examId ?? null, effectiveTaId ?? null);
-        setDirty(false);
-      } else if (draftJson?.draft?.entries) {
-        setEntries(draftJson.draft.entries);
-        writeCqiCache(draftJson.draft.entries, examId ?? null, effectiveTaId ?? null);
-        setDirty(false);
-      } else if (cachedEntries) {
-        setEntries(cachedEntries);
-        setDirty(false);
-      } else {
-        setEntries({});
-        setDirty(false);
+
+      const cachedEntries = readCqiCache(examId ?? null, effectiveTaId ?? null) || {};
+      const pubEntries = (pubJson?.published?.entries && typeof pubJson.published.entries === 'object') ? pubJson.published.entries : {};
+      const draftEntries = (draftJson?.draft?.entries && typeof draftJson.draft.entries === 'object') ? draftJson.draft.entries : {};
+
+      // Merge cached, published, and draft entries so NO entered mark is ever lost
+      const mergedEntries: CqiEntries = {};
+
+      // Layer 1: cache
+      for (const [sid, map] of Object.entries(cachedEntries)) {
+        if (map && typeof map === 'object') mergedEntries[sid] = { ...map };
       }
+      // Layer 2: published snapshot
+      for (const [sid, map] of Object.entries(pubEntries)) {
+        if (map && typeof map === 'object') {
+          mergedEntries[sid] = { ...(mergedEntries[sid] || {}), ...map };
+        }
+      }
+      // Layer 3: draft entries (most recent working copy)
+      for (const [sid, map] of Object.entries(draftEntries)) {
+        if (map && typeof map === 'object') {
+          mergedEntries[sid] = { ...(mergedEntries[sid] || {}), ...map };
+        }
+      }
+
+      // Stamp across all students (both student_id and reg_no keys)
+      for (const s of (coSummaryData?.students || [])) {
+        const sid = String(s.student_id || '');
+        const reg = String(s.reg_no || '');
+        const coMap = (sid ? mergedEntries[sid] : null)
+          || (reg ? mergedEntries[reg] : null)
+          || (s.student_id ? draftEntries[String(s.student_id)] : null)
+          || (s.reg_no ? draftEntries[String(s.reg_no)] : null)
+          || (s.student_id ? pubEntries[String(s.student_id)] : null)
+          || (s.reg_no ? pubEntries[String(s.reg_no)] : null)
+          || null;
+        if (!coMap) continue;
+        if (sid) mergedEntries[sid] = coMap;
+        if (reg && reg !== sid) mergedEntries[reg] = coMap;
+      }
+
+      setEntries(mergedEntries);
+      entriesRef.current = mergedEntries;
+      writeCqiCache(mergedEntries, examId ?? null, effectiveTaId ?? null);
+      setDirty(false);
     } catch (e: any) { console.error(e); setMessage({ type: 'error', text: e?.message || 'Failed to load CQI page' }); }
     finally { setLoading(false); }
   };
 
   useEffect(() => { loadAll(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [examId, courseIdParam]);
 
+
   const saveDraft = async (nextEntries?: CqiEntries) => {
-    const effectiveTaId = courseIdParam ?? taId;
+    const effectiveTaId = taId ?? courseIdParam;
     if (!examId && !effectiveTaId) return;
+    const entriesToSave = nextEntries ?? entriesRef.current ?? entries;
     try {
       setSaving(true); setMessage(null);
       const url = examId
@@ -1123,34 +1159,38 @@ export default function CqiEntryPage() {
         : `/api/academic-v2/faculty/courses/${effectiveTaId}/cqi-draft/`;
       const res = await fetchWithAuth(url, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ co_numbers: displayCoNumbers, threshold_percent: THRESHOLD_PERCENT, entries: nextEntries ?? entries }),
+        body: JSON.stringify({ co_numbers: displayCoNumbers, threshold_percent: THRESHOLD_PERCENT, entries: entriesToSave }),
       });
       if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error((err as any)?.detail || 'Draft save failed'); }
       const data = await res.json().catch(() => ({}));
       setDraftLog({ updated_at: (data as any)?.updated_at ?? null, updated_by: (data as any)?.updated_by ?? null });
-      writeCqiCache(nextEntries ?? entries, examId ?? null, effectiveTaId ?? null);
+      writeCqiCache(entriesToSave, examId ?? null, effectiveTaId ?? null);
       setDirty(false);
     } catch (e: any) { console.error(e); setMessage({ type: 'error', text: e?.message || 'Failed to save draft' }); }
     finally { setSaving(false); }
   };
 
   const publish = async () => {
-    const effectiveTaId = courseIdParam ?? taId;
+    const effectiveTaId = taId ?? courseIdParam;
     if (!examId && !effectiveTaId) return;
+    const entriesToPublish = entriesRef.current ?? entries;
     try {
       setPublishing(true); setMessage(null);
-      await saveDraft(entries);
+      const publishUrl = examId
+        ? `/api/academic-v2/exams/${examId}/cqi-publish/`
+        : `/api/academic-v2/faculty/courses/${effectiveTaId}/cqi-publish/`;
 
+      const res = await fetchWithAuth(publishUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries: entriesToPublish, co_numbers: displayCoNumbers }),
+      });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error((err as any)?.detail || 'Publish failed'); }
+      const data = await res.json().catch(() => ({}));
+      const pubAt = (data as any)?.published_at || new Date().toISOString();
+      setPublishedLog({ published_at: pubAt });
+      writeCqiCache(entriesToPublish, examId ?? null, effectiveTaId ?? null);
       if (examId) {
-        const res = await fetchWithAuth(`/api/academic-v2/faculty/courses/${effectiveTaId}/cqi-publish/`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ entries, co_numbers: displayCoNumbers }),
-        });
-        if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error((err as any)?.detail || 'Publish failed'); }
-        const data = await res.json().catch(() => ({}));
-        setPublishedLog({ published_at: (data as any)?.published_at ?? null });
-        writeCqiCache(entries, examId ?? null, effectiveTaId ?? null);
         try {
           const exRes = await fetchWithAuth(`/api/academic-v2/exams/${examId}/`);
           if (exRes.ok) {
@@ -1158,17 +1198,8 @@ export default function CqiEntryPage() {
             if ((exJson as any)?.publish_control) setPublishControlInfo((exJson as any).publish_control);
           }
         } catch { /* ignore */ }
-      } else {
-        const res = await fetchWithAuth(`/api/academic-v2/faculty/courses/${effectiveTaId}/cqi-publish/`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ entries, co_numbers: displayCoNumbers }),
-        });
-        if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error((err as any)?.detail || 'Publish failed'); }
-        const data = await res.json().catch(() => ({}));
-        setPublishedLog({ published_at: (data as any)?.published_at ?? null });
-        writeCqiCache(entries, examId ?? null, effectiveTaId ?? null);
-        if ((data as any)?.publish_control) setPublishControlInfo((data as any).publish_control);
       }
+      if ((data as any)?.publish_control) setPublishControlInfo((data as any).publish_control);
 
       setMessage({ type: 'success', text: 'CQI published' });
     } catch (e: any) { console.error(e); setMessage({ type: 'error', text: e?.message || 'Failed to publish' }); }
@@ -1350,12 +1381,18 @@ export default function CqiEntryPage() {
     }
   };
 
-  const setEntry = (studentId: string, coKey: string, raw: string) => {
+  const setEntry = (studentId: string, coKey: string, raw: string, regNo?: string) => {
     if (tableBlocked) return;
     const val = parseEntryNumber(raw);
     setEntries((prev) => {
       const next = { ...prev };
-      next[studentId] = { ...(next[studentId] || {}), [coKey]: val };
+      const currentStudentMap = { ...(next[studentId] || (regNo ? next[regNo] : null) || {}) };
+      currentStudentMap[coKey] = val;
+      next[studentId] = currentStudentMap;
+      if (regNo && regNo !== studentId) {
+        next[regNo] = currentStudentMap;
+      }
+      entriesRef.current = next;
       writeCqiCache(next, examId ?? null, taId ?? courseIdParam ?? null);
       return next;
     });
@@ -1376,29 +1413,30 @@ export default function CqiEntryPage() {
     const hasExamFilter = Array.isArray(cqiConfig?.exams) && (cqiConfig!.exams || []).length > 0;
     return students.map((s, idx) => {
       const studentId = String(s.student_id || s.reg_no);
-      // CQI Entry must be computed in INTERNALMARKPage *weighted* space.
-      // InternalMarkPage uses `weighted_marks` for per-CO weighted contributions.
-      const totals = s.co_totals || [];
-      const co_count = coSummary?.co_count ?? totals.length;
-
-      // Weighted obtained per CO (sum across considered exam assignments, using InternalMarkPage logic)
-      // For normal exam components: weighted_marks[`${examId}_CO${co}`]
-      // For CIA split columns: weighted_marks[`${examId}_exam_CO${co}`]
-      let evalTotals = Array.from({ length: co_count }, (_, i) => totals[i] ?? 0);
-      if (s.weighted_marks && s.weighted_marks && exams.length > 0) {
-        const next = Array.from({ length: co_count }, () => 0);
+      const regNo = String(s.reg_no || '');
+      const studentEntries = (
+        entries?.[studentId] ||
+        entries?.[regNo] ||
+        (s.student_id ? entries?.[String(s.student_id)] : undefined) ||
+        (s.reg_no ? entries?.[String(s.reg_no)] : undefined) ||
+        {}
+      ) as Record<string, number | null>;
+      // CQI Entry must be computed in INTERNALMARKPage *weighted* space BEFORE CQI.
+      // Sum purely across non-CQI baseline exam contributions so published CQI additions do not inflate before-CQI totals.
+      const co_count = coSummary?.co_count ?? (s.co_totals || []).length;
+      let evalTotals = Array.from({ length: co_count }, () => 0);
+      if (s.weighted_marks && exams.length > 0) {
         for (const ex of exams) {
-          // Regular per-CO weighted marks
           for (let co = 1; co <= co_count; co++) {
             const key = `${ex.id}_CO${co}`;
             const v = Number(s.weighted_marks?.[key] ?? 0);
-            next[co - 1] += Number.isFinite(v) ? v : 0;
-
-            // CIA split weighted contributions are already reflected in weighted_marks[`${ex.id}_CO${co}`]
-            // (per InternalMarkPage CO weighted space). Do not double-count exam split columns here.
+            evalTotals[co - 1] += Number.isFinite(v) ? v : 0;
           }
         }
-        evalTotals = next.map((v) => round2(v));
+        evalTotals = evalTotals.map((v) => round2(v));
+      } else {
+        const rawTotals = s.co_totals || [];
+        evalTotals = Array.from({ length: co_count }, (_, i) => rawTotals[i] ?? 0);
       }
 
       // IMPORTANT:
@@ -1458,7 +1496,7 @@ export default function CqiEntryPage() {
       // Apply CQI only for the admin-selected COs shown in this page.
       for (const c of perCoMeta) {
         if (!c.max || c.max <= 0) continue;
-        const input = entries?.[studentId]?.[`co${c.coNum}`] ?? null;
+        const input = studentEntries[`co${c.coNum}`] ?? null;
         if (input == null) continue;
         if (!hasCqiConfig || !cqiConfig) continue;
         if (!c.notAttainedBefore || !c.matchedCond) continue;
@@ -1494,7 +1532,7 @@ export default function CqiEntryPage() {
 
       const perCoUi = perCoMeta.map((c) => {
         const appliedAdd = Number(appliedAdds[c.coNum] ?? 0) || 0;
-        const input = entries?.[studentId]?.[`co${c.coNum}`] ?? null;
+        const input = studentEntries[`co${c.coNum}`] ?? null;
 
         let notAttainedAfter = c.notAttainedBefore;
         if (hasCqiConfig && cqiConfig && input != null && c.notAttainedBefore && c.matchedCond) {
@@ -1534,6 +1572,28 @@ export default function CqiEntryPage() {
       };
     });
   }, [coSummary, consideredExams, displayCoNumbers, coMaxByCoSelected, entries, cqiConfig, hasCqiConfig]);
+
+  const cqiProgressStats = useMemo(() => {
+    let eligible = 0;
+    let entered = 0;
+    for (const r of rows) {
+      const isEligible = (r.perCoMeta || []).some((c: any) => c.notAttainedBefore && c.matchedCond && c.max > 0);
+      if (isEligible) {
+        eligible += 1;
+        const hasAnyEntered = (r.perCoMeta || []).some((c: any) => {
+          if (!c.notAttainedBefore || !c.matchedCond || !c.max || c.max <= 0) return false;
+          const coKey = `co${c.coNum}`;
+          const current = (entries?.[r.studentId]?.[coKey] ?? entries?.[r.regNo]?.[coKey]) as any;
+          return current !== null && current !== undefined && String(current).trim() !== '' && !Number.isNaN(Number(current));
+        });
+        if (hasAnyEntered) {
+          entered += 1;
+        }
+      }
+    }
+    const percent = eligible > 0 ? Math.min(100, Math.round((entered / eligible) * 100)) : 0;
+    return { eligible, entered, percent };
+  }, [rows, entries]);
 
   if (loading) return <div className="p-6 flex items-center justify-center min-h-[400px]"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>;
   if (!coSummary) return <div className="p-6 text-center text-red-600">Failed to load CQI</div>;
@@ -1592,8 +1652,12 @@ export default function CqiEntryPage() {
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-700">Auto-save</span>
               )}
             </div>
-            <p className="text-gray-500">{coSummary.course_code} — {coSummary.course_name}</p>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-semibold bg-purple-100 text-purple-800 border border-purple-200">
+                <span>Progress:</span>
+                <span className="font-bold">{cqiProgressStats.entered}/{cqiProgressStats.eligible}</span>
+                <span className="text-purple-600">({cqiProgressStats.percent}%)</span>
+              </span>
               <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full font-medium ${draftLog?.updated_at ? 'bg-slate-100 text-slate-700' : 'bg-slate-50 text-slate-400'}`}>
                 Last draft: {draftLog?.updated_at ? new Date(draftLog.updated_at).toLocaleString() : 'never'}
               </span>
@@ -2121,7 +2185,11 @@ export default function CqiEntryPage() {
                     {r.perCo.map((c) => {
                       if (!c.max || c.max <= 0) return <td key={c.coNum} className="px-3 py-2 text-center text-gray-400">—</td>;
                       const coKey = `co${c.coNum}`;
-                      const current = entries?.[r.studentId]?.[coKey];
+                      const current =
+                        entries?.[r.studentId]?.[coKey] ??
+                        entries?.[r.regNo]?.[coKey] ??
+                        (c as any)?.input ??
+                        null;
                       const input = current == null ? null : Number(current);
                       const hasInput = input != null && Number.isFinite(input);
 
@@ -2137,7 +2205,7 @@ export default function CqiEntryPage() {
                        * - If matchedCond exists => student row/CO should show matchedCond.color (red by admin)
                        * - Input becomes editable for that matched row/CO only (notAttainedBefore must be true too).
                        */
-                      const allowInput = !tableBlocked && hasCqiConfig && cqiConfig && notAttainedBefore && !!matchedCond;
+                      const allowInput = !tableBlocked && (hasInput || (hasCqiConfig && cqiConfig && notAttainedBefore && !!matchedCond));
 
                       const addRaw = Number((c as any)?.appliedAdd ?? 0) || 0;
                       const notAttainedAfter = Boolean((c as any)?.notAttainedAfter);
@@ -2236,18 +2304,20 @@ export default function CqiEntryPage() {
                                 <input
                                   type="number" inputMode="decimal"
                                   value={current ?? ''}
-                                  onChange={(e) => setEntry(r.studentId, coKey, e.target.value)}
+                                  onChange={(e) => setEntry(r.studentId, coKey, e.target.value, r.regNo)}
                                   disabled={tableBlocked}
                                   placeholder="Enter CQI"
                                   className="w-[96px] rounded-xl border border-gray-300 bg-white px-2 py-1.5 text-center text-sm disabled:bg-gray-100"
                                 />
                               </div>
-                            ) : !notAttainedBefore ? (
+                            ) : !notAttainedBefore && !hasInput ? (
                               <div className="text-xs font-semibold text-green-700" style={contrastColor ? { color: contrastColor } : undefined}>Attained</div>
                             ) : (
                               <div>
                                 {isCqiAttained ? (
                                   <div className="mb-2 text-[11px] font-bold text-red-600" style={contrastColor ? { color: contrastColor } : undefined}>CQI Attained</div>
+                                ) : !notAttainedBefore ? (
+                                  <div className="mb-2 text-[11px] font-bold text-green-700" style={contrastColor ? { color: contrastColor } : undefined}>Attained</div>
                                 ) : hasCqiConfig ? (
                                   <div className="mb-2 text-[11px] font-semibold text-red-700" style={contrastColor ? { color: contrastColor } : undefined}>
                                     CO Not Attained{hasInput && addRaw > 0 && <span className="ml-1 text-green-700" style={contrastColor ? { color: contrastColor } : undefined}>+{round2(addRaw)}</span>}
@@ -2255,25 +2325,14 @@ export default function CqiEntryPage() {
                                 ) : (
                                   <div className="mb-2 text-[11px] font-semibold text-amber-500" style={contrastColor ? { color: contrastColor } : undefined}>Formula not set</div>
                                 )}
-                                {allowInput ? (
-                                  <input
-                                    type="number" inputMode="decimal"
-                                    value={current ?? ''}
-                                    onChange={(e) => setEntry(r.studentId, coKey, e.target.value)}
-                                    disabled={tableBlocked}
-                                    placeholder="Enter CQI"
-                                    className="w-[96px] rounded-xl border border-gray-300 bg-white px-2 py-1.5 text-center text-sm disabled:bg-gray-100"
-                                  />
-                                ) : current !== null && current !== undefined ? (
-                                  <div
-                                    className="w-[96px] rounded-xl border px-2 py-1.5 text-center text-sm font-semibold mx-auto"
-                                    style={{ borderColor: contrastColor ? 'rgba(128,128,128,0.4)' : '#d1d5db', backgroundColor: contrastColor ? 'rgba(255,255,255,0.15)' : '#f9fafb', color: contrastColor || '#374151' }}
-                                  >
-                                    {current}
-                                  </div>
-                                ) : (
-                                  <div className="text-[11px] text-gray-400" style={contrastColor ? { color: contrastColor } : undefined}>—</div>
-                                )}
+                                <input
+                                  type="number" inputMode="decimal"
+                                  value={current ?? ''}
+                                  onChange={(e) => setEntry(r.studentId, coKey, e.target.value, r.regNo)}
+                                  disabled={tableBlocked}
+                                  placeholder="Enter CQI"
+                                  className="w-[96px] rounded-xl border border-gray-300 bg-white px-2 py-1.5 text-center text-sm disabled:bg-gray-100"
+                                />
                               </div>
                             )}
                             {debugBlock}

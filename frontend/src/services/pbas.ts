@@ -34,6 +34,7 @@ export type PBASNode = {
   input_mode?: PBASInputMode
   form_schema?: PBASFormField[]
   pbas_credit?: number | null
+  mentor_credit?: number | null
   link?: string | null
   uploaded_name?: string | null
   limit?: number | null
@@ -54,6 +55,12 @@ export type StaffMember = {
 
 export type PBASApprovalItem = {
   id: string
+  node_id: string
+  node_ancestor_ids: string[]
+  applicant_type: 'student' | 'staff'
+  category: string
+  department_code?: string | null
+  department_name?: string | null
   user: {
     id: number
     name: string
@@ -377,6 +384,56 @@ export async function submitApprovalAction(
   return await res.json()
 }
 
+export type PBASApprovalFlowConfig = {
+  staff_flow: string[]
+  student_flow: string[]
+}
+
+export type PBASMenteeItem = {
+  student_id: number
+  user_id: number
+  name: string
+  username: string
+  reg_no?: string
+  department_name?: string
+  section_name?: string
+  profile_image?: string | null
+  pbas_credit: number
+  total_student_credits: number
+  total_mentor_credits: number
+  submissions: any[]
+}
+
+export async function fetchApprovalFlow(): Promise<PBASApprovalFlowConfig> {
+  const res = await fetchWithAuth('/api/pbas/approval-flow/')
+  if (!res.ok) throw new Error(await parseError(res))
+  return await res.json()
+}
+
+export async function updateApprovalFlow(payload: PBASApprovalFlowConfig): Promise<PBASApprovalFlowConfig> {
+  const res = await fetchWithAuth('/api/pbas/approval-flow/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return await res.json()
+}
+
+export async function fetchAllRoles(): Promise<string[]> {
+  const res = await fetchWithAuth('/api/accounts/roles/')
+  if (!res.ok) throw new Error(await parseError(res))
+  const data = await res.json()
+  return data.roles || []
+}
+
+export async function fetchMenteesList(): Promise<PBASMenteeItem[]> {
+  const res = await fetchWithAuth('/api/pbas/mentees/')
+  if (!res.ok) throw new Error(await parseError(res))
+  const data = await res.json()
+  return data.mentees || []
+}
+
 export default {
   listCustomDepartments,
   createCustomDepartment,
@@ -397,6 +454,10 @@ export default {
   updateNodeApprovers,
   fetchPBASApprovals,
   submitApprovalAction,
+  fetchApprovalFlow,
+  updateApprovalFlow,
+  fetchAllRoles,
+  fetchMenteesList,
   getStoredPBASTree,
   saveStoredPBASTree,
 }

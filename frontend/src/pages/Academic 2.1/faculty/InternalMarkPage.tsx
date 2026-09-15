@@ -9,6 +9,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, BookOpen, Users, CheckCircle, Clock, AlertCircle,
   Edit2, Lock, RefreshCw, FileText, Download, BarChart3, AlertTriangle, Copy, GraduationCap,
+  Upload, ClipboardList,
 } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 import { exportCOSummaryToExcel, exportCOSummaryToPDF, exportInternalMarksExcel } from './COSummaryExport';
@@ -163,7 +164,10 @@ export default function InternalMarkPage() {
     return result;
   }, [courseInfo]);
 
-  useEffect(() => { loadData(); }, [courseId]);
+  useEffect(() => { 
+    loadData(); 
+    loadCOSummary();
+  }, [courseId]);
 
   useEffect(() => {
     if (!courseId) return;
@@ -487,6 +491,14 @@ export default function InternalMarkPage() {
           <BarChart3 className="w-4 h-4 inline mr-1.5 -mt-0.5" />Dashboard
         </button>
         <button
+          onClick={() => setTab('lca')}
+          className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            tab === 'lca' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <GraduationCap className="w-4 h-4 inline mr-1.5 -mt-0.5" />LCA
+        </button>
+        <button
           onClick={() => setTab('exams')}
           className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
             tab === 'exams' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -517,14 +529,6 @@ export default function InternalMarkPage() {
           }`}
         >
           <BarChart3 className="w-4 h-4 inline mr-1.5 -mt-0.5" />CO Attainment
-        </button>
-        <button
-          onClick={() => setTab('lca')}
-          className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-            tab === 'lca' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          <GraduationCap className="w-4 h-4 inline mr-1.5 -mt-0.5" />LCA
         </button>
         <button
           onClick={() => setTab('question_bank')}
@@ -640,8 +644,36 @@ export default function InternalMarkPage() {
                         <span className="font-medium">Progress</span>
                         <span className="font-semibold text-gray-700">{exam.entered_count}/{exam.total_students} ({progressPct}%)</span>
                       </div>
-                      {getProgressBar(exam.entered_count, exam.total_students)}
+                    {getProgressBar(exam.entered_count, exam.total_students)}
                     </div>
+                    {/* SSA Assignment buttons — only for SSA1/SSA2 */}
+                    {(() => {
+                      const sn = String(exam.short_name || exam.name || '').replace(/[\s\-_]/g, '').toUpperCase();
+                      const isSSA = sn === 'SSA1' || sn === 'SSA2';
+                      if (!isSSA || isCqi) return null;
+                      return (
+                        <>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/academic-v2/ssa/assign/${exam.id}`);
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg text-white bg-emerald-600 hover:bg-emerald-700"
+                          >
+                            <Upload className="w-4 h-4" /> Assign
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/academic-v2/ssa/submissions/${exam.id}`);
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg text-white bg-indigo-600 hover:bg-indigo-700"
+                          >
+                            <ClipboardList className="w-4 h-4" /> Submissions
+                          </button>
+                        </>
+                      );
+                    })()}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

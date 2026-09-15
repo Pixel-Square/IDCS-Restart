@@ -2,9 +2,47 @@ import React, { useEffect, useState } from 'react'
 import { ModalPortal } from '../../../components/ModalPortal'
 import {
   PBASApprovalItem,
+  PBASNode,
   fetchPBASApprovals,
+  getDepartmentTree,
   submitApprovalAction,
 } from '../../../services/pbas'
+import fetchWithAuth from '../../../services/fetchAuth'
+
+const APPROVAL_CATEGORIES = [
+  'Academics',
+  'Student Development',
+  'Research and Development',
+  'Institutional Contribution',
+] as const
+
+const APPROVAL_DEPARTMENTS = ['CSE', 'IT', 'AIDS', 'AIML', 'CE', 'ME', 'EEE', 'ECE'] as const
+
+type ApprovalFilters = {
+  fromDate: string
+  toDate: string
+  departments: string[]
+  categories: string[]
+}
+
+function collectTreeNodes(nodes: PBASNode[], result: PBASNode[] = []): PBASNode[] {
+  nodes.forEach((node) => {
+    result.push(node)
+    collectTreeNodes(node.children || [], result)
+  })
+  return result
+}
+
+function nodeMatchesSelection(submission: PBASApprovalItem, selectedIds: string[]): boolean {
+  return selectedIds.length === 0 || selectedIds.some((id) => submission.node_ancestor_ids?.includes(id))
+}
+
+function normalizeDepartmentCode(value?: string | null): string {
+  const normalized = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+  if (normalized === 'AIDS' || normalized === 'AIDSDEPARTMENT') return 'AIDS'
+  if (normalized === 'AIML' || normalized === 'AIMLDEPARTMENT') return 'AIML'
+  return normalized
+}
 
 type Props = {
   user?: any
@@ -23,13 +61,44 @@ export default function PBASApprovalsPage({ user }: Props) {
   const [rejectReason, setRejectReason] = useState('')
   const [showRejectForm, setShowRejectForm] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
+  const [documentBusy, setDocumentBusy] = useState(false)
+  const [approvalTree, setApprovalTree] = useState<PBASNode[]>([])
+  const [categoryMenuOpen, setCategoryMenuOpen] = useState(false)
+  const [departmentMenuOpen, setDepartmentMenuOpen] = useState(false)
+  const [draftFromDate, setDraftFromDate] = useState('')
+  const [draftToDate, setDraftToDate] = useState('')
+  const [draftDepartments, setDraftDepartments] = useState<string[]>([])
+  const [draftCategories, setDraftCategories] = useState<string[]>([])
+  const [appliedFilters, setAppliedFilters] = useState<ApprovalFilters>({
+    fromDate: '',
+    toDate: '',
+    departments: [],
+    categories: [],
+  })
+
+  const isAllView = activeTab === 'all'
+  const allTreeNodes = collectTreeNodes(approvalTree)
+
+  const filteredSubmissions = submissions.filter((submission) => {
+    if (!isAllView) return true
+    const submittedDate = submission.created_at ? new Date(submission.created_at).toISOString().slice(0, 10) : ''
+    if (appliedFilters.fromDate && (!submittedDate || submittedDate < appliedFilters.fromDate)) return false
+    if (appliedFilters.toDate && (!submittedDate || submittedDate > appliedFilters.toDate)) return false
+    if (appliedFilters.departments.length > 0 && !appliedFilters.departments.includes(normalizeDepartmentCode(submission.department_code))) return false
+    if (!nodeMatchesSelection(submission, appliedFilters.categories)) return false
+    return true
+  })
+
+  const handleTabChange = (tab: typeof activeTab) => {
+    setActiveTab(tab)
+  }
 
   // Load submissions for active tab
   const loadApprovals = async (tab: string = activeTab) => {
     setLoading(true)
     setErrorMsg('')
     try {
-      const data = await fetchPBASApprovals(tab)
+      const data = await fetchPBASApprovals(tab === 'all' ? 'all' : tab)
       setSubmissions(data)
     } catch (e: any) {
       setErrorMsg(e?.message || 'Failed to load approvals list.')
@@ -43,12 +112,73 @@ export default function PBASApprovalsPage({ user }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab])
 
+  useEffect(() => {
+    if (!isAllView || approvalTree.length > 0) return
+    getDepartmentTree('master')
+      .then((data) => setApprovalTree(data?.nodes || []))
+      .catch(() => setApprovalTree([]))
+  }, [isAllView, approvalTree.length])
+
+  const applyFilters = () => {
+    setAppliedFilters({
+      fromDate: draftFromDate,
+      toDate: draftToDate,
+      departments: draftDepartments,
+      categories: draftCategories,
+    })
+  }
+
+  const toggleValue = (values: string[], value: string): string[] => (
+    values.includes(value) ? values.filter((item) => item !== value) : [...values, value]
+  )
+
+  const renderCategoryCheckboxes = (nodes: PBASNode[], values: string[], setValues: (values: string[]) => void, depth = 0): React.ReactNode => (
+    <div className={depth ? 'ml-4 border-l border-slate-200 pl-3' : 'space-y-1'}>
+      {nodes.map((node) => (
+        <div key={node.id}>
+          <label className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-slate-700 hover:bg-slate-50 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={values.includes(node.id)}
+              onChange={() => setValues(toggleValue(values, node.id))}
+              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <span className="truncate">{node.label}</span>
+          </label>
+          {node.children && node.children.length > 0 && renderCategoryCheckboxes(node.children, values, setValues, depth + 1)}
+        </div>
+      ))}
+    </div>
+  )
+
   // Open Detail View Modal
   const handleOpenDetailModal = (sub: PBASApprovalItem) => {
     setSelectedSub(sub)
     setRejectReason('')
     setShowRejectForm(false)
     setIsDetailModalOpen(true)
+  }
+
+  const handleViewDocument = async () => {
+    if (!selectedSub?.file_url) return
+
+    const documentWindow = window.open('', '_blank')
+    setDocumentBusy(true)
+    try {
+      const response = await fetchWithAuth(`/api/pbas/submissions/${encodeURIComponent(selectedSub.id)}/document/`)
+      if (!response.ok) throw new Error(`Unable to open document (HTTP ${response.status}).`)
+      const blobUrl = URL.createObjectURL(await response.blob())
+      if (documentWindow) {
+        documentWindow.location.href = blobUrl
+      } else {
+        window.open(blobUrl, '_blank')
+      }
+    } catch (e: any) {
+      documentWindow?.close()
+      setErrorMsg(e?.message || 'Unable to open document.')
+    } finally {
+      setDocumentBusy(false)
+    }
   }
 
   // Handle Approve Action
@@ -91,6 +221,65 @@ export default function PBASApprovalsPage({ user }: Props) {
     }
   }
 
+  const renderFilteredDataTable = () => (
+    <div className="overflow-x-auto rounded-xl border border-slate-200">
+      <table className="w-full min-w-[1180px] text-left">
+        <thead className="bg-slate-900 text-white">
+          <tr>
+            {['Department Name', 'Faculty Name', 'Academics', 'Student Development', 'Research & Development', 'Institutional Contribution'].map((heading) => (
+              <th key={heading} className="px-4 py-3 text-[11px] font-bold uppercase tracking-wide whitespace-nowrap">
+                {heading}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100 bg-white">
+          {filteredSubmissions.length === 0 ? (
+            <tr>
+              <td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-500">No records match the selected filters.</td>
+            </tr>
+          ) : filteredSubmissions.map((submission) => {
+            const categoryCell = (category: string) => submission.category === category ? (
+              <div className="space-y-2 min-w-[190px]">
+                <div className="text-sm font-bold text-slate-900">{submission.leaf_title}</div>
+                <div className="text-[11px] text-slate-500">{submission.parent_path || 'Root Category'}</div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-black text-amber-800">{submission.pbas_credit ?? 0} points</span>
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${
+                    submission.status === 'approved'
+                      ? 'border-emerald-300 bg-emerald-100 text-emerald-800'
+                      : submission.status === 'rejected'
+                      ? 'border-red-300 bg-red-100 text-red-800'
+                      : 'border-amber-300 bg-amber-100 text-amber-800'
+                  }`}>{submission.status}</span>
+                </div>
+                <button type="button" onClick={() => handleOpenDetailModal(submission)} className="rounded-lg bg-indigo-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-indigo-700">
+                  View / Approve
+                </button>
+              </div>
+            ) : <span className="text-slate-300">—</span>
+
+            return (
+              <tr key={submission.id} className="align-top hover:bg-slate-50">
+                <td className="px-4 py-4 text-sm font-semibold text-slate-800">
+                  {submission.department_name || submission.department_code || 'N/A'}
+                </td>
+                <td className="px-4 py-4">
+                  <div className="text-sm font-bold text-slate-900">{submission.user.name}</div>
+                  <div className="text-xs text-slate-500">{submission.applicant_type === 'student' ? 'Student' : 'Staff'} · {submission.user.reg_or_staff_id}</div>
+                </td>
+                <td className="px-4 py-4">{categoryCell('Academics')}</td>
+                <td className="px-4 py-4">{categoryCell('Student Development')}</td>
+                <td className="px-4 py-4">{categoryCell('Research and Development')}</td>
+                <td className="px-4 py-4">{categoryCell('Institutional Contribution')}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+
   return (
     <div className="p-4 md:p-8 max-w-6xl mx-auto space-y-6">
       {/* Top Banner */}
@@ -123,7 +312,7 @@ export default function PBASApprovalsPage({ user }: Props) {
           <button
             key={tab}
             type="button"
-            onClick={() => setActiveTab(tab)}
+            onClick={() => handleTabChange(tab)}
             className={`px-4 py-2 text-xs font-bold uppercase tracking-wider rounded-xl transition-all ${
               activeTab === tab
                 ? 'bg-indigo-600 text-white shadow-sm'
@@ -147,7 +336,110 @@ export default function PBASApprovalsPage({ user }: Props) {
           <span className="text-xs text-slate-400">Click "View" to open full submission evidence modal</span>
         </div>
 
-        {loading ? (
+        {isAllView && loading ? (
+          <div className="py-12 text-center text-slate-500 text-sm font-medium">Loading submissions list…</div>
+        ) : isAllView ? (
+          <div className="space-y-6">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-4">
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="flex flex-col gap-1 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                  From Date
+                  <input type="date" value={draftFromDate} onChange={(event) => setDraftFromDate(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500" />
+                </label>
+                <label className="flex flex-col gap-1 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                  To Date
+                  <input type="date" value={draftToDate} onChange={(event) => setDraftToDate(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500" />
+                </label>
+
+                <div className="relative">
+                  <button type="button" onClick={() => setDepartmentMenuOpen((open) => !open)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">
+                    Department {draftDepartments.length ? `(${draftDepartments.length})` : '▼'}
+                  </button>
+                  {departmentMenuOpen && (
+                    <div className="absolute left-0 top-full z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
+                      <label className="flex items-center gap-2 border-b border-slate-100 pb-2 text-xs font-bold text-slate-700">
+                        <input type="checkbox" checked={draftDepartments.length === APPROVAL_DEPARTMENTS.length} onChange={() => setDraftDepartments(draftDepartments.length === APPROVAL_DEPARTMENTS.length ? [] : [...APPROVAL_DEPARTMENTS])} className="rounded border-slate-300 text-indigo-600" />
+                        Select All
+                      </label>
+                      <div className="mt-2 grid grid-cols-2 gap-1">
+                        {APPROVAL_DEPARTMENTS.map((department) => (
+                          <label key={department} className="flex items-center gap-2 rounded px-1.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+                            <input type="checkbox" checked={draftDepartments.includes(department)} onChange={() => setDraftDepartments(toggleValue(draftDepartments, department))} className="rounded border-slate-300 text-indigo-600" />
+                            {department}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="relative">
+                  <button type="button" onClick={() => setCategoryMenuOpen((open) => !open)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">
+                    Categories {draftCategories.length ? `(${draftCategories.length})` : '▼'}
+                  </button>
+                  {categoryMenuOpen && (
+                    <div className="fixed inset-0 z-40 bg-slate-950/45" onClick={() => setCategoryMenuOpen(false)}>
+                      <aside
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label="Categories and sub-categories"
+                        className="absolute right-0 top-0 flex h-full w-full max-w-2xl flex-col bg-white shadow-2xl"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <div className="flex items-center justify-between border-b border-slate-200 bg-slate-900 px-6 py-5 text-white">
+                          <div>
+                            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-indigo-300">PBAS Filter</div>
+                            <h3 className="mt-1 text-lg font-bold">Categories &amp; Sub-Categories</h3>
+                            <p className="mt-1 text-xs text-slate-300">Select parent categories or individual leaf nodes from the complete hierarchy.</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setCategoryMenuOpen(false)}
+                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-lg text-white hover:bg-white/20"
+                            aria-label="Close categories panel"
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-6 py-3">
+                          <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                            <input type="checkbox" checked={allTreeNodes.length > 0 && draftCategories.length === allTreeNodes.length} onChange={() => setDraftCategories(draftCategories.length === allTreeNodes.length ? [] : allTreeNodes.map((node) => node.id))} className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
+                            Select All Categories
+                          </label>
+                          <span className="text-xs font-semibold text-slate-500">{draftCategories.length} selected</span>
+                        </div>
+                        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                          {approvalTree.length > 0 ? (
+                            <div className="space-y-2">{renderCategoryCheckboxes(approvalTree, draftCategories, setDraftCategories)}</div>
+                          ) : (
+                            <p className="py-12 text-center text-sm text-slate-500">Loading PBAS category hierarchy…</p>
+                          )}
+                        </div>
+                        <div className="flex shrink-0 items-center justify-end gap-3 border-t border-slate-200 bg-slate-50 px-6 py-4">
+                          <button type="button" onClick={() => setDraftCategories([])} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Clear Selection</button>
+                          <button type="button" onClick={() => setCategoryMenuOpen(false)} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white hover:bg-indigo-700">Done</button>
+                        </div>
+                      </aside>
+                    </div>
+                  )}
+                </div>
+
+                <button type="button" onClick={applyFilters} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-indigo-700">
+                  Filter Data
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                <span>Showing {filteredSubmissions.length} of {submissions.length} submissions</span>
+                {(appliedFilters.fromDate || appliedFilters.toDate || appliedFilters.departments.length || appliedFilters.categories.length) ? (
+                  <button type="button" onClick={() => { setDraftFromDate(''); setDraftToDate(''); setDraftDepartments([]); setDraftCategories([]); setAppliedFilters({ fromDate: '', toDate: '', departments: [], categories: [] }) }} className="font-semibold text-indigo-600 hover:text-indigo-800">
+                    Clear filters
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            {renderFilteredDataTable()}
+          </div>
+        ) : loading ? (
           <div className="py-12 text-center text-slate-500 text-sm font-medium">Loading submissions list…</div>
         ) : submissions.length === 0 ? (
           <div className="py-12 text-center border-2 border-dashed border-slate-200 rounded-xl bg-slate-50">
@@ -236,8 +528,11 @@ export default function PBASApprovalsPage({ user }: Props) {
       {/* VIEW SUBMISSION FULL DETAILS MODAL POPUP */}
       {isDetailModalOpen && selectedSub && (
         <ModalPortal>
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
-            <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-lg overflow-hidden transform transition-all">
+          <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+            <div
+              className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-lg flex flex-col overflow-hidden transform transition-all"
+              style={{ maxHeight: 'calc(100vh - 2rem)' }}
+            >
               {/* Header with Title and Animated Big Credit Display */}
               <div className="px-6 py-5 bg-slate-900 text-white flex items-center justify-between gap-4 border-b border-slate-800">
                 <div className="flex-1 min-w-0">
@@ -264,7 +559,10 @@ export default function PBASApprovalsPage({ user }: Props) {
               </div>
 
               {/* Modal Body */}
-              <div className="p-6 space-y-5">
+              <div
+                className="p-6 space-y-5 min-h-0 flex-1"
+                style={{ overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}
+              >
                 {/* Submitter info card */}
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex items-center gap-3">
                   {selectedSub.user.profile_image ? (
@@ -350,14 +648,14 @@ export default function PBASApprovalsPage({ user }: Props) {
                           {selectedSub.file_name || 'Evidence Document'}
                         </span>
                       </div>
-                      <a
-                        href={selectedSub.file_url}
-                        target="_blank"
-                        rel="noreferrer"
+                      <button
+                        type="button"
+                        onClick={handleViewDocument}
+                        disabled={documentBusy}
                         className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold shadow hover:bg-emerald-700 transition-all shrink-0"
                       >
-                        View Document ↗
-                      </a>
+                        {documentBusy ? 'Opening…' : 'View Document ↗'}
+                      </button>
                     </div>
                   ) : (
                     <div className="p-3 bg-slate-100 text-slate-500 text-xs font-medium rounded-xl">No file uploaded.</div>
@@ -382,7 +680,7 @@ export default function PBASApprovalsPage({ user }: Props) {
               </div>
 
               {/* Modal Footer with Approve / Reject Action Buttons */}
-              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-3">
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-3 shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsDetailModalOpen(false)}

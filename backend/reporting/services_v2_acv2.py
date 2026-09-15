@@ -213,7 +213,7 @@ def query_v2_marks(
     rows: list[dict[str, Any]] = [dict(zip(columns, row)) for row in rows_raw]
     # Build full photo URLs so callers (Power Query / Power BI) get ready-to-use links.
     # Prefer a configured environment var `VITE_API_BASE` or Django setting, fallback to idcs.zynix.us.
-    site_root = str(getattr(settings, 'VITE_API_BASE', '') or os.getenv('VITE_API_BASE') or 'https://idcs.zynix.us').rstrip('/')
+    site_root = str(getattr(settings, 'VITE_API_BASE', '') or os.getenv('VITE_API_BASE') or 'https://idcs.krgi.co.in').rstrip('/')
     # Append URL columns to columns list if not already present
     if 'student_photo_url' not in columns:
         columns.append('student_photo_url')
@@ -403,7 +403,7 @@ def query_v2_course_dashboard(
     rows: list[dict[str, Any]] = [dict(zip(columns, row)) for row in rows_raw]
     # Build full photo URLs using configured base (env `VITE_API_BASE` or Django setting),
     # fallback to https://idcs.zynix.us so clients get ready-to-use HTTPS links.
-    site_root = str(getattr(settings, 'VITE_API_BASE', '') or os.getenv('VITE_API_BASE') or 'https://idcs.zynix.us').rstrip('/')
+    site_root = str(getattr(settings, 'VITE_API_BASE', '') or os.getenv('VITE_API_BASE') or 'https://idcs.krgi.co.in').rstrip('/')
     if 'student_photo_url' not in columns:
         columns.append('student_photo_url')
     if 'faculty_photo_url' not in columns:

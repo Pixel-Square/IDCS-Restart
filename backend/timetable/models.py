@@ -194,3 +194,134 @@ class PeriodSwapRequest(models.Model):
     
     def __str__(self):
         return f"Swap Request: {self.requested_by.staff_id} ↔ {self.requested_to.staff_id} ({self.status})"
+
+class TimetableConfigColumn(models.Model):
+    template = models.ForeignKey('TimetableTemplate', on_delete=models.CASCADE, related_name='config_columns')
+    frontend_id = models.CharField(max_length=32)
+    title = models.CharField(max_length=64, blank=True, null=True)
+    period = models.CharField(max_length=32, blank=True, null=True)
+    timing = models.CharField(max_length=64, blank=True, null=True)
+
+    class Meta:
+        verbose_name = 'Timetable Config Column'
+        verbose_name_plural = 'Timetable Config Columns'
+
+    def __str__(self):
+        return f"{self.template.name} - {self.title or self.period}"
+
+class TimetableConfigRow(models.Model):
+    template = models.ForeignKey('TimetableTemplate', on_delete=models.CASCADE, related_name='config_rows')
+    frontend_id = models.CharField(max_length=32)
+    day = models.CharField(max_length=32)
+
+    class Meta:
+        verbose_name = 'Timetable Config Row'
+        verbose_name_plural = 'Timetable Config Rows'
+
+    def __str__(self):
+        return f"{self.template.name} - {self.day}"
+
+class CreditAllocation(models.Model):
+    credit_value = models.IntegerField(unique=True)
+    periods = models.IntegerField(default=1)
+
+    class Meta:
+        verbose_name = 'Credit Allocation'
+        verbose_name_plural = 'Credit Allocations'
+
+    def __str__(self):
+        return f"{self.credit_value} Credits -> {self.periods} Periods"
+
+
+class ClassTypeException(models.Model):
+    class_type = models.CharField(max_length=64, unique=True)
+    individual_periods = models.IntegerField(default=1)
+    paired_periods = models.IntegerField(default=0)
+
+    class Meta:
+        verbose_name = 'Class Type Exception'
+        verbose_name_plural = 'Class Type Exceptions'
+
+    def __str__(self):
+        return f"{self.class_type} -> Ind:{self.individual_periods}, Pair:{self.paired_periods}"
+
+
+class GroupAllocation(models.Model):
+    frontend_id = models.CharField(max_length=64, unique=True, help_text="Frontend generated ID")
+    group_name = models.CharField(max_length=128)
+    color = models.CharField(max_length=32, blank=True, default='#EFF6FF', help_text="Custom pastel background color")
+    selected_years = models.JSONField(default=list, blank=True)
+    selected_departments = models.JSONField(default=list, blank=True)
+    selected_section_keys = models.JSONField(default=list, blank=True)
+    selected_mixed_section_keys = models.JSONField(default=list, blank=True)
+    exception_courses = models.JSONField(default=list, blank=True)
+    individual_periods = models.IntegerField(default=1)
+    paired_periods = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Group Allocation'
+        verbose_name_plural = 'Group Allocations'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.group_name
+
+
+class VenueExceptionRule(models.Model):
+    frontend_id = models.CharField(max_length=64, unique=True, help_text="Frontend generated ID")
+    venue_name = models.CharField(max_length=256)
+    group_ids = models.JSONField(default=list, blank=True, help_text="Array of GroupAllocation frontend_ids")
+    capacity = models.IntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Venue Exception Rule'
+        verbose_name_plural = 'Venue Exception Rules'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.venue_name} (Cap: {self.capacity})"
+
+
+class CourseExceptionRule(models.Model):
+    frontend_id = models.CharField(max_length=64, unique=True, help_text="Frontend generated ID")
+    course_code = models.CharField(max_length=128)
+    course_name = models.CharField(max_length=256, blank=True, default='')
+    semester = models.IntegerField(null=True, blank=True, help_text="Semester number e.g. 1-8")
+    selected_departments = models.JSONField(default=list, blank=True, help_text="List of department codes")
+    selected_section_keys = models.JSONField(default=list, blank=True, help_text="List of section keys/ids")
+    individual_periods = models.IntegerField(default=1)
+    paired_periods = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Course Exception Rule'
+        verbose_name_plural = 'Course Exception Rules'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.course_code} (Sem:{self.semester}) -> Ind:{self.individual_periods}, Pair:{self.paired_periods}"
+
+
+class SpecialPeriodRule(models.Model):
+    frontend_id = models.CharField(max_length=64, unique=True, help_text="Frontend generated ID")
+    title = models.CharField(max_length=128, help_text="Title / Name for this special period")
+    color = models.CharField(max_length=32, blank=True, default='#EFF6FF', help_text="Custom pastel background color")
+    selected_years = models.JSONField(default=list, blank=True)
+    selected_departments = models.JSONField(default=list, blank=True)
+    selected_section_keys = models.JSONField(default=list, blank=True)
+    selected_mixed_section_keys = models.JSONField(default=list, blank=True)
+    exception_courses = models.JSONField(default=list, blank=True)
+    individual_periods = models.IntegerField(default=1)
+    paired_periods = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Special Period Rule'
+        verbose_name_plural = 'Special Period Rules'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.title
+

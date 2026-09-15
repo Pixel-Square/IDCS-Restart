@@ -12,6 +12,7 @@ export interface ExceptionCourse {
 export interface GroupAllocation {
   id: string;
   groupName: string;
+  color?: string; // Light pastel background color
   selectedYears: number[];
   selectedDepartments: string[];
   selectedSectionKeys: string[];
@@ -32,6 +33,25 @@ interface Props {
 
 const STORAGE_KEY = 'iqac_timetable_group_allocations';
 const EXCEPTION_COURSES_CLIPBOARD_KEY = 'iqac_timetable_copied_exception_courses';
+
+// 15 curated light pastel shades (completely distinct from red/orange break & lunch, readable with dark text)
+export const PASTEL_COLOR_PALETTE = [
+  { name: 'Sky Azure', bg: '#E0F2FE', border: '#7DD3FC', text: '#0369A1' },
+  { name: 'Ocean Blue', bg: '#DBEAFE', border: '#93C5FD', text: '#1D4ED8' },
+  { name: 'Soft Indigo', bg: '#EEF2FF', border: '#A5B4FC', text: '#4338CA' },
+  { name: 'Lavender Purple', bg: '#F3E8FF', border: '#D8B4FE', text: '#6B21A8' },
+  { name: 'Royal Violet', bg: '#EDE9FE', border: '#C4B5FD', text: '#5B21B6' },
+  { name: 'Fresh Mint', bg: '#D1FAE5', border: '#6EE7B7', text: '#065F46' },
+  { name: 'Aqua Teal', bg: '#CCFBF1', border: '#5EEAD4', text: '#0F766E' },
+  { name: 'Cyan Breeze', bg: '#CFFAFE', border: '#67E8F9', text: '#0E7490' },
+  { name: 'Soft Sage', bg: '#DCFCE7', border: '#86EFAC', text: '#15803D' },
+  { name: 'Spring Lime', bg: '#ECFCCB', border: '#BEF264', text: '#3F6212' },
+  { name: 'Soft Orchid', bg: '#FAE8FF', border: '#F0ABFC', text: '#86198F' },
+  { name: 'Ice Periwinkle', bg: '#E0E7FF', border: '#C7D2FE', text: '#3730A3' },
+  { name: 'Glacier Blue', bg: '#F0FDFE', border: '#A5F3FC', text: '#155E75' },
+  { name: 'Steel Slate', bg: '#F1F5F9', border: '#94A3B8', text: '#334155' },
+  { name: 'Zinc Mist', bg: '#F4F4F5', border: '#A1A1AA', text: '#27272A' },
+];
 
 const DEPARTMENTS = [
   { code: 'CIVIL', label: 'CIVIL Engineering' },
@@ -56,6 +76,8 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
   // Form States
   const [editingAllocationId, setEditingAllocationId] = useState<string | null>(null);
   const [groupName, setGroupName] = useState('');
+  const [groupColor, setGroupColor] = useState<string>('#EFF6FF');
+  const [showColorPicker, setShowColorPicker] = useState<boolean>(false);
   const [selectedYears, setSelectedYears] = useState<number[]>([2]);
   const [selectedDepartments, setSelectedDepartments] = useState<string[]>([]);
   const [selectedSectionKeys, setSelectedSectionKeys] = useState<string[]>([]);
@@ -82,10 +104,15 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
   const [showVenueModal, setShowVenueModal] = useState(false);
   const [venueCapacity, setVenueCapacity] = useState<number>(0);
 
+  // Venue Exception Rules (read from localStorage to show badges in Saved Groups)
+  const [venueRules, setVenueRules] = useState<Array<{ id: string; venueName: string; groupIds: string[]; capacity: number }>>([]);
+
   // Reset Form
   const resetForm = () => {
     setEditingAllocationId(null);
     setGroupName('');
+    setGroupColor('#EFF6FF');
+    setShowColorPicker(false);
     setSelectedYears([2]);
     setSelectedDepartments([]);
     setSelectedSectionKeys([]);
@@ -97,25 +124,53 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
 
   // Fetch sections and mixed sections on mount/open
   useEffect(() => {
-    if (!isOpen) return;
-
-    // Load saved allocations from localStorage
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        setSavedAllocations(Array.isArray(parsed) ? parsed : []);
-      }
-    } catch (e) {
-      console.error('Failed to load saved group allocations:', e);
+    if (!isOpen) {
+      resetForm();
+      setActiveTab('create');
+      return;
     }
+
+    resetForm();
+    setActiveTab('create');
+
+    // Load saved allocations from DB
+    const loadGroupAllocations = async () => {
+      try {
+        const res = await fetchWithAuth('/api/timetable/group-allocations/');
+        if (res.ok) {
+          const data = await res.json();
+          const parsed = (data.results || data).map((item: any) => ({
+            id: item.frontend_id,
+            groupName: item.group_name,
+            color: item.color || '#EFF6FF',
+            selectedYears: item.selected_years || [],
+            selectedDepartments: item.selected_departments || [],
+            selectedSectionKeys: item.selected_section_keys || [],
+            selectedMixedSectionKeys: item.selected_mixed_section_keys || [],
+            exceptionCourses: item.exception_courses || [],
+            individualPeriods: item.individual_periods,
+            pairedPeriods: item.paired_periods,
+            blockPeriodEnabled: item.paired_periods > 0,
+            blockPeriodCount: item.paired_periods,
+            createdAt: item.created_at,
+          }));
+          setSavedAllocations(parsed);
+        }
+      } catch (e) {
+        console.error('Failed to load saved group allocations:', e);
+      }
+    };
+    loadGroupAllocations();
+
+    // Venue rules are now fetched in fetchData below
 
     const fetchData = async () => {
       setIsLoadingSections(true);
       try {
-        const [secRes, mixedRes] = await Promise.all([
+        const [secRes, mixedRes, venueRes] = await Promise.all([
           fetchWithAuth('/api/academics/sections/?page_size=0'),
           fetchWithAuth('/api/academics/mixed-sections/?page_size=0'),
+          fetchWithAuth('/api/timetable/venue-exceptions/')
         ]);
 
         if (secRes.ok) {
@@ -127,6 +182,17 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
           const mData = await mixedRes.json();
           setRawMixedSections(mData.results || mData || []);
         }
+        
+        if (venueRes.ok) {
+           const vData = await venueRes.json();
+           const parsed = (vData.results || vData).map((item: any) => ({
+             id: item.frontend_id,
+             venueName: item.venue_name,
+             groupIds: item.group_ids || [],
+             capacity: item.capacity
+           }));
+           setVenueRules(parsed);
+        }
       } catch (err) {
         console.error('Error loading sections for group allocation:', err);
       } finally {
@@ -137,16 +203,17 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
     fetchData();
   }, [isOpen]);
 
-  // Load all curriculum courses for exception course search
+  // Load all curriculum courses (including electives) for exception course search
   useEffect(() => {
     if (!isOpen) return;
 
     const fetchCourses = async () => {
       setIsSearchingCourses(true);
       try {
-        const [deptRes, masterRes] = await Promise.all([
+        const [deptRes, masterRes, electiveRes] = await Promise.all([
           fetchWithAuth('/api/curriculum/department/?page_size=0'),
           fetchWithAuth('/api/curriculum/master/?page_size=0'),
+          fetchWithAuth('/api/curriculum/elective/?page_size=0'),
         ]);
 
         const courseMap = new Map<string, ExceptionCourse>();
@@ -181,6 +248,21 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
           });
         }
 
+        if (electiveRes.ok) {
+          const eData = await electiveRes.json();
+          const list = eData.results || eData || [];
+          list.forEach((item: any) => {
+            const code = String(item.course_code || item.code || '').trim();
+            const name = String(item.course_name || item.name || '').trim();
+            if (code || name) {
+              const key = `${code}-${name}`.toUpperCase();
+              if (!courseMap.has(key)) {
+                courseMap.set(key, { id: item.id || key, course_code: code || 'N/A', course_name: name || 'Unnamed Elective' });
+              }
+            }
+          });
+        }
+
         setAvailableCourses(Array.from(courseMap.values()));
       } catch (err) {
         console.error('Failed to load courses for exception search:', err);
@@ -191,6 +273,76 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
 
     fetchCourses();
   }, [isOpen]);
+
+  // Debounced Autosave for edits — MUST be here (before early return) to satisfy Rules of Hooks
+  useEffect(() => {
+    if (!editingAllocationId || !groupName.trim() || selectedDepartments.length === 0) {
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      (async () => {
+        const payload = {
+          group_name: groupName.trim(),
+          color: groupColor || '#EFF6FF',
+          selected_years: selectedYears,
+          selected_departments: selectedDepartments,
+          selected_section_keys: selectedSectionKeys,
+          selected_mixed_section_keys: selectedMixedSectionKeys,
+          exception_courses: selectedExceptionCourses,
+          individual_periods: Math.max(0, individualPeriods || 0),
+          paired_periods: Math.max(0, pairedPeriods || 0),
+        };
+
+        try {
+          const res = await fetchWithAuth(`/api/timetable/group-allocations/${editingAllocationId}/`, {
+            method: 'PATCH',
+            body: JSON.stringify(payload)
+          });
+
+          if (res.ok) {
+            setSavedAllocations(prev => prev.map((a) =>
+              a.id === editingAllocationId
+                ? {
+                    ...a,
+                    groupName: groupName.trim(),
+                    color: groupColor || '#EFF6FF',
+                    selectedYears,
+                    selectedDepartments,
+                    selectedSectionKeys,
+                    selectedMixedSectionKeys,
+                    exceptionCourses: selectedExceptionCourses,
+                    individualPeriods: Math.max(0, individualPeriods || 0),
+                    pairedPeriods: Math.max(0, pairedPeriods || 0),
+                    blockPeriodEnabled: pairedPeriods > 0,
+                    blockPeriodCount: pairedPeriods,
+                  }
+                : a
+            ));
+          } else {
+            console.error('Autosave failed: API returned ' + res.status);
+          }
+        } catch (e) {
+          console.error('Autosave failed', e);
+        }
+      })();
+    }, 1500);
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [
+    editingAllocationId,
+    groupName,
+    groupColor,
+    selectedYears,
+    selectedDepartments,
+    selectedSectionKeys,
+    selectedMixedSectionKeys,
+    selectedExceptionCourses,
+    individualPeriods,
+    pairedPeriods
+  ]);
 
   if (!isOpen) return null;
 
@@ -281,14 +433,14 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
   };
 
   const handleAddExceptionCourse = (course: ExceptionCourse) => {
-    if (!selectedExceptionCourses.some((c) => c.id === course.id)) {
+    if (!selectedExceptionCourses.some((c) => String(c.id) === String(course.id))) {
       setSelectedExceptionCourses((prev) => [...prev, course]);
     }
     setCourseSearchQuery('');
   };
 
   const handleRemoveExceptionCourse = (courseId: number | string) => {
-    setSelectedExceptionCourses((prev) => prev.filter((c) => c.id !== courseId));
+    setSelectedExceptionCourses((prev) => prev.filter((c) => String(c.id) !== String(courseId)));
   };
 
   const handleCopyExceptionCourses = (coursesToCopy?: ExceptionCourse[]) => {
@@ -339,6 +491,8 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
   const handleEditAllocation = (alloc: GroupAllocation) => {
     setEditingAllocationId(alloc.id);
     setGroupName(alloc.groupName);
+    setGroupColor(alloc.color || '#EFF6FF');
+    setShowColorPicker(false);
     setSelectedYears(alloc.selectedYears || [2]);
     setSelectedDepartments(alloc.selectedDepartments || []);
     setSelectedSectionKeys(alloc.selectedSectionKeys || []);
@@ -349,7 +503,7 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
     setActiveTab('create');
   };
 
-  const handleSaveAllocation = () => {
+  const handleSaveAllocation = async () => {
     if (!groupName.trim()) {
       alert('Please enter a valid Group Name.');
       return;
@@ -362,48 +516,91 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
 
     let updated: GroupAllocation[] = [];
 
+    const payload = {
+      group_name: groupName.trim(),
+      color: groupColor || '#EFF6FF',
+      selected_years: selectedYears,
+      selected_departments: selectedDepartments,
+      selected_section_keys: selectedSectionKeys,
+      selected_mixed_section_keys: selectedMixedSectionKeys,
+      exception_courses: selectedExceptionCourses,
+      individual_periods: Math.max(0, individualPeriods || 0),
+      paired_periods: Math.max(0, pairedPeriods || 0),
+    };
+
     if (editingAllocationId) {
-      updated = savedAllocations.map((a) =>
-        a.id === editingAllocationId
-          ? {
-              ...a,
-              groupName: groupName.trim(),
-              selectedYears,
-              selectedDepartments,
-              selectedSectionKeys,
-              selectedMixedSectionKeys,
-              exceptionCourses: selectedExceptionCourses,
-              individualPeriods: Math.max(0, individualPeriods || 0),
-              pairedPeriods: Math.max(0, pairedPeriods || 0),
-              blockPeriodEnabled: pairedPeriods > 0,
-              blockPeriodCount: pairedPeriods,
-            }
-          : a
-      );
+      try {
+        const res = await fetchWithAuth(`/api/timetable/group-allocations/${editingAllocationId}/`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          const err = await res.text();
+          console.error("Failed to update group", err);
+          alert("Failed to update group: " + err);
+          return;
+        }
+        updated = savedAllocations.map((a) =>
+          a.id === editingAllocationId
+            ? {
+                ...a,
+                groupName: groupName.trim(),
+                color: groupColor || '#EFF6FF',
+                selectedYears,
+                selectedDepartments,
+                selectedSectionKeys,
+                selectedMixedSectionKeys,
+                exceptionCourses: selectedExceptionCourses,
+                individualPeriods: Math.max(0, individualPeriods || 0),
+                pairedPeriods: Math.max(0, pairedPeriods || 0),
+                blockPeriodEnabled: pairedPeriods > 0,
+                blockPeriodCount: pairedPeriods,
+              }
+            : a
+        );
+      } catch (e) {
+        console.error("Failed to update group", e);
+        return;
+      }
     } else {
-      const newAllocation: GroupAllocation = {
-        id: `group-alloc-${Date.now()}`,
-        groupName: groupName.trim(),
-        selectedYears,
-        selectedDepartments,
-        selectedSectionKeys,
-        selectedMixedSectionKeys,
-        exceptionCourses: selectedExceptionCourses,
-        individualPeriods: Math.max(0, individualPeriods || 0),
-        pairedPeriods: Math.max(0, pairedPeriods || 0),
-        blockPeriodEnabled: pairedPeriods > 0,
-        blockPeriodCount: pairedPeriods,
-        createdAt: new Date().toISOString(),
-      };
-      updated = [newAllocation, ...savedAllocations];
+      const frontendId = `group-alloc-${Date.now()}`;
+      try {
+        const res = await fetchWithAuth(`/api/timetable/group-allocations/`, {
+          method: 'POST',
+          body: JSON.stringify({
+            frontend_id: frontendId,
+            ...payload
+          })
+        });
+        if (!res.ok) {
+          const err = await res.text();
+          console.error("Failed to create group", err);
+          alert("Failed to create group: " + err);
+          return;
+        }
+        const newAllocation: GroupAllocation = {
+          id: frontendId,
+          groupName: groupName.trim(),
+          color: groupColor || '#EFF6FF',
+          selectedYears,
+          selectedDepartments,
+          selectedSectionKeys,
+          selectedMixedSectionKeys,
+          exceptionCourses: selectedExceptionCourses,
+          individualPeriods: Math.max(0, individualPeriods || 0),
+          pairedPeriods: Math.max(0, pairedPeriods || 0),
+          blockPeriodEnabled: pairedPeriods > 0,
+          blockPeriodCount: pairedPeriods,
+          createdAt: new Date().toISOString(),
+        };
+        updated = [newAllocation, ...savedAllocations];
+      } catch (e) {
+         console.error("Failed to create group", e);
+         return;
+      }
     }
 
     setSavedAllocations(updated);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    } catch (e) {
-      console.error('Failed to save group allocations:', e);
-    }
 
     if (onAllocationsUpdated) {
       onAllocationsUpdated(updated);
@@ -414,18 +611,22 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
     setActiveTab('list');
   };
 
-  const handleDeleteAllocation = (id: string) => {
-    const updated = savedAllocations.filter((a) => a.id !== id);
-    setSavedAllocations(updated);
+  const handleDeleteAllocation = async (id: string) => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      await fetchWithAuth(`/api/timetable/group-allocations/${id}/`, {
+        method: 'DELETE'
+      });
+      const updated = savedAllocations.filter((a) => a.id !== id);
+      setSavedAllocations(updated);
+      if (onAllocationsUpdated) {
+        onAllocationsUpdated(updated);
+      }
     } catch (e) {
       console.error('Failed to delete group allocation:', e);
     }
-    if (onAllocationsUpdated) {
-      onAllocationsUpdated(updated);
-    }
   };
+
+
 
   const filteredSearchCourses = courseSearchQuery.trim() === ''
     ? []
@@ -462,7 +663,9 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
         <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-6 pt-2">
           <div className="flex gap-4">
             <button
-              onClick={() => setActiveTab('create')}
+              onClick={() => {
+                setActiveTab('create');
+              }}
               className={`pb-3 text-xs font-bold transition-colors border-b-2 ${
                 activeTab === 'create'
                   ? 'border-blue-600 text-blue-600'
@@ -471,6 +674,19 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
             >
               {editingAllocationId ? '✏️ Edit Group Allocation' : '➕ Create New Group'}
             </button>
+            {editingAllocationId && (
+              <button
+                type="button"
+                onClick={() => {
+                  resetForm();
+                  setActiveTab('create');
+                }}
+                className="pb-3 text-xs font-bold transition-colors border-b-2 border-transparent text-gray-500 hover:text-blue-600 flex items-center gap-1"
+                title="Switch from edit mode to create a new group"
+              >
+                ➕ Create New Group
+              </button>
+            )}
             <button
               onClick={() => setActiveTab('list')}
               className={`pb-3 text-xs font-bold transition-colors border-b-2 ${
@@ -496,18 +712,78 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
         <div className="p-6 overflow-y-auto flex-1 space-y-6">
           {activeTab === 'create' && (
             <>
-              {/* Group Name Input */}
+              {/* Group Name Input & Color Picker */}
               <div className="space-y-1.5">
                 <label className="block text-sm font-bold text-gray-800">
-                  Group Name <span className="text-red-500">*</span>
+                  Group Name & Color Code <span className="text-red-500">*</span>
                 </label>
-                <input
-                  type="text"
-                  value={groupName}
-                  onChange={(e) => setGroupName(e.target.value)}
-                  placeholder="e.g., CORE, ELECTIVE, VALUE ADDED, SKILL LAB"
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white shadow-xs"
-                />
+                <div className="flex items-center gap-3 relative">
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      value={groupName}
+                      onChange={(e) => setGroupName(e.target.value)}
+                      placeholder="e.g., CORE, ELECTIVE, VALUE ADDED, SKILL LAB"
+                      className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white shadow-xs"
+                    />
+                  </div>
+
+                  {/* Color Picker Circle Trigger */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setShowColorPicker((prev) => !prev)}
+                      style={{ backgroundColor: groupColor }}
+                      className="w-10 h-10 rounded-full border-2 border-gray-300 shadow-sm hover:scale-105 active:scale-95 transition-all flex items-center justify-center relative cursor-pointer"
+                      title="Choose highlight color for this group"
+                    >
+                      <span className="text-xs font-bold text-gray-700 opacity-70">🎨</span>
+                    </button>
+
+                    {/* Floating Color Picker Popup */}
+                    {showColorPicker && (
+                      <div className="absolute right-0 top-12 z-50 bg-white rounded-2xl shadow-xl border border-gray-200 p-3.5 w-64 animate-in fade-in zoom-in-95">
+                        <div className="flex items-center justify-between pb-2 mb-2 border-b border-gray-100">
+                          <span className="text-xs font-bold text-gray-800">Select Highlight Color</span>
+                          <button
+                            type="button"
+                            onClick={() => setShowColorPicker(false)}
+                            className="text-gray-400 hover:text-gray-600 text-xs font-bold"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-5 gap-2">
+                          {PASTEL_COLOR_PALETTE.map((c) => {
+                            const isSelected = groupColor === c.bg;
+                            return (
+                              <button
+                                key={c.name}
+                                type="button"
+                                onClick={() => {
+                                  setGroupColor(c.bg);
+                                  setShowColorPicker(false);
+                                }}
+                                style={{ backgroundColor: c.bg, borderColor: c.border }}
+                                className={`w-9 h-9 rounded-xl border-2 flex items-center justify-center transition-all hover:scale-110 shadow-xs ${
+                                  isSelected ? 'ring-2 ring-blue-600 ring-offset-1 scale-105 font-bold' : ''
+                                }`}
+                                title={c.name}
+                              >
+                                {isSelected && (
+                                  <span style={{ color: c.text }} className="text-xs">✓</span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="mt-2.5 pt-2 border-t border-gray-100 text-[10px] text-gray-500 text-center font-medium">
+                          15 Soft contrast shades designed for readable charts
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Year Selection Checkboxes */}
@@ -879,6 +1155,11 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
                   >
                     <div className="space-y-1.5">
                       <div className="flex items-center gap-2 flex-wrap">
+                        <span
+                          style={{ backgroundColor: alloc.color || '#EFF6FF' }}
+                          className="w-4 h-4 rounded-full border border-gray-300 shadow-xs inline-block"
+                          title={`Color: ${alloc.color || '#EFF6FF'}`}
+                        />
                         <h3 className="text-base font-bold text-gray-900">{alloc.groupName}</h3>
                         {(alloc.pairedPeriods !== undefined ? alloc.pairedPeriods : (alloc.blockPeriodEnabled ? (alloc.blockPeriodCount || 1) : 0)) > 0 && (
                           <span className="bg-indigo-100 text-indigo-800 text-xs px-2.5 py-0.5 rounded-full font-bold">
@@ -912,6 +1193,31 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
                           </button>
                         </div>
                       )}
+                      {/* Venue Exception Badge */}
+                      {(() => {
+                        const linkedRule = venueRules.find((r) => r.groupIds?.includes(alloc.id));
+                        if (!linkedRule) return (
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <span className="text-[10px] bg-gray-100 text-gray-500 border border-gray-200 px-2 py-0.5 rounded-full font-medium">
+                              🏢 No Venue Exception — timetable generates normally
+                            </span>
+                          </div>
+                        );
+                        return (
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <span className="text-[10px] bg-sky-100 text-sky-800 border border-sky-200 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
+                              🏛️ Venue Exception: {linkedRule.venueName} — Capacity {linkedRule.capacity}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setShowVenueModal(true)}
+                              className="text-[10px] text-sky-600 hover:text-sky-800 underline font-semibold"
+                            >
+                              Edit
+                            </button>
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -974,7 +1280,28 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
       {/* Venue Exceptions Modal */}
       <VenueAllocationModal
         isOpen={showVenueModal}
-        onClose={() => setShowVenueModal(false)}
+        onClose={() => {
+          setShowVenueModal(false);
+          // Refresh venue rules so badges in Saved Groups tab update
+          const fetchVenues = async () => {
+            try {
+              const res = await fetchWithAuth('/api/timetable/venue-exceptions/');
+              if (res.ok) {
+                const data = await res.json();
+                const parsed = (data.results || data).map((item: any) => ({
+                  id: item.frontend_id,
+                  venueName: item.venue_name,
+                  groupIds: item.group_ids || [],
+                  capacity: item.capacity
+                }));
+                setVenueRules(parsed);
+              }
+            } catch (e) {
+               console.error('Failed to load venue rules:', e);
+            }
+          };
+          fetchVenues();
+        }}
       />
     </div>
   );

@@ -24,6 +24,8 @@ type Me = {
   capabilities?: Record<string, string[]>;
   profile_image?: string;
   profile_image_updated?: boolean;
+  pbas_credit?: number;
+  pbas_scores?: Record<string, number>;
   profile?: any;
   college?: {
     code?: string;
@@ -36,6 +38,12 @@ type Me = {
 const DEFAULT_COUNTRY_CODE = '91';
 const AVATAR_EDITOR_FRAME_SIZE = 280;
 const AVATAR_UPLOAD_SIZE = 512;
+const PBAS_SCORE_CATEGORIES = [
+  'Academics',
+  'Student Development',
+  'Research and Development',
+  'Institutional Contribution',
+] as const;
 
 type AvatarNatural = {
   width: number;
@@ -1047,20 +1055,22 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
         <div>
           <h3 className="text-xl font-bold text-gray-900 mb-4">Details</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {/* PBAS Score Card */}
-            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow border-l-4 border-amber-500">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                  <Award className="w-5 h-5 text-amber-600" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-gray-500 mb-1">PBAS Score</div>
-                  <div className="text-2xl font-black text-amber-700">
-                    {(user as any)?.pbas_credit ?? (user as any)?.profile?.pbas_credit ?? 0}
+            {PBAS_SCORE_CATEGORIES.map((category) => (
+              <div key={category} className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow border-l-4 border-amber-500">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <Award className="w-5 h-5 text-amber-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-gray-500 mb-1">{category}</div>
+                    <div className="text-2xl font-black text-amber-700">
+                      {user?.pbas_scores?.[category] ?? user?.profile?.pbas_scores?.[category] ?? 0}
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">PBAS points</div>
                   </div>
                 </div>
               </div>
-            </div>
+            ))}
 
             {/* Staff/Student ID Card */}
             <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">

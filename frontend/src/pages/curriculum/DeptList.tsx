@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { normalizeClassType } from '../../constants/classTypes';
+import CLASS_TYPES, { normalizeClassType } from '../../constants/classTypes';
 import CurriculumLayout from './CurriculumLayout';
 import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives, fetchBatchYears, propagateDeptRow, DeptRow } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
@@ -29,7 +29,7 @@ const Copy = (props: any) => (
 
 type Department = { id: number; code: string; name: string; short_name?: string };
 type QPType = { id: number; code: string; label: string };
-type ClassTypeItem = { id: number; code: string; label: string };
+type ClassTypeItem = { id: number; code: string; label: string; name?: string; short_code?: string };
 
 export default function DeptList() {
   const [rows, setRows] = useState<any[]>([]);
@@ -94,13 +94,17 @@ export default function DeptList() {
       .catch(() => setClassTypes([]));
   }, []);
 
-  // Fetch admin-created class types from Academic v2
+  // Fetch admin-created active class types from Academic v2 (ClassTypeEditorPage source)
   useEffect(() => {
     fetchWithAuth('/api/academic-v2/class-types/')
       .then(res => res.ok ? res.json() : [])
       .then(data => {
         const items = (Array.isArray(data) ? data : data?.results || []);
-        setAdminClassTypes(items.map((ct: any) => ({ id: ct.id, code: ct.short_code || ct.name, label: ct.display_name || ct.name })));
+        setAdminClassTypes(items.map((ct: any) => {
+          const code = String(ct.name || ct.short_code || '').trim().toUpperCase();
+          const label = String(ct.display_name || ct.name || code).trim();
+          return { id: ct.id, code, label, name: ct.name, short_code: ct.short_code };
+        }));
       })
       .catch(() => setAdminClassTypes([]));
   }, []);
@@ -159,41 +163,70 @@ export default function DeptList() {
     }
   }
 
-  // Helper: render class type <option> elements - prioritize admin (Academic v2) class types
-  const renderClassTypeOptions = () => (
-    <>
-      {adminClassTypes.map(ct => (
-        <option key={`adm-${ct.code}`} value={ct.code}>{ct.label} ({ct.code})</option>
-      ))}
-      {adminClassTypes.length === 0 && classTypes.map(ct => (
-        <option key={ct.code} value={ct.code}>{ct.label}</option>
-      ))}
-    </>
-  );
+  // Helper: render class type <option> elements - only active class types from Academic 2.1 (ClassTypeEditorPage)
+  const renderClassTypeOptions = (currentValue?: string) => {
+    const optionsMap = new Map<string, { code: string; label: string }>();
+
+    // 1. Add active class types from Academic 2.1
+    adminClassTypes.forEach(ct => {
+      if (ct.code) {
+        const key = ct.code.toUpperCase();
+        optionsMap.set(key, { code: ct.code, label: ct.label || ct.code });
+      }
+    });
+
+    // 2. If currentValue is set on row/form but not in adminClassTypes, keep it so it's not lost
+    if (currentValue && !optionsMap.has(currentValue.toUpperCase())) {
+      const norm = currentValue.toUpperCase();
+      const constCt = CLASS_TYPES.find(c => c.value?.toUpperCase() === norm);
+      optionsMap.set(norm, { code: currentValue, label: constCt?.label || currentValue });
+    }
+
+    // 3. Fallback if adminClassTypes is empty
+    if (optionsMap.size === 0) {
+      CLASS_TYPES.forEach(ct => {
+        optionsMap.set(ct.value.toUpperCase(), { code: ct.value, label: ct.label });
+      });
+    }
+
+    return Array.from(optionsMap.values()).map(opt => (
+      <option key={opt.code} value={opt.code}>
+        {opt.label.toUpperCase() === opt.code.toUpperCase() ? opt.label : `${opt.label} (${opt.code})`}
+      </option>
+    ));
+  };
 
   // Helper: filter QP types by class type (null = global, applied to all)
   const getQpTypesForClassType = (classTypeCode: string | null) => {
     if (!classTypeCode) return [];
     
-    // Find the class type ID from the selected code
-    const selectedClassType = adminClassTypes.find(ct => ct.code === classTypeCode);
+    // Find the class type ID from the selected code (case-insensitive)
+    const norm = String(classTypeCode).toUpperCase().trim();
+    const selectedClassType = adminClassTypes.find(ct => 
+      ct.code?.toUpperCase() === norm || 
+      ct.name?.toUpperCase() === norm || 
+      ct.short_code?.toUpperCase() === norm
+    );
     const classTypeId = selectedClassType?.id;
     
-    if (!classTypeId) return [];
-    
     // Show QP types that are:
-    // 1. Global (class_type_id is null)
+    // 1. Global (class_type_id is null/undefined)
     // 2. OR specifically mapped to this class type
-    return adminQpTypes.filter(qt => !(qt as any).class_type_id || (qt as any).class_type_id === classTypeId);
+    return adminQpTypes.filter(qt => !(qt as any).class_type_id || (classTypeId && (qt as any).class_type_id === classTypeId));
   };
 
   // Helper: get display label for a class type code
   const getClassTypeLabel = (code: string | null | undefined) => {
     if (!code) return '-';
-    const adminCt = adminClassTypes.find(ct => ct.code === code);
+    const norm = String(code).toUpperCase().trim();
+    const adminCt = adminClassTypes.find(ct => 
+      ct.code?.toUpperCase() === norm || 
+      ct.name?.toUpperCase() === norm || 
+      ct.short_code?.toUpperCase() === norm
+    );
     if (adminCt) return adminCt.label;
-    const ct = classTypes.find(c => c.code === code);
-    if (ct) return ct.label;
+    const constCt = CLASS_TYPES.find(c => c.value?.toUpperCase() === norm);
+    if (constCt) return constCt.label;
     return code;
   };
 
@@ -723,7 +756,7 @@ export default function DeptList() {
                         className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
                         style={{ minWidth: 90 }}
                       >
-                        {renderClassTypeOptions()}
+                        {renderClassTypeOptions(r.class_type)}
                       </select>
                     </td>
                     <td className="px-3 py-2 text-center whitespace-nowrap">
@@ -1156,7 +1189,7 @@ export default function DeptList() {
                   onChange={e => setAddForm(f => ({ ...f, class_type: e.target.value }))} 
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
-                  {renderClassTypeOptions()}
+                  {renderClassTypeOptions(addForm.class_type)}
                 </select>
               </div>
               <div>
@@ -1346,7 +1379,7 @@ export default function DeptList() {
                   onChange={e => setEditElectiveForm((f:any) => ({ ...f, class_type: e.target.value }))} 
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
-                  {renderClassTypeOptions()}
+                  {renderClassTypeOptions(editElectiveForm.class_type)}
                 </select>
               </div>
               <div>

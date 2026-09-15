@@ -38,6 +38,22 @@ class PBASCustomDepartmentSerializer(serializers.ModelSerializer):
         read_only_fields = ('id', 'show_in_submission', 'created_by', 'created_at')
 
 
+def filter_visible_nodes(nodes, allowed_audiences: list[str] | set[str]):
+    """Filter nodes based on allowed audience list, keeping parents if they or any descendants are visible."""
+    allowed = set(allowed_audiences or ['both'])
+
+    def node_has_visible(n) -> bool:
+        aud = getattr(n, 'audience', 'both') or 'both'
+        if aud in allowed:
+            return True
+        for child in (getattr(n, 'children', None) or []):
+            if node_has_visible(child):
+                return True
+        return False
+
+    return [n for n in (nodes or []) if node_has_visible(n)]
+
+
 class PBASNodeTreeSerializer(serializers.ModelSerializer):
     children = serializers.SerializerMethodField()
     approvers = serializers.SerializerMethodField()
@@ -54,6 +70,7 @@ class PBASNodeTreeSerializer(serializers.ModelSerializer):
             'uploaded_name',
             'limit',
             'pbas_credit',
+            'mentor_credit',
             'college_required',
             'position',
             'approvers',
@@ -88,6 +105,8 @@ class PBASSubmissionSerializer(serializers.ModelSerializer):
     leaf_title = serializers.SerializerMethodField()
     parent_path = serializers.SerializerMethodField()
     pbas_credit = serializers.SerializerMethodField()
+    student_credit = serializers.SerializerMethodField()
+    mentor_credit = serializers.SerializerMethodField()
     approved_by_name = serializers.SerializerMethodField()
     form_schema = serializers.SerializerMethodField()
 
@@ -99,6 +118,8 @@ class PBASSubmissionSerializer(serializers.ModelSerializer):
             'leaf_title',
             'parent_path',
             'pbas_credit',
+            'student_credit',
+            'mentor_credit',
             'submission_type',
             'form_data',
             'form_schema',
@@ -107,12 +128,14 @@ class PBASSubmissionSerializer(serializers.ModelSerializer):
             'file_name',
             'college',
             'status',
+            'current_step',
+            'approval_history',
             'approved_by_name',
             'reviewed_at',
             'rejection_reason',
             'created_at',
         )
-        read_only_fields = ('id', 'file_name', 'created_at', 'status', 'reviewed_at', 'rejection_reason', 'form_schema')
+        read_only_fields = ('id', 'file_name', 'created_at', 'status', 'current_step', 'approval_history', 'reviewed_at', 'rejection_reason', 'form_schema')
 
     def get_form_schema(self, obj):
         return obj.node.form_schema if (obj.node and obj.node.form_schema) else []
@@ -133,6 +156,12 @@ class PBASSubmissionSerializer(serializers.ModelSerializer):
 
     def get_pbas_credit(self, obj):
         return obj.node.pbas_credit if (obj.node and obj.node.pbas_credit is not None) else 0
+
+    def get_student_credit(self, obj):
+        return obj.node.pbas_credit if (obj.node and obj.node.pbas_credit is not None) else 0
+
+    def get_mentor_credit(self, obj):
+        return obj.node.mentor_credit if (obj.node and obj.node.mentor_credit is not None) else 0
 
     def get_approved_by_name(self, obj):
         return obj.approved_by.get_full_name() if obj.approved_by else None
@@ -178,7 +207,7 @@ class PBASSubmissionSerializer(serializers.ModelSerializer):
             pass
 
         # Enforce node input_mode
-        if submission_type and submission_type != (node.input_mode or '').lower():
+        if submission_type and submission_type != 'form' and submission_type != (node.input_mode or '').lower():
             raise serializers.ValidationError({'submission_type': 'Submission type must match node input_mode.'})
 
         if submission_type == PBASSubmission.SubmissionType.LINK:
@@ -191,8 +220,10 @@ class PBASSubmissionSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'file': 'File is required.'})
             if link:
                 raise serializers.ValidationError({'link': 'Link must be empty for upload submissions.'})
+        elif submission_type == 'form':
+            pass
         else:
-            raise serializers.ValidationError({'submission_type': 'submission_type must be upload or link.'})
+            raise serializers.ValidationError({'submission_type': 'submission_type must be upload or link or form.'})
 
         if node.college_required and not college:
             raise serializers.ValidationError({'college': 'College is required for this node.'})

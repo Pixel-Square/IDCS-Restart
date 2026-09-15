@@ -60,7 +60,10 @@ def allowed_audiences_for_viewer(viewer: str) -> list[str]:
 
 
 def user_staff_id(user) -> Optional[str]:
-    sp = getattr(user, 'staff_profile', None)
+    try:
+        sp = getattr(user, 'staff_profile', None)
+    except Exception:
+        sp = None
     if sp is None:
         return None
     sid = getattr(sp, 'staff_id', None)
@@ -68,7 +71,10 @@ def user_staff_id(user) -> Optional[str]:
 
 
 def user_student_reg_no(user) -> Optional[str]:
-    sp = getattr(user, 'student_profile', None)
+    try:
+        sp = getattr(user, 'student_profile', None)
+    except Exception:
+        sp = None
     if sp is None:
         return None
     reg = getattr(sp, 'reg_no', None)

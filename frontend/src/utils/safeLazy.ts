@@ -32,22 +32,19 @@ export function safeLazy(
 
       // Handle Vite chunk hash mismatch after a new build / deployment
       const isChunkError =
-        error?.message?.includes('Failed to fetch dynamically imported module') ||
-        error?.message?.includes('Importing a module script failed') ||
-        error?.message?.includes('error loading dynamically imported module') ||
-        error?.name === 'ChunkLoadError';
+          error?.message?.includes('Failed to fetch dynamically imported module') ||
+          error?.message?.includes('Importing a module script failed') ||
+          error?.message?.includes('error loading dynamically imported module') ||
+          error?.name === 'ChunkLoadError';
 
-      if (isChunkError && typeof window !== 'undefined') {
-        const reloadKey = `chunk_reload_${componentName}`;
-        const lastReload = sessionStorage.getItem(reloadKey);
-        const now = Date.now();
-
-        if (!lastReload || now - Number(lastReload) > 3000) {
-          sessionStorage.setItem(reloadKey, String(now));
-          window.location.reload();
-          return new Promise(() => {}); // prevent further error cascade during reload
-        }
-      }
+        // Graceful fallback UI – render a simple error placeholder.
+        console.error(`[SafeLazy] Chunk load error for ${componentName}:`, error);
+        const Fallback: React.FC = () => React.createElement(
+          'div',
+          { style: { padding: '2rem', textAlign: 'center', color: 'red' } },
+          `Failed to load ${componentName}. Please refresh the page.`
+        );
+        return { default: Fallback };
 
       throw error;
     }

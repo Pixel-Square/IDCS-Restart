@@ -44,6 +44,24 @@ class PBASCustomDepartment(models.Model):
         return self.title
 
 
+class PBASApprovalFlow(models.Model):
+    """Stores sequential approval flow configuration for Staff and Student workflows.
+
+    staff_flow: list of role names e.g. ["HOD", "PRINCIPAL"] (final step is always Auth/Assigned Node Approvers)
+    student_flow: list of role names e.g. ["MENTOR", "HOD", "PRINCIPAL"] (final step is always Auth/Assigned Node Approvers)
+    """
+    staff_flow = models.JSONField(default=list, blank=True)
+    student_flow = models.JSONField(default=list, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'PBAS Approval Flow'
+        verbose_name_plural = 'PBAS Approval Flows'
+
+    def __str__(self) -> str:
+        return f"PBAS Approval Flow (Staff: {len(self.staff_flow)} roles, Student: {len(self.student_flow)} roles)"
+
+
 class PBASNode(models.Model):
     class Audience(models.TextChoices):
         FACULTY = 'faculty', 'Faculty'
@@ -81,6 +99,7 @@ class PBASNode(models.Model):
 
     limit = models.IntegerField(null=True, blank=True)
     pbas_credit = models.IntegerField(null=True, blank=True)
+    mentor_credit = models.IntegerField(null=True, blank=True)
     college_required = models.BooleanField(default=False)
     position = models.IntegerField(default=0)
     approvers = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name='pbas_approver_nodes')
@@ -153,6 +172,8 @@ class PBASSubmission(models.Model):
     file_name = models.CharField(max_length=255, null=True, blank=True)
     college = models.ForeignKey(College, null=True, blank=True, on_delete=models.SET_NULL, related_name='pbas_submissions')
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    current_step = models.CharField(max_length=64, default='', blank=True)
+    approval_history = models.JSONField(default=list, blank=True)
     approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='pbas_approved_submissions')
     reviewed_at = models.DateTimeField(null=True, blank=True)
     rejection_reason = models.TextField(blank=True, default='')

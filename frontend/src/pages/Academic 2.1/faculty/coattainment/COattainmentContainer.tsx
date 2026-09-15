@@ -41,7 +41,7 @@ export default function COattainmentContainer({
           }`}
         >
           <FileSpreadsheet className="w-4 h-4 text-indigo-500" />
-          CO Attainment Analysis
+          CO - PO
         </button>
       </div>
 

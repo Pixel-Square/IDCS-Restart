@@ -28,3 +28,4 @@ whitenoise==6.5.0
 sqlparse==0.5.5
 typing_extensions==4.15.0
 docker==7.1.0
+pypdf>=4.0.0

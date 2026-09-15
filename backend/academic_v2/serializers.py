@@ -8,6 +8,7 @@ from django.utils.crypto import get_random_string
 from rest_framework import serializers
 from academics.models import Semester
 from .models import (
+    AcV2Version,
     AcV2SemesterConfig,
     AcV2SemesterGroup,
     AcV2SemesterGroupMembership,
@@ -34,6 +35,115 @@ from .models import (
     AcV2CqiEditRequest,
     AcV2PublishSetting,
 )
+
+
+class AcV2VersionSerializer(serializers.ModelSerializer):
+    academic_years = serializers.SerializerMethodField(read_only=True)
+    academic_year_ids = serializers.ListField(
+        child=serializers.IntegerField(), write_only=True, required=False
+    )
+    class_types_count = serializers.SerializerMethodField(read_only=True)
+    qp_patterns_count = serializers.SerializerMethodField(read_only=True)
+    cycles_count = serializers.SerializerMethodField(read_only=True)
+    clone_from_version_id = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+
+    class Meta:
+        model = AcV2Version
+        fields = [
+            'id', 'name', 'description', 'is_active', 'is_default',
+            'academic_years', 'academic_year_ids', 'class_types_count',
+            'qp_patterns_count', 'cycles_count', 'clone_from_version_id',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_academic_years(self, obj):
+        return [
+            {
+                'id': ay.id,
+                'name': ay.name,
+                'parity': ay.parity,
+                'is_active': ay.is_active,
+            }
+            for ay in obj.academic_years.all().order_by('-id')
+        ]
+
+    def get_class_types_count(self, obj):
+        return obj.class_types.filter(is_active=True).count()
+
+    def get_qp_patterns_count(self, obj):
+        return obj.qp_patterns.filter(is_active=True).count()
+
+    def get_cycles_count(self, obj):
+        return obj.cycles.filter(is_active=True).count()
+
+    def create(self, validated_data):
+        ay_ids = validated_data.pop('academic_year_ids', [])
+        clone_id = validated_data.pop('clone_from_version_id', None)
+        version = super().create(validated_data)
+
+        if ay_ids:
+            from academics.models import AcademicYear
+            ays = list(AcademicYear.objects.filter(id__in=ay_ids))
+            # Enforce: an academic year can only be in one version
+            for other_v in AcV2Version.objects.exclude(id=version.id).filter(academic_years__in=ays):
+                other_v.academic_years.remove(*ays)
+            version.academic_years.set(ays)
+
+        if clone_id:
+            try:
+                source = AcV2Version.objects.filter(pk=clone_id).first()
+                if source:
+                    class_type_map = {}
+                    for ct in source.class_types.filter(is_active=True):
+                        old_id = ct.id
+                        ct.pk = None
+                        ct.id = None
+                        ct.version = version
+                        ct.save()
+                        class_type_map[old_id] = ct
+
+                    for qp in source.qp_patterns.filter(is_active=True):
+                        qp.pk = None
+                        qp.id = None
+                        qp.version = version
+                        if qp.class_type_id and qp.class_type_id in class_type_map:
+                            qp.class_type = class_type_map[qp.class_type_id]
+                        qp.save()
+
+                    for c in source.cycles.filter(is_active=True):
+                        c.pk = None
+                        c.id = None
+                        c.version = version
+                        c.code = f"{c.code}-{version.name}"[:30]
+                        c.save()
+
+                    for qt in source.qp_types.filter(is_active=True):
+                        qt.pk = None
+                        qt.id = None
+                        qt.version = version
+                        if qt.class_type_id and qt.class_type_id in class_type_map:
+                            qt.class_type = class_type_map[qt.class_type_id]
+                        qt.name = f"{qt.name} ({version.name})"[:100]
+                        qt.code = f"{qt.code}-{version.name}"[:20]
+                        qt.save()
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).exception("Failed to clone configs into version %s: %s", version.name, e)
+
+        return version
+
+    def update(self, instance, validated_data):
+        ay_ids = validated_data.pop('academic_year_ids', None)
+        version = super().update(instance, validated_data)
+        if ay_ids is not None:
+            from academics.models import AcademicYear
+            ays = list(AcademicYear.objects.filter(id__in=ay_ids))
+            # Enforce: an academic year can only be in one version
+            for other_v in AcV2Version.objects.exclude(id=version.id).filter(academic_years__in=ays):
+                other_v.academic_years.remove(*ays)
+            version.academic_years.set(ays)
+        return version
 
 
 class AcV2SemesterConfigSerializer(serializers.ModelSerializer):

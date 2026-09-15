@@ -18,22 +18,35 @@ CLASS_TYPE_CHOICES = (
 )
 
 def validate_class_type_code(value: str):
-    """Validate class_type against the DB-managed ClassType table.
+    """Validate class_type against standard choices and the DB-managed ClassType tables.
 
-    Accepts any code that exists in the ClassType table, allowing new types
-    added via admin to work immediately without model changes.
+    Accepts any code that exists in CLASS_TYPE_CHOICES, ClassType table, or AcV2ClassType table.
     """
     code = (value or '').strip()
     if not code:
         return
+    
+    # Check standard choices (case-insensitive)
+    choice_codes = [c[0].upper() for c in CLASS_TYPE_CHOICES]
+    if code.upper() in choice_codes:
+        return
+
     try:
         from django.db import connection
-        if 'curriculum_classtype' not in connection.introspection.table_names():
+        if 'curriculum_classtype' in connection.introspection.table_names():
+            if ClassType.objects.filter(code__iexact=code).exists():
+                return
+    except Exception:
+        pass
+
+    try:
+        from academic_v2.models import AcV2ClassType
+        if AcV2ClassType.objects.filter(models.Q(name__iexact=code) | models.Q(short_code__iexact=code)).exists():
             return
     except Exception:
-        return
-    if not ClassType.objects.filter(code=code).exists():
-        raise ValidationError(f"Invalid Class Type: {code}")
+        pass
+
+    raise ValidationError(f"Invalid Class Type: {code}")
 
 
 def validate_question_paper_type_code(value: str):

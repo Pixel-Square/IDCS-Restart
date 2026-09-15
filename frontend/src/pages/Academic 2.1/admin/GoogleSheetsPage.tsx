@@ -641,17 +641,33 @@ export default function GoogleSheetsPage() {
     }
   };
 
-  const updateMappingField = (examId: string, field: keyof SheetMappingConfig, value: string) => {
+  const updateMappingField = (
+    examId: string,
+    field: keyof SheetMappingConfig,
+    value: string,
+    fallbackMapping?: SheetMappingConfig
+  ) => {
     setColumnMapping((current) => {
-      const existing = current[examId] || createInitialMapping(examId, selectedPatternQuestionTitles);
-      return { ...current, [examId]: { ...existing, [field]: value } };
+      const base = current[examId] || fallbackMapping || createInitialMapping(examId, selectedPatternQuestionTitles);
+      return { ...current, [examId]: { ...base, [field]: value } };
     });
   };
 
-  const updateQuestionColumn = (examId: string, question: string, value: string) => {
+  const updateQuestionColumn = (
+    examId: string,
+    question: string,
+    value: string,
+    fallbackMapping?: SheetMappingConfig
+  ) => {
     setColumnMapping((current) => {
-      const existing = current[examId] || createInitialMapping(examId, selectedPatternQuestionTitles);
-      return { ...current, [examId]: { ...existing, questionColumns: { ...existing.questionColumns, [question]: value } } };
+      const base = current[examId] || fallbackMapping || createInitialMapping(examId, selectedPatternQuestionTitles);
+      return {
+        ...current,
+        [examId]: {
+          ...base,
+          questionColumns: { ...base.questionColumns, [question]: value },
+        },
+      };
     });
   };
 
@@ -1098,18 +1114,47 @@ export default function GoogleSheetsPage() {
     };
   }, [columnMapping, configActiveExam]);
 
+  /** Derive pattern specifically for the active config exam */
+  const configActiveExamPattern = useMemo(() => {
+    if (!configActiveExam) return null;
+    const selectedClassTypeValue = resolveClassTypeValue(configActiveExam.classType || configSelectedClassCode, classTypeAliasLookup);
+    const selectedQpTypeValue = normalizeSelectionValue(configActiveExam.qpType || configSelectedQpType);
+    const selectedExamNameKey = normalizeExamNameKey(configActiveExam.assignment);
+
+    const exactCandidates = qpPatterns.filter((pattern) => {
+      const patternClassType = resolveClassTypeValue(pattern.class_type, classTypeAliasLookup);
+      if (patternClassType !== selectedClassTypeValue) return false;
+      if (normalizeSelectionValue(pattern.qp_type) !== selectedQpTypeValue) return false;
+      if (!selectedExamNameKey) return false;
+      return normalizeExamNameKey(pattern.name) === selectedExamNameKey;
+    });
+    if (exactCandidates.length) return exactCandidates[0];
+
+    return qpPatterns.find((pattern) => {
+      const patternClassType = resolveClassTypeValue(pattern.class_type, classTypeAliasLookup);
+      return patternClassType === selectedClassTypeValue && normalizeSelectionValue(pattern.qp_type) === selectedQpTypeValue;
+    }) || null;
+  }, [classTypeAliasLookup, configActiveExam, configSelectedClassCode, configSelectedQpType, qpPatterns]);
+
+  const configActiveExamPatternTitles = useMemo(
+    () => derivePatternQuestionTitles(configActiveExamPattern),
+    [configActiveExamPattern]
+  );
+
   /** Question columns to show: from mark_manager questions (admin_defined) or pattern titles */
   const configQuestionFields = useMemo(() => {
     const mm = configActiveExam?.markManager;
     if (mm?.enabled && mm.mode === 'admin_defined' && mm.questions.length) {
       return mm.questions.map((q) => q.title);
     }
-    // Fallback to selectedPatternQuestionTitles or DEFAULT
+    // Specific pattern for this active exam assignment
+    if (configActiveExamPatternTitles.length) return configActiveExamPatternTitles;
+    // Fallback to selectedPatternQuestionTitles or configured mapping
     if (selectedPatternQuestionTitles.length) return selectedPatternQuestionTitles;
     const fromMapping = Object.keys(configActiveMapping.questionColumns || {});
     if (fromMapping.length) return fromMapping;
     return DEFAULT_QUESTION_COLUMNS;
-  }, [configActiveExam, configActiveMapping, selectedPatternQuestionTitles]);
+  }, [configActiveExam, configActiveExamPatternTitles, configActiveMapping, selectedPatternQuestionTitles]);
 
   const saveConfigMapping = () => {
     if (!configActiveExam?.sectionId) {
@@ -1348,7 +1393,7 @@ export default function GoogleSheetsPage() {
                     <span className="font-medium">Sheet Tab Name</span>
                     <input
                       value={configActiveMapping.sheetTab}
-                      onChange={(e) => updateMappingField(configActiveExam.id, 'sheetTab', e.target.value)}
+                      onChange={(e) => updateMappingField(configActiveExam.id, 'sheetTab', e.target.value, configActiveMapping)}
                       placeholder={configActiveExam.assignment}
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
                     />
@@ -1358,7 +1403,7 @@ export default function GoogleSheetsPage() {
                     <span className="font-medium">Register No. Column</span>
                     <input
                       value={configActiveMapping.regNoColumn}
-                      onChange={(e) => updateMappingField(configActiveExam.id, 'regNoColumn', e.target.value)}
+                      onChange={(e) => updateMappingField(configActiveExam.id, 'regNoColumn', e.target.value, configActiveMapping)}
                       placeholder="A"
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
                     />
@@ -1367,7 +1412,7 @@ export default function GoogleSheetsPage() {
                     <span className="font-medium">Name Column</span>
                     <input
                       value={configActiveMapping.nameColumn}
-                      onChange={(e) => updateMappingField(configActiveExam.id, 'nameColumn', e.target.value)}
+                      onChange={(e) => updateMappingField(configActiveExam.id, 'nameColumn', e.target.value, configActiveMapping)}
                       placeholder="B"
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
                     />
@@ -1385,7 +1430,7 @@ export default function GoogleSheetsPage() {
                           <span className="text-xs font-medium text-slate-600">{question}</span>
                           <input
                             value={configActiveMapping.questionColumns[question] || ''}
-                            onChange={(e) => updateQuestionColumn(configActiveExam.id, question, e.target.value)}
+                            onChange={(e) => updateQuestionColumn(configActiveExam.id, question, e.target.value, configActiveMapping)}
                             placeholder="C"
                             className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
                           />

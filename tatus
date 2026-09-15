@@ -1,0 +1,10 @@
+[33meac22a0[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32macademic-performance-deploy[m[33m, [m[1;31morigin/academic-performance-deploy[m[33m)[m feat: complete academic performance hierarchy analytics
+[33mb89e1ca[m[33m ([m[1;31morigin/secyr_merge[m[33m, [m[1;32msecyr_merge[m[33m)[m CO ATTAINMENT 100
+[33m662b408[m CO _OA OK
+[33m99f2d5e[m CO ALL OK
+[33mfa339d9[m attaiment ok
+[33mc040fe4[m CO ATTAINMENT OK
+[33mfb06aa0[m t1
+[33m842b82d[m timetable
+[33mbd5c2e1[m Merge branch 'secyr_merge' of https://github.com/Pixel-Square/IDCS-Restart into secyr_merge
+[33m05f2a5c[m DB-driven assessments/sections/batches/semesters; pooled cross-assessment KPIs; fix batch-semester mapping; honest null attendance

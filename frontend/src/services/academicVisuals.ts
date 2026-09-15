@@ -229,10 +229,21 @@ export async function deleteDashboard(dashId: string): Promise<boolean> {
   return false;
 }
 
-export async function fetchDynamicOptions(): Promise<DynamicOptionsResponse> {
+export interface DynamicOptionsFilters {
+  year?: string;
+  sem?: string;
+  dept?: string;
+}
+
+export async function fetchDynamicOptions(filters?: DynamicOptionsFilters): Promise<DynamicOptionsResponse> {
+  const qs = new URLSearchParams();
+  if (filters?.year) qs.set('year', filters.year);
+  if (filters?.sem) qs.set('sem', filters.sem);
+  if (filters?.dept) qs.set('dept', filters.dept);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
   for (const ep of ENDPOINTS) {
     try {
-      const res = await fetchWithAuth(`${ep}/dynamic-options/`);
+      const res = await fetchWithAuth(`${ep}/dynamic-options/${suffix}`);
       if (res.ok) {
         return await res.json();
       }

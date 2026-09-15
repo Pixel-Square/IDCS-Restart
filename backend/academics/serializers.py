@@ -46,6 +46,8 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
     batch = serializers.SerializerMethodField(read_only=True)
     semester = serializers.SerializerMethodField(read_only=True)
     academic_year = serializers.SerializerMethodField(read_only=True)
+    academic_year_id = serializers.SerializerMethodField(read_only=True)
+    academic_year_parity = serializers.SerializerMethodField(read_only=True)
     department = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
@@ -64,12 +66,26 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
             'batch',
             'semester',
             'academic_year',
+            'academic_year_id',
+            'academic_year_parity',
             'department',
         )
 
     def get_academic_year(self, obj):
         try:
             return getattr(getattr(obj, 'academic_year', None), 'name', None)
+        except Exception:
+            return None
+
+    def get_academic_year_id(self, obj):
+        try:
+            return getattr(getattr(obj, 'academic_year', None), 'id', None)
+        except Exception:
+            return None
+
+    def get_academic_year_parity(self, obj):
+        try:
+            return getattr(getattr(obj, 'academic_year', None), 'parity', None)
         except Exception:
             return None
 
@@ -772,8 +788,8 @@ def _user_can_manage_assignment(user, teaching_assignment: TeachingAssignment) -
 
 
 class SectionAdvisorSerializer(serializers.ModelSerializer):
-    section_id = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all(), source='section', allow_null=True, required=False)
-    mixed_section_id = serializers.PrimaryKeyRelatedField(queryset=MixedSection.objects.all(), source='mixed_section', allow_null=True, required=False)
+    section_id = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all(), source='section', allow_null=True, required=False, default=None)
+    mixed_section_id = serializers.PrimaryKeyRelatedField(queryset=MixedSection.objects.all(), source='mixed_section', allow_null=True, required=False, default=None)
     advisor_id = serializers.PrimaryKeyRelatedField(queryset=StaffProfile.objects.all(), source='advisor')
     section = serializers.StringRelatedField(read_only=True)
     mixed_section = serializers.StringRelatedField(read_only=True)
@@ -808,6 +824,11 @@ class SectionAdvisorSerializer(serializers.ModelSerializer):
     class Meta:
         model = SectionAdvisor
         fields = ('id', 'section', 'section_id', 'mixed_section', 'mixed_section_id', 'advisor', 'advisor_id', 'academic_year', 'is_active', 'department_id')
+        extra_kwargs = {
+            'section': {'required': False, 'allow_null': True},
+            'mixed_section': {'required': False, 'allow_null': True},
+            'advisor': {'required': False},
+        }
 
 
 class MixedSectionSerializer(serializers.ModelSerializer):

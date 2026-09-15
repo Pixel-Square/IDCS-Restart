@@ -805,35 +805,6 @@ export default function TeachingAssignmentsPage(){
       }
       return []
     }
-
-    // If in advisor/course assignment mode, only show subjects with actual teaching assignments for this section
-    if (showCourseAssignments) {
-      const sectionAssignments = assignments.filter(a => {
-        const aSectionId = Number(
-          a.section_details?.id || 
-          (a as any).section_details?.id || 
-          a.section || 
-          (a as any).section_id || 
-          0
-        );
-        return aSectionId === Number(section.id);
-      });
-      
-      // Get unique curriculum rows from assignments for this section
-      const curriculumRowIds = new Set<number>();
-      sectionAssignments.forEach(a => {
-        const id = Number(
-          a.curriculum_row_details?.id ||
-          (a.curriculum_row && typeof a.curriculum_row === 'object' ? a.curriculum_row.id : a.curriculum_row) ||
-          (a as any).curriculum_row_id ||
-          0
-        );
-        if (id > 0) curriculumRowIds.add(id);
-      });
-      
-      // Return only curriculum rows that have assignments
-      return curriculum.filter(c => curriculumRowIds.has(c.id));
-    }
     
     const sectionRows = sharedSectionCurriculum[section.id]
     if (sectionRows && sectionRows.length > 0) {

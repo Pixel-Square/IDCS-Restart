@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 
-from academics.models import Department, AcademicYear, Semester, Section, Subject, TeachingAssignment
+from academics.models import Department, AcademicYear, Semester, Section, Subject, TeachingAssignment, StudentProfile
 from OBE.models import (
     Cia1Mark, Cia2Mark, Ssa1Mark, Ssa2Mark, Formative1Mark, Formative2Mark,
     ModelExamMark, LabExamMark, FinalInternalMark
@@ -157,13 +157,25 @@ class AcademicVisualDynamicOptionsView(APIView):
         db_connected = False
 
         try:
-            # 1. Real Teaching Departments from Database
+            # 1. Real Teaching Departments from Database — restricted to
+            # departments that actually carry academic cohort/curriculum data
+            # (students via home_department or batch/course, sections, or
+            # CurriculumDepartment rows). This keeps phantom/role-like
+            # Department rows (e.g. an imported 'DB READER' Department with no
+            # students, sections, batches or curriculum) out of the option
+            # list — data-driven, never name-based.
+            from academic_v2.academic_performance_views import (
+                department_has_cohort, cohort_students_q, cohort_subjects,
+                resolve_department_id,
+            )
             dept_qs = Department.objects.filter(is_teaching=True).exclude(
                 code__in=['ATT', 'GEN', 'LAB', 'LIB', 'OFF', 'PED', 'TEST', 'RE']
             ).order_by('name')
-            
+
             seen_dept_codes = set()
             for d in dept_qs:
+                if not department_has_cohort(d):
+                    continue
                 code_str = str(d.code or '').strip()
                 name_str = str(d.name or '').strip()
                 short_name_str = str(d.short_name or '').strip()
@@ -273,6 +285,55 @@ class AcademicVisualDynamicOptionsView(APIView):
             sec_qs = list(Section.objects.values_list('name', flat=True).distinct())
             if sec_qs:
                 sections = sorted(list(set([str(sec).strip() for sec in sec_qs if str(sec).strip()])))
+
+            # 5. Dependent-filter context: when the caller passes year/sem/dept,
+            # sections/semesters/subjects are recalculated from the REAL student
+            # cohort (and the CurriculumDepartment curriculum) instead of the
+            # global lists above. Hierarchy: Academic Year → Semester →
+            # Department → Section → Subject.
+            ctx_year = (request.query_params.get('year') or '').strip()
+            ctx_sem_raw = (request.query_params.get('sem') or '').strip()
+            ctx_dept = (request.query_params.get('dept') or '').strip()
+            if ctx_year or ctx_sem_raw or ctx_dept:
+                ctx_sem = int(ctx_sem_raw) if ctx_sem_raw.isdigit() else None
+                cohort_q = cohort_students_q(year=ctx_year or None, sem_num=ctx_sem, dept_val=ctx_dept or None)
+                cohort_sp = StudentProfile.objects.filter(cohort_q)
+
+                sec_vals = sorted({
+                    str(v).strip() for v in cohort_sp.exclude(section__isnull=True)
+                    .values_list('section__name', flat=True) if str(v).strip()
+                })
+                if sec_vals:
+                    sections = sec_vals
+
+                sem_vals = sorted({
+                    int(v) for v in cohort_sp.exclude(section__semester__isnull=True)
+                    .values_list('section__semester__number', flat=True) if v
+                })
+                if sem_vals:
+                    semesters = sem_vals
+
+                dept_id = resolve_department_id(ctx_dept) if ctx_dept else None
+                student_ids = list(cohort_sp.values_list('id', flat=True)[:5000])
+                _cohort_subjects = cohort_subjects(dept_id=dept_id, sem_num=ctx_sem, student_ids=student_ids)
+                subj_rows = []
+                _seen = set()
+                for s in _cohort_subjects.order_by('code'):
+                    code_str2 = str(s.code or '').strip()
+                    name_str2 = str(s.name or '').strip()
+                    if not code_str2 or s.id in _seen:
+                        continue
+                    _seen.add(s.id)
+                    subj_rows.append({
+                        'id': str(s.id),
+                        'code': code_str2,
+                        'name': name_str2,
+                        'fullName': f"{name_str2} ({code_str2})" if name_str2 and name_str2 != code_str2 else code_str2,
+                        'semester': f"Semester {s.semester.number}" if s.semester else '',
+                        'semesterNum': s.semester.number if s.semester else None,
+                    })
+                if subj_rows:
+                    subjects = subj_rows
 
             db_connected = True
         except Exception as err:

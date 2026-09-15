@@ -49,6 +49,26 @@ def _hours_times_tick(hours: float, tick: Any):
     return hours
 
 
+import math
+
+
+def _calc_row_hours(po_list: list, pso_list: list):
+    total = 0.0
+    has_num = False
+    for v in list(po_list or []) + list(pso_list or []):
+        if v != "-" and v is not None and v != "":
+            try:
+                n = float(v)
+                if not math.isnan(n):
+                    total += n
+                    has_num = True
+            except Exception:
+                pass
+    if not has_num or total == 0:
+        return "-"
+    return int(total) if total.is_integer() else round(total, 2)
+
+
 def build_articulation_matrix_from_revision_rows(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Compute articulation matrix purely from saved CDAP revision rows.
 
@@ -163,8 +183,19 @@ def build_articulation_matrix_from_revision_rows(rows: List[Dict[str, Any]]) -> 
         serial_by_unit.setdefault(unit_idx_int, 0)
         serial_by_unit[unit_idx_int] += 1
 
-        po_vals = [_hours_times_tick(hours, r.get(f"po{i}")) for i in range(1, 12)]
-        pso_vals = [_hours_times_tick(hours, r.get(f"pso{i}")) for i in range(1, 4)]
+        is_special_row = bool(
+            _special_sort_key(_to_text(co_mapped)) > 0
+            or any(k in _to_text(co_mapped).lower() or k in topic_name.lower() for k in ["ssa", "active learning", "special"])
+        )
+
+        if is_special_row:
+            po_vals = ["-"] * 11
+            pso_vals = ["-"] * 3
+        else:
+            po_vals = [_hours_times_tick(hours, r.get(f"po{i}")) for i in range(1, 12)]
+            pso_vals = [_hours_times_tick(hours, r.get(f"pso{i}")) for i in range(1, 4)]
+
+        row_hrs = _calc_row_hours(po_vals, pso_vals)
 
         unit_rows.append(
             {
@@ -175,7 +206,7 @@ def build_articulation_matrix_from_revision_rows(rows: List[Dict[str, Any]]) -> 
                 "topic_name": topic_name,
                 "po": po_vals,
                 "pso": pso_vals,
-                "hours": int(hours) if float(hours).is_integer() else hours,
+                "hours": row_hrs,
                 "_sort": _special_sort_key(_to_text(co_mapped)),
             }
         )
@@ -186,12 +217,16 @@ def build_articulation_matrix_from_revision_rows(rows: List[Dict[str, Any]]) -> 
     for u in units_out:
         rows_list = u.get("rows") or []
         try:
-            u["rows"] = sorted(rows_list, key=lambda rr: (rr.get("_sort", 0), rr.get("s_no", 0)))
+            sorted_rows = sorted(rows_list, key=lambda rr: (rr.get("_sort", 0), rr.get("s_no", 0)))
         except Exception:
-            u["rows"] = rows_list
-        for rr in u["rows"]:
+            sorted_rows = rows_list
+
+        num_r = len(sorted_rows)
+        for idx, rr in enumerate(sorted_rows):
+            rr["hours"] = _calc_row_hours(rr.get("po", []), rr.get("pso", []))
             if "_sort" in rr:
                 rr.pop("_sort", None)
+        u["rows"] = sorted_rows
 
     return {
         "units": units_out,

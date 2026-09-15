@@ -1,9 +1,9 @@
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
-from academics.models import Section, AcademicYear, Semester
+from academics.models import Section, AcademicYear, Semester, StudentProfile, SystemTransitionLog
 
 class Command(BaseCommand):
-    help = 'Shift all sections to the next semester based on the currently active Academic Year'
+    help = 'Shift all sections to the next semester based on the currently active Academic Year and mark completed batches as ALUMNI'
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -31,9 +31,17 @@ class Command(BaseCommand):
 
         self.stdout.write(f'Using active Academic Year: {ay.name} ({ay.parity})')
 
+        try:
+            acad_start = int(str(ay.name).split('-')[0])
+        except Exception:
+            acad_start = None
+
+        parity_offset = 1 if (ay.parity or '').upper() == 'ODD' else 2
+
         sections = Section.objects.all().select_related('batch', 'semester')
         total = sections.count()
         updated = 0
+        graduated_students = 0
         skipped = 0
 
         self.stdout.write(f'Processing {total} sections...')
@@ -42,37 +50,43 @@ class Command(BaseCommand):
             for sec in sections:
                 old_sem = sec.semester.number if sec.semester else None
                 
-                # If force is true, we clear the semester so save() recalculates it
-                if force:
-                    sec.semester = None
-                
-                # Save triggers the auto-calculation in Section.save()
-                # but only if semester is None.
-                # If it's already set and not forced, it stays.
-                # Usually users want to MOVE everything, so force=True is likely what they mean by "shift".
-                
-                # Let's manually trigger the logic here if it's already set but we want to shift
-                if old_sem is not None and not force:
-                    # Logic in Section.save() is:
-                    # delta = acad_start - start_year
-                    # offset = 1 (ODD) or 2 (EVEN)
-                    # sem = delta * 2 + offset
-                    
-                    # If we don't force, we might skip sections that are already set.
-                    # But the user says "shift sem only", implying they want to MOVE them.
-                    pass
+                # Calculate natural semester number
+                start_year = getattr(sec.batch, 'start_year', None)
+                if start_year is None and sec.batch:
+                    try:
+                        start_year = int(str(sec.batch.name).split('-')[0])
+                    except Exception:
+                        start_year = None
 
-                # If the user wants to shift, they probably want to move from 1->2 or 2->3.
-                # The auto-calculation formula handles this perfectly based on the Active Academic Year.
-                
-                # So the workflow is:
-                # 1. Admin sets NEW Academic Year as active.
-                # 2. Admin runs this command.
-                
-                # We clear it to ensure recalculation
-                sec.semester = None
-                sec.save()
-                
+                if acad_start is not None and start_year is not None:
+                    delta = acad_start - int(start_year)
+                    raw_sem = delta * 2 + parity_offset
+
+                    if raw_sem > 8:
+                        # Completed all 8 semesters (Graduated)
+                        sem8, _ = Semester.objects.get_or_create(number=8)
+                        sec.semester = sem8
+                        sec.save()
+
+                        # Mark active students as ALUMNI
+                        if not dry_run:
+                            grad_count = StudentProfile.objects.filter(section=sec, status='ACTIVE').update(status='ALUMNI')
+                        else:
+                            grad_count = StudentProfile.objects.filter(section=sec, status='ACTIVE').count()
+                        graduated_students += grad_count
+                        if grad_count > 0:
+                            self.stdout.write(self.style.NOTICE(f'  {sec}: Graduated batch (> Sem 8) -> {grad_count} students marked ALUMNI'))
+                    elif raw_sem > 0:
+                        sem_obj, _ = Semester.objects.get_or_create(number=raw_sem)
+                        sec.semester = sem_obj
+                        sec.save()
+                    else:
+                        sec.semester = None
+                        sec.save()
+                else:
+                    sec.semester = None
+                    sec.save()
+
                 new_sem = sec.semester.number if sec.semester else None
                 
                 if old_sem != new_sem:
@@ -81,8 +95,16 @@ class Command(BaseCommand):
                 else:
                     skipped += 1
 
+            if not dry_run:
+                SystemTransitionLog.objects.create(
+                    academic_year=ay,
+                    performed_by=None,
+                    updated_count=updated,
+                    details=f"CLI shift_semester to {ay.name} ({ay.parity or 'ALL'}). Recalculated {total} sections ({updated} modified, {graduated_students} students marked ALUMNI)."
+                )
+
             if dry_run:
                 self.stdout.write(self.style.WARNING('Rolling back changes (dry run)'))
                 transaction.set_rollback(True)
 
-        self.stdout.write(self.style.SUCCESS(f'\nDone. Updated: {updated}  Skipped/Unchanged: {skipped}'))
+        self.stdout.write(self.style.SUCCESS(f'\nDone. Updated: {updated}  Graduated Students: {graduated_students}  Skipped/Unchanged: {skipped}'))

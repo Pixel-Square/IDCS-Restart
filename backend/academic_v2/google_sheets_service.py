@@ -205,6 +205,7 @@ def _load_service_account_credentials(config: dict[str, Any]) -> tuple[str | Non
 
 def _get_db_oauth_headers() -> dict[str, str] | None:
     from .models import AcV2GoogleSheetsOAuthCredential
+    import google.auth.exceptions
 
     credential = AcV2GoogleSheetsOAuthCredential.objects.filter(is_active=True).order_by('-updated_at').first()
     if not credential:
@@ -224,11 +225,18 @@ def _get_db_oauth_headers() -> dict[str, str] | None:
         scopes=scopes,
     )
 
-    if creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        credential.access_token = creds.token or credential.access_token or ''
-        credential.refresh_token = creds.refresh_token or credential.refresh_token or ''
-        credential.save(update_fields=['access_token', 'refresh_token', 'updated_at'])
+    if credential.refresh_token:
+        try:
+            creds.refresh(Request())
+            credential.access_token = creds.token or credential.access_token or ''
+            credential.refresh_token = creds.refresh_token or credential.refresh_token or ''
+            credential.save(update_fields=['access_token', 'refresh_token', 'updated_at'])
+        except google.auth.exceptions.RefreshError:
+            credential.is_active = False
+            credential.save(update_fields=['is_active'])
+            return None
+        except Exception:
+            pass
 
     if not creds.token:
         return None
@@ -292,6 +300,14 @@ def _safe_row_value(row: list[Any], index: int | None) -> Any:
 
 
 def _get_qp_specs_for_exam(exam_assignment) -> list[dict[str, Any]]:
+    try:
+        from .views import _get_qp_specs_for_exam as canonical_get_qp_specs
+        specs = canonical_get_qp_specs(exam_assignment)
+        if specs:
+            return specs
+    except Exception:
+        pass
+
     pattern = getattr(exam_assignment, 'qp_pattern', None) or {}
     if not isinstance(pattern, dict):
         return []
@@ -435,9 +451,15 @@ def sync_google_sheet_to_backend(
             column_index = _column_label_to_index(str(column_label or ''))
             if column_index is None:
                 continue
-            normalized_title = str(title or '').strip().lower()
-            if normalized_title:
-                title_to_column_index[normalized_title] = column_index
+            raw_title_str = str(title or '').strip()
+            if raw_title_str:
+                title_to_column_index[raw_title_str] = column_index
+                title_to_column_index[raw_title_str.lower()] = column_index
+                # Strip leading 'Q' or 'q' if present
+                stripped = raw_title_str.lstrip('Qq').strip()
+                if stripped:
+                    title_to_column_index[stripped] = column_index
+                    title_to_column_index[stripped.lower()] = column_index
 
     updated_count = 0
     for row in values[1:]:
@@ -454,8 +476,17 @@ def sync_google_sheet_to_backend(
 
         question_marks = {}
         for index, question in enumerate(questions):
-            question_title_key = str(question.get('title') or '').strip().lower()
-            mapped_col_index = title_to_column_index.get(question_title_key)
+            q_title = str(question.get('title') or '').strip()
+            q_id = str(question.get('id') or '').strip()
+            mapped_col_index = (
+                title_to_column_index.get(q_title)
+                or title_to_column_index.get(q_title.lower())
+                or title_to_column_index.get(q_id)
+                or title_to_column_index.get(q_id.lower())
+                or title_to_column_index.get(str(index + 1))
+                or title_to_column_index.get(f"Q{index + 1}")
+                or title_to_column_index.get(f"q{index + 1}")
+            )
             col_index = mapped_col_index if mapped_col_index is not None else (index + 2)
             raw_value = _safe_row_value(row, col_index)
             if raw_value in ('', None):
@@ -475,7 +506,7 @@ def sync_google_sheet_to_backend(
             student=student,
             defaults={
                 'reg_no': reg_no,
-                'student_name': student_name or student.student_name or student.user.get_full_name() if getattr(student, 'user', None) else '',
+                'student_name': student_name or getattr(student, 'student_name', '') or (student.user.get_full_name() if getattr(student, 'user', None) else ''),
                 'question_marks': question_marks,
                 'total_mark': total_value,
                 'is_absent': absent_value,
@@ -486,7 +517,38 @@ def sync_google_sheet_to_backend(
         mark_obj.calculate_co_marks(qp_pattern)
         mark_obj.calculate_total()
         mark_obj.save(update_fields=['reg_no', 'student_name', 'question_marks', 'total_mark', 'is_absent', 'is_exempted', 'co1_mark', 'co2_mark', 'co3_mark', 'co4_mark', 'co5_mark', 'co6_mark'])
+
+        # Also create/update AcV2DraftMark so draft mark entry views show the marks immediately
+        from .models import AcV2DraftMark
+        AcV2DraftMark.objects.update_or_create(
+            exam_assignment=exam_assignment,
+            student=student,
+            defaults={
+                'reg_no': reg_no,
+                'student_name': student_name or getattr(student, 'student_name', '') or (student.user.get_full_name() if getattr(student, 'user', None) else ''),
+                'question_marks': question_marks,
+                'total_mark': mark_obj.total_mark,
+                'is_absent': absent_value,
+                'is_exempted': False,
+            },
+        )
         updated_count += 1
+
+    if updated_count > 0:
+        draft_dict = exam_assignment.draft_data if isinstance(exam_assignment.draft_data, dict) else {}
+        marks_dict = draft_dict.setdefault('marks', {})
+        for dm in AcV2DraftMark.objects.filter(exam_assignment=exam_assignment):
+            total_m = float(dm.total_mark) if dm.total_mark is not None else None
+            q_m = {str(k): float(v) if v is not None else None for k, v in (dm.question_marks or {}).items()}
+            marks_dict[str(dm.student_id)] = {
+                'reg_no': dm.reg_no,
+                'name': dm.student_name,
+                'question_marks': q_m,
+                'mark': total_m,
+                'is_absent': dm.is_absent,
+            }
+        exam_assignment.draft_data = draft_dict
+        exam_assignment.save(update_fields=['draft_data', 'updated_at'])
 
     return {'spreadsheetId': spreadsheet_id, 'sheetName': sheet_title, 'updatedRows': updated_count}
 

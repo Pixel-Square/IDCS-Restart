@@ -9,12 +9,26 @@ class PeriodDefinitionSerializer(serializers.ModelSerializer):
         fields = ('id', 'template', 'index', 'start_time', 'end_time', 'is_break', 'is_lunch', 'label')
 
 
+from .models import TimetableConfigColumn, TimetableConfigRow
+
+class TimetableConfigColumnSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TimetableConfigColumn
+        fields = ('id', 'frontend_id', 'title', 'period', 'timing')
+
+class TimetableConfigRowSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TimetableConfigRow
+        fields = ('id', 'frontend_id', 'day')
+
 class TimetableTemplateSerializer(serializers.ModelSerializer):
     periods = PeriodDefinitionSerializer(many=True, read_only=True)
+    config_columns = TimetableConfigColumnSerializer(many=True, read_only=True)
+    config_rows = TimetableConfigRowSerializer(many=True, read_only=True)
 
     class Meta:
         model = TimetableTemplate
-        fields = ('id', 'name', 'description', 'created_by', 'is_public', 'is_active', 'parity', 'created_at', 'periods')
+        fields = ('id', 'name', 'description', 'created_by', 'is_public', 'is_active', 'parity', 'created_at', 'periods', 'config_columns', 'config_rows')
 
 
 def get_teaching_assignments_for_section_and_curriculum(section, curriculum_row):
@@ -594,3 +608,42 @@ class PeriodSwapRequestSerializer(serializers.ModelSerializer):
             return obj.to_period.label or f"Period {obj.to_period.index}"
         except:
             return 'Unknown'
+
+
+from .models import CreditAllocation, ClassTypeException, GroupAllocation, VenueExceptionRule, CourseExceptionRule, SpecialPeriodRule
+
+class CreditAllocationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CreditAllocation
+        fields = '__all__'
+
+
+class ClassTypeExceptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ClassTypeException
+        fields = '__all__'
+
+
+class GroupAllocationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GroupAllocation
+        fields = '__all__'
+
+
+class VenueExceptionRuleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VenueExceptionRule
+        fields = '__all__'
+
+
+class CourseExceptionRuleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CourseExceptionRule
+        fields = '__all__'
+
+
+class SpecialPeriodRuleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SpecialPeriodRule
+        fields = '__all__'
+

@@ -12,7 +12,12 @@ from academics.models import (
     StaffProfile, StudentMentorMap, SectionAdvisor, TeachingAssignment,
     DailyAttendanceRecord
 )
-from OBE.models import Cia1Mark, Cia2Mark, ModelExamMark
+from OBE.models import (
+    Cia1Mark, Cia2Mark, Ssa1Mark, Ssa2Mark,
+    Review1Mark, Review2Mark,
+    Formative1Mark, Formative2Mark,
+    ModelExamMark, LabExamMark, FinalInternalMark,
+)
 from accounts.models import User, Role, UserRole
 from .academic_visuals_views import load_dashboards_store, get_performance_level
 from .authorization import (
@@ -22,6 +27,7 @@ from .authorization import (
 )
 
 
+from .marks_helper import get_remark
 
 logger = logging.getLogger(__name__)
 
@@ -1175,69 +1181,6 @@ class StudentSearchView(APIView):
         return Response({"students": results}, status=status.HTTP_200_OK)
 
 
-class StudentProgressReportView(APIView):
-    permission_classes = [permissions.AllowAny]
-    def get(self, request, student_id):
-        student = StudentProfile.objects.filter(id=student_id).select_related("user", "home_department", "section").first()
-        if not student:
-            student = StudentProfile.objects.first()
-
-        cia1_marks = Cia1Mark.objects.filter(student=student).select_related("subject")
-        subject_results = []
-        for m in cia1_marks:
-            score = float(m.mark) * 2.0
-            subject_results.append({
-                "course_code": m.subject.code if m.subject else "SUB",
-                "course_name": m.subject.name if m.subject else "Subject",
-                "exam_name": "CIA 1",
-                "total_mark": score,
-                "max_mark": 100,
-                "is_pass": score >= 50.0,
-                "faculty": "Subject Faculty"
-            })
-
-        avg_p = round(sum(r["total_mark"] for r in subject_results) / max(1, len(subject_results)), 1)
-        pass_p = round((sum(1 for r in subject_results if r["is_pass"]) / max(1, len(subject_results))) * 100, 1)
-        # Real department label: home_department, else the section's batch/course
-        # department — never a hardcoded placeholder.
-        dept_lbl = (
-            student.home_department.short_name or student.home_department.name
-            if (student and student.home_department) else ""
-        )
-        if not dept_lbl and student and student.section:
-            _bd = (student.section.batch.course.department
-                   if (student.section.batch and student.section.batch.course) else None)
-            if _bd:
-                dept_lbl = _bd.short_name or _bd.name
-        _full_name = student.user.get_full_name() if student else ""
-        _sem_lbl = str(student.section.semester.number) if (student and student.section and student.section.semester) else "—"
-
-        return Response({
-            "student_info": {
-                "student_id": str(student.id if student else 1),
-                "reg_no": student.reg_no if student else "23CS001",
-                "name": _full_name or (student.user.username if student else "Student"),
-                "dept": dept_lbl or "—",
-                "section": student.section.name if (student and student.section) else "—",
-                "sem": _sem_lbl,
-                "photo": "",
-                "overall_score_pct": avg_p,
-                "pass_rate_pct": pass_p,
-                "total_exams": len(subject_results),
-                "passed_exams": sum(1 for r in subject_results if r["is_pass"]),
-                "status": "Above 58%" if avg_p > 58 else ("Equal to 58%" if avg_p == 58 else "Below 58%")
-            },
-            "subject_results": subject_results,
-            "growth_graph": [
-                {"semester": "Sem 1", "score_pct": max(0, avg_p - 4)},
-                {"semester": "Sem 2", "score_pct": max(0, avg_p - 2)},
-                {"semester": "Sem 3", "score_pct": min(100, avg_p + 1)},
-                {"semester": "Sem 4", "score_pct": max(0, avg_p - 1)},
-                {"semester": "Sem 5", "score_pct": avg_p},
-            ]
-        }, status=status.HTTP_200_OK)
-
-
 class StudentCompareView(APIView):
     permission_classes = [permissions.AllowAny]
     def post(self, request):
@@ -1469,7 +1412,7 @@ class FacultyWiseAnalyticsView(APIView):
                         "batch": s_obj.batch or "—",
                         "subjects": subj_codes,
                         "avg_marks_pct": round(sm / cnt, 1) if cnt else None,
-                        "result": "Pass" if cnt and ps == cnt else ("Fail" if cnt else None),
+                        "result": get_remark(round(sm / cnt, 1)) if cnt else "—",
                         "total_records": cnt,
                     })
 
@@ -2025,93 +1968,45 @@ class StudentCurriculumMarksView(APIView):
 
 
 class StudentAnalysisChartsView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, student_id=None):
         if not student_id:
-            student_id = request.query_params.get("student_id") or request.query_params.get("id")
-
-        exam_type = request.query_params.get("exam", "CIA 1").strip()
-        subject_filter = request.query_params.get("subject", "").strip()
-
-        student = None
-        if student_id:
-            student = StudentProfile.objects.filter(
-                Q(id=student_id if str(student_id).isdigit() else None) |
-                Q(reg_no__iexact=str(student_id))
-            ).select_related("user", "home_department", "section", "section__batch", "section__semester").first()
-
+            return Response({"detail": "student_id parameter is required"}, status=status.HTTP_404_NOT_FOUND)
+        student = StudentProfile.objects.filter(
+            Q(id=student_id) if str(student_id).isdigit() else Q(reg_no__iexact=str(student_id))
+        ).select_related("user", "home_department", "section", "section__batch", "section__semester").first()
         if not student:
-            student = StudentProfile.objects.select_related("user", "home_department", "section", "section__batch", "section__semester").first()
+            return Response({"detail": "Student not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        if not student:
-            return Response({
-                "student_name": "N/A",
-                "reg_no": "N/A",
-                "department": "N/A",
-                "section": "N/A",
-                "semester": "N/A",
-                "academic_year": "N/A",
-                "avg_pct": 0,
-                "pass_pct": 0,
-                "marks_data": [],
-                "attendance_series": []
-            }, status=status.HTTP_200_OK)
-
-        # Enforce authorization scope
         scope = get_performance_scope(request.user)
         try:
             assert_student_in_scope(scope, student)
         except PermissionDenied:
             return Response({"detail": "Requested student is outside your authorized scope."}, status=status.HTTP_403_FORBIDDEN)
 
-        exam = exam_type.upper().strip()
-        marks_data = []
+        exam_type = (request.query_params.get("exam", "CIA 1") or "CIA 1").strip()
+        subject_filter = (request.query_params.get("subject", "") or "").strip()
 
-        if "SEMESTER" in exam:
-            from COE.models import CoeFinalResult
-            reg_no = student.reg_no
-            if reg_no:
-                for c in CoeFinalResult.objects.filter(reg_no=reg_no).select_related("subject"):
-                    code = c.course_code or (c.subject.code if c.subject else "")
-                    name = c.subject.name if c.subject else c.course_code
-                    total = float(c.total_marks or 0.0)
-                    marks_data.append({
-                        "subject_code": code,
-                        "subject_name": name,
-                        "score": total,
-                        "result": "Pass" if total >= 50.0 else "Fail"
-                    })
-        else:
-            all_models = [
-                Cia1Mark, Cia2Mark, Ssa1Mark, Ssa2Mark, Review1Mark, Review2Mark,
-                Formative1Mark, Formative2Mark, ModelExamMark, LabExamMark, FinalInternalMark
-            ]
-            MarkModel = Cia1Mark
-            if "CIA 2" in exam: MarkModel = Cia2Mark
-            elif "SSA 1" in exam: MarkModel = Ssa1Mark
-            elif "SSA 2" in exam: MarkModel = Ssa2Mark
-            elif "REVIEW 2" in exam: MarkModel = Review2Mark
-            elif "REVIEW" in exam: MarkModel = Review1Mark
-            elif "FORMATIVE 2" in exam: MarkModel = Formative2Mark
-            elif "FORMATIVE" in exam: MarkModel = Formative1Mark
-            elif "MODEL" in exam: MarkModel = ModelExamMark
-            elif "LAB" in exam: MarkModel = LabExamMark
-            elif "FINAL INTERNAL" in exam: MarkModel = FinalInternalMark
+        from .marks_helper import get_student_marks_data
+        marks_data = get_student_marks_data(student, exam_type, subject_filter)
 
-            subj_q = MarkModel.objects.filter(student=student).select_related("subject")
-            if subject_filter:
-                subj_q = subj_q.filter(Q(subject__code__iexact=subject_filter) | Q(subject_id=subject_filter if subject_filter.isdigit() else None))
-            for m in subj_q:
-                code = m.subject.code if m.subject else ""
-                name = m.subject.name if m.subject else ""
-                val = float(getattr(m, 'total_mark', getattr(m, 'mark', 0.0)) or 0.0)
-                marks_data.append({
-                    "subject_code": code,
-                    "subject_name": name,
-                    "score": val,
-                    "result": "Pass" if val >= 50.0 else "Fail"
+        attendance_series = []
+        try:
+            att_qs = DailyAttendanceRecord.objects.filter(student=student).order_by("id")[:60]
+            for rec in att_qs:
+                d = getattr(rec, "date", None) or getattr(rec, "session_date", None) or getattr(rec, "created_at", None)
+                try:
+                    d_iso = d.isoformat() if hasattr(d, "isoformat") else str(d or "")
+                except Exception:
+                    d_iso = ""
+                st = str(getattr(rec, "status", "") or "").upper()
+                attendance_series.append({
+                    "date": d_iso,
+                    "present": st in ("P", "PRESENT", "OD", "ON_DUTY"),
                 })
+        except Exception:
+            attendance_series = []
 
         dept_lbl = student.home_department.short_name if student.home_department else (
             student.section.batch.course.department.short_name if (student.section and student.section.batch and student.section.batch.course and student.section.batch.course.department) else "ENG"
@@ -2120,9 +2015,9 @@ class StudentAnalysisChartsView(APIView):
         sem_lbl = str(student.section.semester.number) if (student.section and student.section.semester) else "1"
         ay_lbl = student.batch or (student.section.batch.name if (student.section and student.section.batch) else "")
 
-        _scores = [m["score"] for m in marks_data if isinstance(m.get("score"), (int, float))]
-        avg_pct = round(sum(_scores) / len(_scores), 1) if _scores else 0.0
-        pass_pct = round((sum(1 for s in _scores if float(s) >= 50.0) / len(_scores)) * 100.0, 1) if _scores else 0.0
+        _score_pcts = [m["score_pct"] for m in marks_data if isinstance(m.get("score_pct"), (int, float))]
+        avg_pct = round(sum(_score_pcts) / len(_score_pcts), 1) if _score_pcts else 0.0
+        pass_pct = round((sum(1 for s in _score_pcts if float(s) >= 50.0) / len(_score_pcts)) * 100.0, 1) if _score_pcts else 0.0
 
         return Response({
             "student_name": student.user.get_full_name() or student.user.username,
@@ -2134,162 +2029,15 @@ class StudentAnalysisChartsView(APIView):
             "avg_pct": avg_pct,
             "pass_pct": pass_pct,
             "marks_data": marks_data,
-            "attendance_series": []
-        }, status=status.HTTP_200_OK)
-            
-        exam_type = request.query_params.get("exam", "CIA 1").strip()
-        subject_filter = request.query_params.get("subject", "").strip()
-        
-        student = None
-        if student_id:
-            student = StudentProfile.objects.filter(
-                Q(id=student_id if str(student_id).isdigit() else None) |
-                Q(reg_no__iexact=str(student_id))
-            ).select_related("user", "home_department", "section", "section__batch", "section__semester").first()
-            
-        if not student:
-            student = StudentProfile.objects.select_related("user", "home_department", "section", "section__batch", "section__semester").first()
-            
-        if not student:
-            return Response({
-                "student_name": "N/A",
-                "reg_no": "N/A",
-                "department": "N/A",
-                "section": "N/A",
-                "semester": "N/A",
-                "academic_year": "N/A",
-                "marks_data": [],
-                "attendance_series": []
-            }, status=status.HTTP_200_OK)
-            
-        # Authorization: ensure the student is within the user's authorized scope
-        auth_ctx = get_performance_scope(request.user)
-        assert_student_in_scope(auth_ctx, student)
-        
-        from OBE.models import (
-            Cia1Mark, Cia2Mark, Ssa1Mark, Ssa2Mark, Review1Mark, Review2Mark,
-            Formative1Mark, Formative2Mark, ModelExamMark, LabExamMark, FinalInternalMark
-        )
-        exam = exam_type.upper().strip()
-        marks_data = []
-
-        if "SEMESTER" in exam:
-            from COE.models import CoeFinalResult
-            coe_qs = CoeFinalResult.objects.filter(reg_no=student.reg_no)
-            if subject_filter:
-                coe_qs = coe_qs.filter(
-                    Q(course_code__iexact=subject_filter) |
-                    Q(course_name__icontains=subject_filter)
-                )
-            for c in coe_qs:
-                marks_data.append({
-                    "subject_code": c.course_code or "SUB",
-                    "subject_name": c.course_name or c.course_code or "Subject",
-                    "score": float(c.total_marks or 0.0)
-                })
-        elif not exam or exam in ["ALL", "ALL ASSESSMENTS"]:
-            all_models = [
-                Cia1Mark, Cia2Mark, Ssa1Mark, Ssa2Mark, Review1Mark, Review2Mark,
-                Formative1Mark, Formative2Mark, ModelExamMark, LabExamMark, FinalInternalMark
-            ]
-            temp_acc = {}
-            for M in all_models:
-                m_qs = M.objects.filter(student=student).select_related("subject")
-                if subject_filter:
-                    m_qs = m_qs.filter(
-                        Q(subject_id=subject_filter if subject_filter.isdigit() else None) |
-                        Q(subject__code__iexact=subject_filter) |
-                        Q(subject__name__icontains=subject_filter)
-                    )
-                for m in m_qs:
-                    if m.subject:
-                        code = m.subject.code
-                        name = m.subject.name
-                        val = getattr(m, 'mark', None)
-                        if val is None:
-                            val = getattr(m, 'total_mark', 0.0)
-                        if val is not None:
-                            if code not in temp_acc:
-                                temp_acc[code] = {"name": name, "scores": []}
-                            temp_acc[code]["scores"].append(float(val))
-            for code, data in temp_acc.items():
-                if data["scores"]:
-                    avg_score = round(sum(data["scores"]) / len(data["scores"]), 1)
-                    marks_data.append({
-                        "subject_code": code,
-                        "subject_name": data["name"],
-                        "score": avg_score
-                    })
-        else:
-            MarkModel = Cia1Mark
-            if "CIA 2" in exam: MarkModel = Cia2Mark
-            elif "SSA 1" in exam or "SSAS" in exam: MarkModel = Ssa1Mark
-            elif "SSA 2" in exam: MarkModel = Ssa2Mark
-            elif "REVIEW 2" in exam: MarkModel = Review2Mark
-            elif "REVIEW 1" in exam or "REVIEW" in exam: MarkModel = Review1Mark
-            elif "FA 2" in exam or "FORMATIVE 2" in exam: MarkModel = Formative2Mark
-            elif "FA 1" in exam or "FORMATIVE 1" in exam: MarkModel = Formative1Mark
-            elif "MODEL" in exam: MarkModel = ModelExamMark
-            elif "LAB" in exam: MarkModel = LabExamMark
-            elif "FINAL INTERNAL" in exam or "INTERNAL" in exam: MarkModel = FinalInternalMark
-            
-            marks_qs = MarkModel.objects.filter(student=student).select_related("subject")
-            if subject_filter:
-                marks_qs = marks_qs.filter(
-                    Q(subject_id=subject_filter if subject_filter.isdigit() else None) |
-                    Q(subject__code__iexact=subject_filter) |
-                    Q(subject__name__icontains=subject_filter)
-                )
-                
-            for m in marks_qs:
-                if m.subject:
-                    val = getattr(m, 'mark', None)
-                    if val is None:
-                        val = getattr(m, 'total_mark', 0.0)
-                    marks_data.append({
-                        "subject_code": m.subject.code,
-                        "subject_name": m.subject.name,
-                        "score": float(val) if val is not None else 0.0
-                    })
-                
-        dept_lbl = student.home_department.short_name if student.home_department else (
-            student.section.batch.course.department.short_name if (student.section and student.section.batch and student.section.batch.course and student.section.batch.course.department) else "ENG"
-        )
-        sec_lbl = student.section.name if student.section else "A"
-        sem_lbl = str(student.section.semester.number) if (student.section and student.section.semester) else "1"
-        ay_lbl = student.batch or (student.section.batch.name if (student.section and student.section.batch) else "")
-
-        # Metrics + per-subject Result use the application's existing rule
-        # (same as StudentProgressReportView): score >= 50 of 100 → Pass.
-        _scores = [m["score"] for m in marks_data if isinstance(m.get("score"), (int, float))]
-        avg_pct = round(sum(_scores) / len(_scores), 1) if _scores else 0.0
-        pass_pct = round(
-            (sum(1 for s in _scores if float(s) >= 50.0) / len(_scores)) * 100.0, 1
-        ) if _scores else 0.0
-        for m in marks_data:
-            if isinstance(m.get("score"), (int, float)):
-                m["result"] = "Pass" if float(m["score"]) >= 50.0 else "Fail"
-
-        return Response({
-            "student_name": student.user.get_full_name() or student.user.username,
-            "reg_no": student.reg_no,
-            "department": dept_lbl,
-            "section": sec_lbl,
-            "semester": sem_lbl,
-            "academic_year": ay_lbl,
-            "avg_pct": avg_pct,
-            "pass_pct": pass_pct,
-            "marks_data": marks_data,
-            "attendance_series": []
+            "attendance_series": attendance_series
         }, status=status.HTTP_200_OK)
 
 class StudentReportPDFView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, student_id=None):
-        """Generate a one‑page PDF report for a student.
-        The view mirrors the data returned by `StudentProgressReportView`
-        but renders it as a nicely formatted PDF using ReportLab.
+        """Generate a one-page PDF report for a student.
+        Uses the shared marks_helper for normalized percentage and remarks.
         """
         # Resolve student identifier strictly; return 404 if missing or invalid
         if not student_id:
@@ -2307,104 +2055,113 @@ class StudentReportPDFView(APIView):
             return Response({"detail": "Requested student is outside your authorized scope."}, status=status.HTTP_403_FORBIDDEN)
 
         # Determine exam type and subject filter
-        exam_type = request.query_params.get('exam', 'CIA 1').strip().upper()
+        exam_type = request.query_params.get('exam', 'CIA 1').strip()
         subject_filter = request.query_params.get('subject', '').strip()
-        marks_data = []
-        # Handle semester‑exam (COE final result) separately
-        if "SEMESTER" in exam_type:
-            from COE.models import CoeFinalResult
-            coe_qs = CoeFinalResult.objects.filter(reg_no=student.reg_no)
-            if subject_filter:
-                coe_qs = coe_qs.filter(Q(course_code__iexact=subject_filter) | Q(course_name__icontains=subject_filter))
-            for c in coe_qs:
-                score = float(c.total_marks or 0.0)
-                marks_data.append({
-                    "subject_code": c.course_code or "SUB",
-                    "subject_name": c.course_name or c.course_code or "Subject",
-                    "score": score,
-                    "result": "Pass" if score >= 50.0 else "Fail",
-                })
-        else:
-            # Resolve the appropriate mark model
-            MarkModel = Cia1Mark
-            if "CIA 2" in exam_type:
-                MarkModel = Cia2Mark
-            elif "SSA 1" in exam_type:
-                MarkModel = Ssa1Mark
-            elif "SSA 2" in exam_type:
-                MarkModel = Ssa2Mark
-            elif "REVIEW 2" in exam_type:
-                MarkModel = Review2Mark
-            elif "REVIEW" in exam_type:
-                MarkModel = Review1Mark
-            elif "FORMATIVE 2" in exam_type:
-                MarkModel = Formative2Mark
-            elif "FORMATIVE" in exam_type:
-                MarkModel = Formative1Mark
-            elif "MODEL" in exam_type:
-                MarkModel = ModelExamMark
-            elif "LAB" in exam_type:
-                MarkModel = LabExamMark
-            elif "FINAL INTERNAL" in exam_type or "INTERNAL" in exam_type:
-                MarkModel = FinalInternalMark
-            qs = MarkModel.objects.filter(student=student).select_related('subject')
-            if subject_filter:
-                qs = qs.filter(
-                    Q(subject_id=subject_filter if subject_filter.isdigit() else None) |
-                    Q(subject__code__iexact=subject_filter) |
-                    Q(subject__name__icontains=subject_filter)
-                )
-            for m in qs:
-                if not m.subject:
-                    continue
-                val = getattr(m, 'mark', None)
-                if val is None:
-                    val = getattr(m, 'total_mark', 0.0)
-                score = float(val) if val is not None else 0.0
-                marks_data.append({
-                    "subject_code": m.subject.code,
-                    "subject_name": m.subject.name,
-                    "score": score,
-                    "result": "Pass" if score >= 50.0 else "Fail",
-                })
+        from .marks_helper import get_student_marks_data
+        marks_data = get_student_marks_data(student, exam_type, subject_filter)
+
         # Generate PDF with ReportLab
         try:
             from reportlab.lib.pagesizes import A4
-            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.lib.units import mm
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
             from reportlab.lib import colors
             from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.enums import TA_CENTER, TA_LEFT
             from django.http import HttpResponse
-            import io
+            import io, os
         except ImportError:
             return Response({"detail": "reportlab not installed"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        doc = SimpleDocTemplate(
+            buffer, pagesize=A4,
+            leftMargin=20*mm, rightMargin=20*mm,
+            topMargin=15*mm, bottomMargin=15*mm,
+        )
         elements = []
         styles = getSampleStyleSheet()
-        title_style = ParagraphStyle('TitleStyle', parent=styles['Title'], alignment=0, textColor=colors.HexColor('#4F46E5'))
-        elements.append(Paragraph('Student Performance Report', title_style))
-        elements.append(Spacer(1, 12))
-        subtitle = f"{student.user.get_full_name() or student.user.username} | Reg No: {student.reg_no or '—'}"
-        elements.append(Paragraph(subtitle, styles['Normal']))
-        elements.append(Spacer(1, 12))
-        # Table header
-        table_data = [['Subject Code', 'Subject Name', 'Score', 'Result']]
+        primary_color = colors.HexColor('#4F46E5')
+
+        # --- Try to include project logo ---
+        logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'frontend', 'public', 'logo.png')
+        if not os.path.exists(logo_path):
+            logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'images', 'logo.png')
+        if os.path.exists(logo_path):
+            try:
+                img = Image(logo_path, width=40, height=40)
+                elements.append(img)
+                elements.append(Spacer(1, 6))
+            except Exception:
+                pass
+
+        # --- Title ---
+        title_style = ParagraphStyle('PDFTitle', parent=styles['Title'], fontSize=16, alignment=TA_CENTER, textColor=primary_color, spaceAfter=4)
+        elements.append(Paragraph('IDCS &ndash; Academic Performance', title_style))
+        subtitle_style = ParagraphStyle('PDFSubtitle', parent=styles['Normal'], fontSize=10, alignment=TA_CENTER, textColor=colors.grey, spaceAfter=12)
+        elements.append(Paragraph('Individual Student Analysis Report', subtitle_style))
+        elements.append(Spacer(1, 8))
+
+        # --- Student Details ---
+        dept_lbl = student.home_department.short_name if student.home_department else 'N/A'
+        sec_lbl = student.section.name if student.section else 'N/A'
+        sem_lbl = str(student.section.semester.number) if (student.section and student.section.semester) else 'N/A'
+        ay_lbl = student.batch or (student.section.batch.name if (student.section and student.section.batch) else 'N/A')
+        info_style = ParagraphStyle('StudentInfo', parent=styles['Normal'], fontSize=10, spaceAfter=2)
+        info_bold = ParagraphStyle('StudentInfoBold', parent=styles['Normal'], fontSize=10, spaceAfter=2)
+        full_name = student.user.get_full_name() or student.user.username
+        reg_no = student.reg_no or str(student.id)
+
+        info_data = [
+            ['Student Name:', full_name, 'Register No:', reg_no],
+            ['Department:', dept_lbl, 'Section:', sec_lbl],
+            ['Semester:', sem_lbl, 'Academic Year:', ay_lbl],
+            ['Assessment:', exam_type or 'CIA 1', '', ''],
+        ]
+        info_tbl = Table(info_data, colWidths=[85, 160, 85, 160])
+        info_tbl.setStyle(TableStyle([
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.grey),
+            ('TEXTCOLOR', (2, 0), (2, -1), colors.grey),
+            ('FONTNAME', (1, 0), (1, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (3, 0), (3, -1), 'Helvetica-Bold'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        elements.append(info_tbl)
+        elements.append(Spacer(1, 14))
+
+        # --- Subject Performance Table ---
+        section_title = ParagraphStyle('SectionTitle', parent=styles['Heading3'], fontSize=11, textColor=primary_color, spaceAfter=6)
+        elements.append(Paragraph('Subject Performance Details', section_title))
+
+        table_data = [['Subject Code', 'Subject Name', 'Marks', 'Remarks']]
         for md in marks_data:
             table_data.append([
                 md.get('subject_code', ''),
-                md.get('subject_name', ''),
+                Paragraph(md.get('subject_name', ''), ParagraphStyle('CellWrap', fontSize=8, leading=10)),
                 f"{md.get('score', 0):.1f}",
-                md.get('result', '')
+                md.get('remark', '\u2014'),
             ])
-        tbl = Table(table_data, colWidths=[80, 200, 60, 60])
-        tbl.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4F46E5')),
+
+        tbl = Table(table_data, colWidths=[75, 190, 50, 155])
+        style_cmds = [
+            ('BACKGROUND', (0, 0), (-1, 0), primary_color),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('FONTSIZE', (0, 0), (-1, -1), 9),
-        ]))
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('ALIGN', (2, 0), (2, -1), 'CENTER'),
+            ('ALIGN', (3, 0), (3, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ]
+        tbl.setStyle(TableStyle(style_cmds))
         elements.append(tbl)
+
         doc.build(elements)
         buffer.seek(0)
         response = HttpResponse(buffer.getvalue(), content_type='application/pdf')

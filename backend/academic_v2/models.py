@@ -271,6 +271,45 @@ class AcV2SemesterGroupMembership(models.Model):
 
 
 # ============================================================================
+# VERSION CONFIGURATION (Academic 2.1 Admin / Controller Versioning)
+# ============================================================================
+
+class AcV2Version(models.Model):
+    """
+    Version configuration for Academic 2.1 Admin / Academic Controller.
+    Groups class types, QP patterns, cycles, and configs mapped to one or more academic years.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=64, unique=True)  # e.g. "SEPT2026"
+    description = models.TextField(blank=True)
+    academic_years = models.ManyToManyField(
+        'academics.AcademicYear',
+        related_name='acv2_versions',
+        blank=True
+    )
+    is_active = models.BooleanField(default=True)
+    is_default = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='acv2_versions_created'
+    )
+
+    class Meta:
+        db_table = 'acv2_version'
+        verbose_name = 'Academic 2.1 Version'
+        verbose_name_plural = 'Academic 2.1 Versions'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.name
+
+
+# ============================================================================
 # CLASS TYPE CONFIGURATION (Replaces hardcoded class types)
 # ============================================================================
 
@@ -281,6 +320,15 @@ class AcV2ClassType(models.Model):
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
+    # Version scope
+    version = models.ForeignKey(
+        AcV2Version,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='class_types'
+    )
+
     # Basic info
     name = models.CharField(max_length=50)  # e.g., "THEORY", "TCPR", "LAB"
     short_code = models.CharField(max_length=10)  # e.g., "TH", "TC", "LB"
@@ -335,14 +383,14 @@ class AcV2ClassType(models.Model):
         verbose_name_plural = 'Class Types'
         constraints = [
             UniqueConstraint(
-                fields=['name', 'college'],
+                fields=['name', 'version', 'college'],
                 condition=Q(college__isnull=False),
-                name='unique_acv2_class_type_per_college'
+                name='unique_acv2_class_type_per_college_version'
             ),
             UniqueConstraint(
-                fields=['name'],
+                fields=['name', 'version'],
                 condition=Q(college__isnull=True),
-                name='unique_acv2_class_type_global'
+                name='unique_acv2_class_type_version'
             ),
         ]
 
@@ -383,6 +431,15 @@ class AcV2QpPattern(models.Model):
     Acts as a reusable exam template that can be assigned to class types.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Version scope
+    version = models.ForeignKey(
+        AcV2Version,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='qp_patterns'
+    )
 
     # Human-readable name for this exam template (e.g. "CAT 1 Theory", "Model Exam Lab")
     name = models.CharField(max_length=100, blank=True)
@@ -1372,6 +1429,15 @@ class AcV2QpType(models.Model):
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     
+    # Version scope
+    version = models.ForeignKey(
+        AcV2Version,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='qp_types'
+    )
+    
     # Type name (e.g., "SSA-1", "CIA-1", "MODEL EXAM", "LAB EXAM")
     name = models.CharField(max_length=100, unique=True, db_index=True)
     
@@ -1736,6 +1802,16 @@ class AcV2Cycle(models.Model):
     Used to associate exam templates with a specific academic cycle.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Version scope
+    version = models.ForeignKey(
+        AcV2Version,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='cycles'
+    )
+
     name = models.CharField(max_length=100)
     code = models.CharField(max_length=30, unique=True, db_index=True)
     description = models.TextField(blank=True)
@@ -2641,3 +2717,156 @@ class AcV2PublishSetting(models.Model):
 
     def __str__(self):
         return f"PublishSetting(must_fill={self.must_fill_all_cells}, duration={self.publish_progress_duration}s)"
+
+
+# ============================================================================
+# SSA ONLINE ASSIGNMENT MODELS
+# ============================================================================
+
+class AcV2SSAAssignment(models.Model):
+    """
+    SSA Assignment configuration created by faculty for SSA1 or SSA2.
+    Links 1:1 to an existing AcV2ExamAssignment to reuse the marks infrastructure.
+    Faculty uploads rubrics, first-page template, and student topic.
+    """
+    SSA_TYPE_CHOICES = [
+        ('SSA1', 'SSA 1'),
+        ('SSA2', 'SSA 2'),
+    ]
+
+    STATUS_CHOICES = [
+        ('DRAFT', 'Draft'),
+        ('FINALIZED', 'Finalized'),
+        ('CLOSED', 'Closed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # 1:1 link to the existing exam assignment (SSA1 or SSA2)
+    exam_assignment = models.OneToOneField(
+        AcV2ExamAssignment,
+        on_delete=models.CASCADE,
+        related_name='ssa_assignment',
+    )
+
+    # Denormalized for quick filtering/display
+    assignment_type = models.CharField(max_length=10, choices=SSA_TYPE_CHOICES)
+
+    # Faculty-uploaded documents
+    rubric_file = models.FileField(upload_to='ssa_assignments/rubrics/', blank=True)
+    first_page_file = models.FileField(upload_to='ssa_assignments/first_pages/', blank=True)
+    student_topic_file = models.FileField(upload_to='ssa_assignments/topics/', blank=True)
+
+    # Status
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
+    finalized_at = models.DateTimeField(null=True, blank=True)
+    finalized_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='ssa_assignments_finalized',
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_ssa_assignment'
+        verbose_name = 'SSA Assignment'
+        verbose_name_plural = 'SSA Assignments'
+        constraints = [
+            UniqueConstraint(
+                fields=['exam_assignment'],
+                name='unique_ssa_assignment_per_exam',
+            ),
+        ]
+
+    def __str__(self):
+        return f"SSA Assignment: {self.assignment_type} - {self.exam_assignment}"
+
+
+class AcV2SSASubmission(models.Model):
+    """
+    Student submission for an SSA assignment.
+    Tracks the uploaded PDF, auto-generated submission with cover page,
+    evaluation status, and marks (denormalized; authoritative marks are
+    in AcV2DraftMark / AcV2StudentMark via the exam assignment).
+    """
+    SUBMISSION_STATUS_CHOICES = [
+        ('NOT_SUBMITTED', 'Not Submitted'),
+        ('SUBMITTED', 'Submitted'),
+        ('UNDER_EVALUATION', 'Under Evaluation'),
+        ('EVALUATED', 'Evaluated'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    ssa_assignment = models.ForeignKey(
+        AcV2SSAAssignment,
+        on_delete=models.CASCADE,
+        related_name='submissions',
+    )
+
+    student = models.ForeignKey(
+        'academics.StudentProfile',
+        on_delete=models.CASCADE,
+        related_name='ssa_submissions',
+    )
+
+    # Denormalized student info
+    reg_no = models.CharField(max_length=64)
+    student_name = models.CharField(max_length=255)
+
+    # Student's uploaded assignment PDF
+    submitted_file = models.FileField(
+        upload_to='ssa_submissions/originals/',
+        blank=True,
+    )
+
+    # Auto-generated PDF with cover page + student's PDF
+    generated_file = models.FileField(
+        upload_to='ssa_submissions/generated/',
+        blank=True,
+    )
+
+    # Submission status
+    submission_status = models.CharField(
+        max_length=20,
+        choices=SUBMISSION_STATUS_CHOICES,
+        default='NOT_SUBMITTED',
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+
+    # Evaluation (denormalized cache — authoritative marks in AcV2DraftMark/AcV2StudentMark)
+    marks = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    feedback = models.TextField(blank=True)
+    evaluated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='ssa_evaluations',
+    )
+    evaluated_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_ssa_submission'
+        verbose_name = 'SSA Submission'
+        verbose_name_plural = 'SSA Submissions'
+        constraints = [
+            UniqueConstraint(
+                fields=['ssa_assignment', 'student'],
+                name='unique_ssa_submission_per_student',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['ssa_assignment', 'submission_status']),
+            models.Index(fields=['student']),
+        ]
+
+    def __str__(self):
+        return f"SSA Submission: {self.reg_no} - {self.ssa_assignment.assignment_type}"

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, Fingerprint, BarChart3, Link2, PieChart, TrendingUp, Eye } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, Fingerprint, BarChart3, Link2, PieChart, TrendingUp, Eye, QrCode, ShieldAlert, Settings2, RefreshCw } from 'lucide-react';
 
 import { useSidebar } from './SidebarContext';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
@@ -11,6 +11,7 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
 
   const ICON_MAP: Record<string, any> = {
   profile: User,
+  system_transitions: RefreshCw,
   queries: MessageSquare,
   curriculum_master: BookOpen,
   assigned_subjects: BookOpen,
@@ -92,6 +93,12 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   // BioSecure
   biosecure_admin: Shield,
   biosecure_logs: ClipboardList,
+  // Discipline Committee
+  dc_admin: ShieldAlert,
+  discipline_admin_barcodes: QrCode,
+  discipline_admin_config: Settings2,
+  discipline_admin_logs: ClipboardList,
+  discipline_staff_portal: ShieldAlert,
 };
 
 export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: string; user?: any }) {
@@ -384,9 +391,14 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
     items.push({ key: 'pbas_approvals', label: 'PBAS Approvals', to: '/pbas/approvals' });
   }
 
-  // PBAS submission for staff and students
+  // PBAS / Credits submission for staff and students
   if ((flags.is_staff || flags.is_student || rolesUpper.includes('STAFF') || rolesUpper.includes('STUDENT')) && !items.some((item) => item.key === 'pbas_submission')) {
-    items.push({ key: 'pbas_submission', label: 'PBAS Submission', to: '/pbas/staff' });
+    const isStudentUser = Boolean(flags.is_student || rolesUpper.includes('STUDENT'));
+    items.push({
+      key: 'pbas_submission',
+      label: isStudentUser ? 'Credits' : 'PBAS Submission',
+      to: '/pbas/staff'
+    });
   }
 
   // Curriculum master/department: require explicit curriculum permissions if present, otherwise rely on entry point
@@ -568,12 +580,22 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
     items.push({ key: 'academic', label: 'Academic', to: '/academic' });
   }
 
+  // Academic Performance (accessible to all logged in users)
+  if (!items.some((item) => item.key === 'academic_performance')) {
+    items.push({ key: 'academic_performance', label: 'Academic Performance', to: '/academic-performance' });
+  }
+
   // Academic 2.1 Admin for IQAC - collapsible group
   if (isIqac && !items.some(item => item.key === 'academic_v2_admin')) {
     items.push({ key: 'academic_v2_admin', label: 'Academic 2.1 Admin', to: '/academic-v2/admin' });
   }
   if (isIqac && !items.some((item) => item.key === 'academic_controller')) {
     items.push({ key: 'academic_controller', label: 'Academic Controller', to: '/iqac/academic-controller' });
+  }
+
+  // System Transitions (Semester Shift & Academic Year Transitions)
+  if ((isIqac || rolesUpper.includes('ADMIN')) && !items.some((item) => item.key === 'system_transitions')) {
+    items.push({ key: 'system_transitions', label: 'System Transitions', to: '/iqac/system-transitions' });
   }
   // PBAS Manager intentionally hidden from sidebar for all users
   
@@ -635,6 +657,41 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
     }
   }
 
+  // Discipline Committee Management - DC ADMIN
+  const canAccessDisciplineAdmin =
+    rolesUpper.includes('DISCIPLINE_COMMITTEE_ADMIN') ||
+    rolesUpper.includes('DISCIPLINECOMMITTEEADMIN') ||
+    rolesUpper.includes('IQAC') ||
+    rolesUpper.includes('ADMIN') ||
+    permsLower.includes('discipline.manage_config') ||
+    permsLower.includes('discipline.view_admin');
+
+  const canAccessDisciplineStaff =
+    flags.is_staff ||
+    rolesUpper.includes('STAFF') ||
+    rolesUpper.includes('FACULTY') ||
+    rolesUpper.includes('DISCIPLINE_COMMITTEE') ||
+    rolesUpper.includes('DISCIPLINE COMMITTEE') ||
+    canAccessDisciplineAdmin ||
+    permsLower.includes('discipline.log_incident') ||
+    permsLower.includes('discipline.view_admin');
+
+  if (canAccessDisciplineAdmin) {
+    if (!items.some((item) => item.key === 'dc_admin')) {
+      items.push({ key: 'dc_admin', label: 'DC ADMIN', to: '/discipline/admin' });
+    }
+  }
+  
+  if (canAccessDisciplineStaff && !items.some((item) => item.key === 'discipline_staff_portal')) {
+    items.push({ key: 'discipline_staff_portal', label: 'Discipline', to: '/discipline/staff' });
+  }
+
+  // Student Discipline Portal
+  const isStudentUser = Boolean(flags.is_student || rolesUpper.includes('STUDENT'));
+  if (isStudentUser && !items.some((item) => item.key === 'discipline_student_portal')) {
+    items.push({ key: 'discipline_student_portal', label: 'Discipline', to: '/discipline/student' });
+  }
+
   // PS (Principal Secretary) specific features
   if (rolesUpper.includes('PS')) {
     if (!items.some((item) => item.key === 'ps_staff_attendance')) {
@@ -687,11 +744,6 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
   // Requests Hub: ONLY for users with staff_requests.approve_requests permission
   if ((canAccessPendingApprovals || canAccessApplicationsInbox) && !items.some(item => item.key === 'requests_hub')) {
     items.push({ key: 'requests_hub', label: 'Requests', to: '/requests' });
-  }
-
-  // Academic Performance (accessible to all users)
-  if (!items.some((item) => item.key === 'academic_performance')) {
-    items.push({ key: 'academic_performance', label: 'Academic Performance', to: '/academic-performance' });
   }
 
   // Visual Admin & Academic Visuals entries

@@ -7,6 +7,7 @@ import React from 'react';
 import { RouteObject } from 'react-router-dom';
 
 // Lazy load pages for code splitting
+const VersionManagementPage = React.lazy(() => import('./admin/version/VersionManagementPage'));
 const AcademicV2AdminDashboard = React.lazy(() => import('./admin/AcademicV2AdminDashboard'));
 const PublishControlPage = React.lazy(() => import('./admin/PublishControlPage'));
 const ExamManagementPage = React.lazy(() => import('./admin/ExamManagementPage'));
@@ -32,10 +33,29 @@ const StudentCourseListPage = React.lazy(() => import('./students/CourseListPage
 const StudentCourseDetailPage = React.lazy(() => import('./students/CourseDetailPage'));
 const LCAWorkflowPage = React.lazy(() => import('./faculty/LCAWorkflowPage'));
 
+// SSA Assignment Pages
+const SSAAssignPage = React.lazy(() => import('./faculty/SSAAssignPage'));
+const SSASubmissionsPage = React.lazy(() => import('./faculty/SSASubmissionsPage'));
+const SSAEvaluationPage = React.lazy(() => import('./faculty/SSAEvaluationPage'));
+const SSAStudentAssignmentPage = React.lazy(() => import('./students/SSAAssignmentPage'));
+
 export const academicV2Routes: RouteObject[] = [
-  // Admin Routes - Dashboard
+  // Admin Routes - Version Page is the primary entry for Academic 2.1 Admin
   {
     path: 'academic-v2/admin',
+    element: <VersionManagementPage />,
+  },
+  {
+    path: 'academic-v2/admin/version',
+    element: <VersionManagementPage />,
+  },
+  // Academic Controller Dashboard (scoped to a version)
+  {
+    path: 'academic-v2/admin/controller',
+    element: <AcademicV2AdminDashboard />,
+  },
+  {
+    path: 'academic-v2/admin/version/:versionId',
     element: <AcademicV2AdminDashboard />,
   },
   {
@@ -125,6 +145,26 @@ export const academicV2Routes: RouteObject[] = [
   {
     path: 'academic-v2/course/:courseId/lca',
     element: <LCAWorkflowPage />,
+  },
+
+  // SSA Assignment Routes — Faculty
+  {
+    path: 'academic-v2/ssa/assign/:examId',
+    element: <SSAAssignPage />,
+  },
+  {
+    path: 'academic-v2/ssa/submissions/:examId',
+    element: <SSASubmissionsPage />,
+  },
+  {
+    path: 'academic-v2/ssa/evaluate/:submissionId',
+    element: <SSAEvaluationPage />,
+  },
+
+  // SSA Assignment Routes — Student
+  {
+    path: 'academic-v2/student/ssa/:examId',
+    element: <SSAStudentAssignmentPage />,
   },
 ];
 

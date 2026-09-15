@@ -23,6 +23,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import HomePage from "./components/containers/HomePage";
 import Login from './pages/auth/Login';
 import DashboardPage from "./pages/dashboard/Dashboard";
+import SystemTransitionsPage from './pages/dashboard/SystemTransitionsPage';
 import ProfilePage from "./pages/profile/Profile";
 import SettingsPage from './pages/settings/SettingsPage';
 import WhatsAppSenderPage from './pages/settings/WhatsAppSenderPage';
@@ -105,6 +106,12 @@ import FingerprintEnrollPage from './pages/IDCSScan/FingerprintEnrollPage';
 import BioSecureAdminPage from './pages/biosecure/admin/BioSecureAdminPage';
 import BioSecureAdminLogsPage from './pages/biosecure/admin/BioSecureAdminLogsPage';
 import BioSecureStudentLogsPage from './pages/biosecure/student/BioSecureStudentLogsPage';
+import StudentsBarCode from './pages/DisciplineComittie/admin/StudentsBarCode';
+import ConfigPage from './pages/DisciplineComittie/admin/ConfigPage';
+import LogsPage from './pages/DisciplineComittie/admin/LogsPage';
+import DCAdminPage from './pages/DisciplineComittie/admin/DCAdminPage';
+import StaffDisciplinePage from './pages/DisciplineComittie/staff/StaffDisciplinePage';
+import StudentDisciplinePage from './pages/DisciplineComittie/student/StudentDisciplinePage';
 import RFReaderAssignCardsPage from './pages/RFReader/AssignCardsPage';
 import RFReaderCreateGatePage from './pages/RFReader/CreateGatePage';
 import RFReaderTestStudentsPage from './pages/RFReader/TestStudentsPage';
@@ -125,6 +132,7 @@ import { LazyErrorBoundary } from './components/LazyErrorBoundary';
 import { safeLazy } from './utils/safeLazy';
 
 // Academic 2.1 - Lazy load pages for code splitting
+const AcV2VersionManagementPage = safeLazy(() => import('./pages/Academic 2.1/admin/version/VersionManagementPage'), 'VersionManagementPage');
 const AcV2AdminDashboard = safeLazy(() => import('./pages/Academic 2.1/admin/AcademicV2AdminDashboard'), 'AcademicV2AdminDashboard');
 
 // Visual Admin
@@ -158,6 +166,10 @@ const AcV2StudentDashboardPage = safeLazy(() => import('./pages/Academic 2.1/stu
 const AcV2StudentCourseListPage = safeLazy(() => import('./pages/Academic 2.1/students/CourseListPage'), 'StudentCourseListPage');
 const AcV2StudentCourseDetailPage = safeLazy(() => import('./pages/Academic 2.1/students/CourseDetailPage'), 'StudentCourseDetailPage');
 const AcademicPerformancePage = safeLazy(() => import('./pages/Academic 2.1/AcademicPerformancePage'), 'AcademicPerformancePage');
+const AcV2SSAAssignPage = safeLazy(() => import('./pages/Academic 2.1/faculty/SSAAssignPage'), 'SSAAssignPage');
+const AcV2SSASubmissionsPage = safeLazy(() => import('./pages/Academic 2.1/faculty/SSASubmissionsPage'), 'SSASubmissionsPage');
+const AcV2SSAEvaluationPage = safeLazy(() => import('./pages/Academic 2.1/faculty/SSAEvaluationPage'), 'SSAEvaluationPage');
+const AcV2SSAStudentAssignmentPage = safeLazy(() => import('./pages/Academic 2.1/students/SSAAssignmentPage'), 'SSAStudentAssignmentPage');
 
 type RoleObj = { name: string };
 type Me = {
@@ -511,6 +523,14 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["timetable.manage_templates"]} element={<TimetableAdminPage />} />}
                 />
                 <Route
+                  path="/iqac/system-transitions"
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC", "ADMIN"]} element={<SystemTransitionsPage />} />}
+                />
+                <Route
+                  path="/system-transitions"
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC", "ADMIN"]} element={<SystemTransitionsPage />} />}
+                />
+                <Route
                   path="/iqac/event-approvals"
                   element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<IQACEventApprovalPage />} />}
                 />
@@ -599,6 +619,31 @@ export default function App() {
                 <Route
                   path="/biosecure/student/logs"
                   element={<ProtectedRoute user={user} element={<BioSecureStudentLogsPage />} />}
+                />
+                {/* Discipline Committee Routes */}
+                <Route
+                  path="/discipline/admin"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC', 'ADMIN', 'DISCIPLINE_COMMITTEE_ADMIN', 'DISCIPLINE_COMMITTEE', 'DisciplineCommitteeAdmin', 'Discipline Committee']} element={<DCAdminPage />} />}
+                />
+                <Route
+                  path="/discipline/admin/students-barcode"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC', 'ADMIN', 'DISCIPLINE_COMMITTEE_ADMIN', 'DISCIPLINE_COMMITTEE', 'DisciplineCommitteeAdmin', 'Discipline Committee']} element={<StudentsBarCode />} />}
+                />
+                <Route
+                  path="/discipline/admin/config"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC', 'ADMIN', 'DISCIPLINE_COMMITTEE_ADMIN', 'DisciplineCommitteeAdmin']} element={<ConfigPage />} />}
+                />
+                <Route
+                  path="/discipline/admin/logs"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC', 'ADMIN', 'DISCIPLINE_COMMITTEE_ADMIN', 'DISCIPLINE_COMMITTEE', 'DisciplineCommitteeAdmin', 'Discipline Committee']} element={<LogsPage />} />}
+                />
+                <Route
+                  path="/discipline/staff"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC', 'ADMIN', 'DISCIPLINE_COMMITTEE_ADMIN', 'DISCIPLINE_COMMITTEE', 'DisciplineCommitteeAdmin', 'Discipline Committee', 'STAFF', 'FACULTY']} element={<StaffDisciplinePage />} />}
+                />
+                <Route
+                  path="/discipline/student"
+                  element={<ProtectedRoute user={user} requiredRoles={['STUDENT', 'IQAC', 'ADMIN']} element={<StudentDisciplinePage />} />}
                 />
                 <Route
                   path="/iqac/rf-reader"
@@ -765,9 +810,61 @@ export default function App() {
                 />
 
                 {/* ── Academic 2.1 Routes ─────────────────────────────────── */}
-                {/* Admin Dashboard */}
+                {/* Admin Version Management Page (Primary Entry) */}
                 <Route
                   path="/academic-v2/admin"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <LazyErrorBoundary>
+                          <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                            <AcV2VersionManagementPage />
+                          </React.Suspense>
+                        </LazyErrorBoundary>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/version"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <LazyErrorBoundary>
+                          <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                            <AcV2VersionManagementPage />
+                          </React.Suspense>
+                        </LazyErrorBoundary>
+                      }
+                    />
+                  }
+                />
+                {/* Academic Controller Dashboard (Scoped to a Version) */}
+                <Route
+                  path="/academic-v2/admin/controller"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <LazyErrorBoundary>
+                          <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                            <AcV2AdminDashboard />
+                          </React.Suspense>
+                        </LazyErrorBoundary>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/version/:versionId"
                   element={
                     <ProtectedRoute
                       user={user}
@@ -1190,6 +1287,75 @@ export default function App() {
                     />
                   }
                 />
+                {/* SSA assignment workflow */}
+                <Route
+                  path="/academic-v2/ssa/assign/:examId"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STAFF'}
+                      requiredPermissions={['academic_v2.page.staff']}
+                      element={
+                        <LazyErrorBoundary>
+                          <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                            <AcV2SSAAssignPage />
+                          </React.Suspense>
+                        </LazyErrorBoundary>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/ssa/submissions/:examId"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STAFF'}
+                      requiredPermissions={['academic_v2.page.staff']}
+                      element={
+                        <LazyErrorBoundary>
+                          <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                            <AcV2SSASubmissionsPage />
+                          </React.Suspense>
+                        </LazyErrorBoundary>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/ssa/evaluate/:submissionId"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STAFF'}
+                      requiredPermissions={['academic_v2.page.staff']}
+                      element={
+                        <LazyErrorBoundary>
+                          <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                            <AcV2SSAEvaluationPage />
+                          </React.Suspense>
+                        </LazyErrorBoundary>
+                      }
+                    />
+                  }
+                />
+                {/* SSA assignment workflow — Student */}
+                <Route
+                  path="/academic-v2/student/ssa/:examId"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STUDENT'}
+                      element={
+                        <LazyErrorBoundary>
+                          <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                            <AcV2SSAStudentAssignmentPage />
+                          </React.Suspense>
+                        </LazyErrorBoundary>
+                      }
+                    />
+                  }
+                />
                 {/* Academic 2.1 Admin - Course Manager & Bypass */}
                 <Route
                   path="/academic-v2/admin/course-manager"
@@ -1333,8 +1499,9 @@ export default function App() {
 
                 {/* ────────────────────────────────────────────────────────────── */}
 
-                {/* PBAS staff and admin routes */}
-                <Route path="/pbas/staff" element={<ProtectedRoute user={user} requiredRoles={["STAFF"]} element={<PBASSubmissionPage />} />} />
+                {/* PBAS staff, student and admin routes */}
+                <Route path="/pbas/staff" element={<ProtectedRoute user={user} requiredRoles={["STAFF", "STUDENT"]} element={<PBASSubmissionPage />} />} />
+                <Route path="/student/pbas" element={<ProtectedRoute user={user} requiredRoles={["STUDENT"]} element={<PBASSubmissionPage viewer="student" />} />} />
                 <Route path="/pbas/admin" element={<ProtectedRoute user={user} requiredRoles={["PBAS_ADMIN", "PBASADMIN", "PBAS_MANAGER", "IQAC", "ADMIN"]} element={<PBASAdminPage />} />} />
                 <Route path="/pbas/approvals" element={<ProtectedRoute user={user} requiredRoles={["PBAS_APPROVER", "PBAS_ADMIN", "PBAS_MANAGER", "PBASADMIN", "IQAC", "ADMIN", "PRINCIPAL", "PS"]} element={<PBASApprovalsPage user={user} />} />} />
 

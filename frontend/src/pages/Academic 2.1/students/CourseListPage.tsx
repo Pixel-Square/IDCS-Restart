@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, BookOpen, ChevronRight, Loader2, Medal, UserRound } from 'lucide-react';
+import { AlertCircle, BookOpen, ChevronRight, Loader2, Medal, UserRound, Upload } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 import RequirementsPage from '../../settings/RequirementsPage';
 import MyMarksLayout from './MyMarksLayout';
@@ -59,6 +59,7 @@ export default function CourseListPage() {
   const [courses, setCourses] = useState<CourseItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [ssaAssignments, setSsaAssignments] = useState<{ exam_id: string; assignment_type: string; course_code: string; submission_status: string }[]>([]);
 
   useEffect(() => {
     let mounted = true;
@@ -71,11 +72,16 @@ export default function CourseListPage() {
         }
         return res.json();
       }),
+      fetchWithAuth('/api/academic-v2/ssa/student/assignments/').then(async (res) => {
+        if (!res.ok) return { assignments: [] };
+        return res.json();
+      }).catch(() => ({ assignments: [] })),
     ])
-      .then(([cfg, data]) => {
+      .then(([cfg, data, ssaData]) => {
         if (!mounted) return;
         setConfig(cfg);
         setCourses(Array.isArray(data?.courses) ? data.courses : []);
+        setSsaAssignments(Array.isArray(ssaData?.assignments) ? ssaData.assignments : []);
       })
       .catch((err) => {
         if (!mounted) return;
@@ -204,6 +210,24 @@ export default function CourseListPage() {
                   View Marks
                   <ChevronRight className="ml-2 h-4 w-4" />
                 </div>
+                {/* SSA Assignment buttons */}
+                {ssaAssignments
+                  .filter((ssa) => ssa.course_code === course.course_code && ssa.submission_status !== 'EVALUATED')
+                  .map((ssa) => (
+                    <button
+                      key={ssa.exam_id}
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/academic-v2/student/ssa/${ssa.exam_id}`);
+                      }}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 sm:w-auto"
+                    >
+                      <Upload className="h-4 w-4" />
+                      {ssa.submission_status === 'SUBMITTED' ? `${ssa.assignment_type} Submitted` : `Upload ${ssa.assignment_type}`}
+                    </button>
+                  ))
+                }
               </div>
             </button>
           ))}

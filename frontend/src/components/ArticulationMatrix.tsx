@@ -137,6 +137,22 @@ function CollapsibleTable({
   );
 }
 
+function calcRowHours(po: Array<number | string>, pso: Array<number | string>): number | string {
+  let total = 0;
+  let hasNum = false;
+  [...(po || []), ...(pso || [])].forEach((v) => {
+    if (v !== '-' && v !== null && v !== undefined && v !== '') {
+      const n = Number(v);
+      if (Number.isFinite(n)) {
+        total += n;
+        hasNum = true;
+      }
+    }
+  });
+  if (!hasNum || total === 0) return '-';
+  return Number.isInteger(total) ? total : roundHalfUp(total, 2);
+}
+
 export default function ArticulationMatrix({ subjectId, matrix }: { subjectId: string; matrix: ArticulationMatrixPayload | null }) {
   if (!subjectId) {
     return <div style={{ color: '#6b7280', fontSize: 13 }}>Select a course to view the Articulation Matrix.</div>;
@@ -160,7 +176,7 @@ export default function ArticulationMatrix({ subjectId, matrix }: { subjectId: s
     'Topic Name',
     ...Array.from({ length: 11 }, (_, i) => `PO${i + 1}`),
     ...Array.from({ length: 3 }, (_, i) => `PSO${i + 1}`),
-    'Hours',
+    'Total Hrs',
   ];
 
   const blankRow = Array.from({ length: unitHeaders.length }, () => '');
@@ -174,13 +190,24 @@ export default function ArticulationMatrix({ subjectId, matrix }: { subjectId: s
       )}
 
       {units.map((u) => {
-        const rows = (u.rows || []).map((r) => [
+        const rawRows = u.rows || [];
+        const numRows = rawRows.length;
+
+        const processedRows = rawRows.map((r) => {
+          const po = r.po || Array(11).fill('-');
+          const pso = r.pso || Array(3).fill('-');
+          const hours = calcRowHours(po, pso);
+
+          return { ...r, po, pso, hours };
+        });
+
+        const rows = processedRows.map((r) => [
           r.s_no,
           r.co_mapped,
           r.topic_no,
           r.topic_name,
-          ...(r.po || []),
-          ...(r.pso || []),
+          ...r.po,
+          ...r.pso,
           r.hours,
         ]);
 
@@ -203,8 +230,24 @@ export default function ArticulationMatrix({ subjectId, matrix }: { subjectId: s
             return [label, ...Array.from({ length: 11 }, () => ''), ...Array.from({ length: 3 }, () => ''), ''];
           }
 
+          const rawRows = unit.rows;
+          const numRows = rawRows.length;
+          const rows = rawRows.map((r, idx) => {
+            const isSpecial =
+              idx >= numRows - 3 ||
+              ['ssa', 'active learning', 'special'].some(
+                (k) =>
+                  String(r.co_mapped || '').toLowerCase().includes(k) ||
+                  String(r.topic_name || '').toLowerCase().includes(k)
+              );
+
+            const po = isSpecial ? Array(11).fill('-') : (r.po || Array(11).fill('-'));
+            const pso = isSpecial ? Array(3).fill('-') : (r.pso || Array(3).fill('-'));
+            const hours = calcRowHours(po, pso);
+            return { ...r, po, pso, hours };
+          });
+
           // sum of hours (x)
-          const rows = unit.rows;
           const sumHours = rows.reduce((acc, r) => {
             const h = Number(r.hours);
             return acc + (Number.isFinite(h) ? h : 0);

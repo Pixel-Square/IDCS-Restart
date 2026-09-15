@@ -85,6 +85,7 @@ INSTALLED_APPS = [
     'announcements.apps.AnnouncementsConfig',
     'lms.apps.LmsConfig',
     'coder.apps.CoderConfig',
+    'discipline.apps.DisciplineConfig',
 ]
 # Staff requests dynamic forms & workflow engine
 INSTALLED_APPS.append('staff_requests')
@@ -531,3 +532,8 @@ IDCS_BACKEND_URL = os.getenv('IDCS_BACKEND_URL', '')
 # Copy this from the Canva URL of the template design:
 #   https://www.canva.com/design/<TEMPLATE_ID>/edit
 CANVA_BRANDING_TEMPLATE_ID = os.getenv('CANVA_BRANDING_TEMPLATE_ID', '')
+
+# Google Sheets & Apps Script OAuth 2.0
+GOOGLE_OAUTH_CLIENT_ID = os.getenv('GOOGLE_OAUTH_CLIENT_ID', '309215625689-j8af03h2lv4fu7o9i6aihmpm6aquje57.apps.googleusercontent.com')
+GOOGLE_OAUTH_CLIENT_SECRET = os.getenv('GOOGLE_OAUTH_CLIENT_SECRET', '')
+GOOGLE_OAUTH_REDIRECT_URI = os.getenv('GOOGLE_OAUTH_REDIRECT_URI', 'https://idcs.krgi.co.in/api/academic-v2/google-sheets/oauth/callback')
