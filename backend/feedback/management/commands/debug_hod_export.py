@@ -49,12 +49,12 @@ class Command(BaseCommand):
         for form in query:
             creator_roles = list(form.created_by.roles.values_list('name', flat=True))
             is_iqac_created = 'IQAC' in creator_roles or 'ADMIN' in creator_roles
-            
+
             role_display = ', '.join(creator_roles) if creator_roles else 'NO ROLE'
-            
+
             status_color = self.style.SUCCESS if form.allow_hod_view else self.style.WARNING
             status_text = status_color(f'allow_hod_view={form.allow_hod_view}')
-            
+
             self.stdout.write(
                 f'Form ID {form.id}: {form.type} | '
                 f'Created by: {form.created_by.username} ({role_display}) | '

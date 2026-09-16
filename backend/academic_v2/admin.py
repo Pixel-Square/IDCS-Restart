@@ -29,7 +29,7 @@ class AcV2SemesterConfigAdmin(admin.ModelAdmin):
     list_filter = ['publish_control_enabled', 'semester']
     search_fields = ['semester__name']
     readonly_fields = ['created_at', 'updated_at']
-    
+
 
 @admin.register(AcV2ClassType)
 class AcV2ClassTypeAdmin(admin.ModelAdmin):
@@ -78,7 +78,7 @@ class AcV2SectionAdmin(admin.ModelAdmin):
     list_filter = ['teaching_assignment__staff__department', 'teaching_assignment__curriculum_row__department', 'course__class_type', 'course__semester']
     search_fields = ['section_name', 'faculty_user__username']
     raw_id_fields = ['course', 'faculty_user', 'teaching_assignment']
-    
+
     def student_count(self, obj):
         return 0  # Placeholder
     student_count.short_description = 'Students'

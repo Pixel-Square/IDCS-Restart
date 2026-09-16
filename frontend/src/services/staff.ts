@@ -70,7 +70,7 @@ export async function fetchDepartmentStaff(): Promise<StaffMember[]> {
   } catch (e) {
     console.warn('Failed to fetch staff', e)
   }
-  
+
   // Return empty array if fetch fails
   return []
 }

@@ -73,7 +73,7 @@ export default function FacultyAttendancePage() {
       const url = `${getApiBase()}/api/staff-attendance/records/available_departments/`;
       const response = await apiClient.get(url);
       setDepartments(response.data.departments);
-      
+
       // Auto-select first department if available
       if (response.data.departments.length > 0) {
         setSelectedDepartment(response.data.departments[0].id);
@@ -87,7 +87,7 @@ export default function FacultyAttendancePage() {
 
   const fetchAttendanceForDate = async () => {
     if (selectedDepartment === null) return;
-    
+
     try {
       setLoading(true);
       setError(null);
@@ -144,8 +144,8 @@ export default function FacultyAttendancePage() {
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { 
-      weekday: 'short', 
+    return date.toLocaleDateString('en-US', {
+      weekday: 'short',
       day: 'numeric',
       month: 'short'
     });
@@ -267,7 +267,7 @@ export default function FacultyAttendancePage() {
                     </div>
                   </div>
                 </div>
-                
+
                 <div className="bg-green-50 rounded-lg p-4">
                   <div className="flex items-center gap-3">
                     <CheckCircle className="w-8 h-8 text-green-600" />
@@ -277,7 +277,7 @@ export default function FacultyAttendancePage() {
                     </div>
                   </div>
                 </div>
-                
+
                 <div className="bg-yellow-50 rounded-lg p-4">
                   <div className="flex items-center gap-3">
                     <AlertCircle className="w-8 h-8 text-yellow-600" />
@@ -287,7 +287,7 @@ export default function FacultyAttendancePage() {
                     </div>
                   </div>
                 </div>
-                
+
                 <div className="bg-red-50 rounded-lg p-4">
                   <div className="flex items-center gap-3">
                     <XCircle className="w-8 h-8 text-red-600" />
@@ -307,7 +307,7 @@ export default function FacultyAttendancePage() {
                   <span className="font-semibold text-gray-900">{getAttendancePercentage()}%</span>
                 </div>
                 <div className="mt-2 bg-gray-200 rounded-full h-3">
-                  <div 
+                  <div
                     className="bg-blue-600 h-3 rounded-full transition-all duration-500"
                     style={{ width: `${getAttendancePercentage()}%` }}
                   />
@@ -327,7 +327,7 @@ export default function FacultyAttendancePage() {
           <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
             <XCircle className="w-8 h-8 text-red-600 mx-auto mb-4" />
             <p className="text-red-800 font-medium">{error}</p>
-            <button 
+            <button
               onClick={fetchAttendanceForDate}
               className="mt-4 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
             >

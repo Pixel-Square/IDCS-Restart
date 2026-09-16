@@ -162,7 +162,7 @@ urlpatterns = [
     path('analytics/period-attendance-revert/<int:session_id>/', PeriodAttendanceRevertAssignmentView.as_view()),
     path('analytics/section-student-day/', SectionStudentAttendanceDayView.as_view()),
     path('attendance-analytics/', MyClassAttendanceAnalyticsView.as_view()),  # My Class endpoint
-    
+
     # Two-stage unlock request endpoints
     path('daily-attendance-unlock-request/', DailyAttendanceUnlockRequestView.as_view()),
     path('period-attendance-unlock-request/', PeriodAttendanceUnlockRequestView.as_view()),
@@ -184,7 +184,7 @@ urlpatterns = [
     path('bulk-attendance/locked-sessions/', BulkAttendanceLockedSessionsView.as_view()),
     path('bulk-attendance/import/', BulkAttendanceImportView.as_view()),
     path('bulk-attendance/unlock-request/', BulkDailyAttendanceUnlockRequestView.as_view()),
-    
+
     # Barcode Lookup
     path('student/lookup/<str:code>/', StudentBarcodeLookupView.as_view()),
 
@@ -194,7 +194,7 @@ urlpatterns = [
     path('ext-staff-profiles/import/', ExtStaffProfileBulkImportView.as_view(), name='ext-staff-profiles-import'),
     path('ext-staff-profiles/bulk-delete/', ExtStaffProfileBulkDeleteView.as_view(), name='ext-staff-profiles-bulk-delete'),
     path('ext-staff-profiles/<int:pk>/', ExtStaffProfileDetailView.as_view(), name='ext-staff-profiles-detail'),
-    
+
     # External Staff Registration Form
     path('ext-staff-form/settings/', ExtStaffFormSettingsView.as_view(), name='ext-staff-form-settings'),
     path('ext-staff-form/public/<str:form_code>/', ExtStaffPublicFormView.as_view(), name='ext-staff-form-public'),

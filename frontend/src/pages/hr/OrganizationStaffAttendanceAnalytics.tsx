@@ -363,9 +363,9 @@ export default function OrganizationStaffAttendanceAnalytics() {
   // Filter data based on search query
   const filteredAnalyticsData = useMemo(() => {
     if (!analyticsData) return null;
-    
+
     const query = searchQuery.toLowerCase();
-    
+
     if (reportType === '1' && 'staff_analytics' in analyticsData) {
       const data = analyticsData as AnalyticsData;
       return {
@@ -376,7 +376,7 @@ export default function OrganizationStaffAttendanceAnalytics() {
         )
       } as AnalyticsData;
     }
-    
+
     if (reportType !== '1' && 'staff_rows' in analyticsData) {
       const data = analyticsData as MonthlyMatrixData;
       return {
@@ -387,7 +387,7 @@ export default function OrganizationStaffAttendanceAnalytics() {
         )
       } as MonthlyMatrixData;
     }
-    
+
     return analyticsData;
   }, [analyticsData, searchQuery, reportType]);
 

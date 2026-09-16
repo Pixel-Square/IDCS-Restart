@@ -34,11 +34,11 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """Filter queryset based on user permissions"""
         user = self.request.user
-        
+
         # Superuser and users with view permission can see all records
-        if (user.is_superuser or 
+        if (user.is_superuser or
             user.has_perm('staff_attendance.view_attendance_records') or
-            (hasattr(user, 'user_roles') and 
+            (hasattr(user, 'user_roles') and
              user.user_roles.filter(role__name__in=['PS', 'HOD', 'ADMIN']).exists())):
             return AttendanceRecord.objects.all()
         else:
@@ -307,10 +307,10 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         # Use localtime to get date in server timezone (Asia/Kolkata)
         today = timezone.localtime(timezone.now()).date()
         record = AttendanceRecord.objects.filter(
-            user=request.user, 
+            user=request.user,
             date=today
         ).first()
-        
+
         if record:
             return Response({
                 'date': today.isoformat(),
@@ -336,7 +336,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
     def monthly_records(self, request):
         """
         Get attendance records for the current user or all users (based on permissions)
-        
+
         Query Parameters:
         - year: year (default: current year)
         - month: month (default: current month)
@@ -351,14 +351,14 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         user_id = request.query_params.get('user_id')
         department_id = request.query_params.get('department_id')
         self_only = request.query_params.get('self_only', 'false').lower() == 'true'
-        
+
         # If date range provided, use it; otherwise use year/month
         if from_date_str and to_date_str:
             try:
                 from_date = datetime.strptime(from_date_str, '%Y-%m-%d').date()
                 to_date = datetime.strptime(to_date_str, '%Y-%m-%d').date()
             except ValueError:
-                return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, 
+                return Response({'error': 'Invalid date format. Use YYYY-MM-DD'},
                               status=status.HTTP_400_BAD_REQUEST)
             queryset = AttendanceRecord.objects.filter(date__gte=from_date, date__lte=to_date)
         else:
@@ -366,7 +366,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             year = int(request.query_params.get('year', timezone.now().year))
             month = int(request.query_params.get('month', timezone.now().month))
             queryset = AttendanceRecord.objects.filter(date__year=year, date__month=month)
-        
+
         # Check user permissions and determine what data they can see
         user = request.user
         is_superuser = user.is_superuser
@@ -375,11 +375,11 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         is_hod = hasattr(user, 'user_roles') and user.user_roles.filter(role__name='HOD').exists()
         is_iqac = hasattr(user, 'user_roles') and user.user_roles.filter(role__name='IQAC').exists()
         is_admin = hasattr(user, 'user_roles') and user.user_roles.filter(role__name='ADMIN').exists()
-        
+
         # Get user's staff profile and department
         user_staff_profile = getattr(user, 'staff_profile', None)
         user_department = user_staff_profile.department if user_staff_profile else None
-        
+
         # Force self-only view if requested (for personal calendar views)
         if self_only:
             queryset = queryset.filter(user=user)
@@ -392,7 +392,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         elif department_id:
             # Department-based filtering
             department_id = int(department_id)
-            
+
             if is_superuser or has_view_perm or is_ps or is_iqac or is_admin:
                 # These roles can see any department
                 queryset = queryset.filter(user__staff_profile__department_id=department_id)
@@ -411,7 +411,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                         if department_id in hod_dept_ids:
                             queryset = queryset.filter(user__staff_profile__department_id=department_id)
                         else:
-                            return Response({'error': 'Permission denied: You are not HOD/AHOD for this department'}, 
+                            return Response({'error': 'Permission denied: You are not HOD/AHOD for this department'},
                                           status=status.HTTP_403_FORBIDDEN)
                     else:
                         return Response({'error': 'No active academic year'}, status=status.HTTP_400_BAD_REQUEST)
@@ -448,7 +448,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             else:
                 # Regular staff can only see their own records
                 queryset = queryset.filter(user=user)
-        
+
         if from_date_str and to_date_str:
             lookup_from_date = from_date
             lookup_to_date = to_date
@@ -463,11 +463,11 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         user_ids = list({r.user_id for r in record_list})
         gatepass_map = self._get_gatepass_applications_by_user_date(user_ids, lookup_from_date, lookup_to_date)
         limits_cache = {}
-        
+
         # Get COL template for checking approved forms
         from staff_requests.models import RequestTemplate, StaffRequest
         col_template = RequestTemplate.objects.filter(name__iexact='col').first()
-        
+
         # Serialize the records
         data = []
         for record in record_list:
@@ -491,7 +491,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 gatepass_map.get((record.user_id, record.date), []),
                 limits_cache[limits_cache_key],
             )
-            
+
             data.append({
                 'id': record.id,
                 'user_id': record.user.id,
@@ -512,13 +512,13 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 'expected_hours': metrics.get('expected_hours'),
                 'effective_hours_status': metrics.get('effective_hours_status'),
             })
-        
+
         # Calculate summary stats
         total_records = len(data)
         present_count = len([r for r in data if r['status'] == 'present'])
         absent_count = len([r for r in data if r['status'] == 'absent'])
         partial_count = len([r for r in data if r['status'] in ['partial', 'half_day']])
-        
+
         summary_info = {}
         if from_date_str and to_date_str:
             summary_info = {
@@ -530,7 +530,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 'year': year,
                 'month': month,
             }
-        
+
         return Response({
             'records': data,
             'summary': {
@@ -546,7 +546,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
     def organization_analytics(self, request):
         """
         Get organization-wide staff attendance analytics with date range filter
-        
+
         Query Parameters:
         - from_date: start date in YYYY-MM-DD format (required)
         - to_date: end date in YYYY-MM-DD format (required)
@@ -554,19 +554,19 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         - format: 'json' (default) or 'csv' for download
         """
         user = request.user
-        
+
         # Only HR, PS, IQAC, and ADMIN can access organization analytics
         is_hr = hasattr(user, 'user_roles') and user.user_roles.filter(role__name='HR').exists()
         is_ps = hasattr(user, 'user_roles') and user.user_roles.filter(role__name='PS').exists()
         is_iqac = hasattr(user, 'user_roles') and user.user_roles.filter(role__name='IQAC').exists()
         is_admin = hasattr(user, 'user_roles') and user.user_roles.filter(role__name='ADMIN').exists()
-        
+
         if not (user.is_superuser or is_hr or is_ps or is_iqac or is_admin):
             return Response(
                 {'error': 'Only HR, PS, IQAC, or ADMIN can access organization analytics'},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
+
         # Get date range parameters / template type
         report_type = str(request.query_params.get('report_type') or '1').strip()
         month_str = str(request.query_params.get('month') or '').strip()
@@ -635,28 +635,28 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 {'error': 'Invalid date format. Use YYYY-MM-DD'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         # Base queryset
         queryset = AttendanceRecord.objects.filter(
             date__gte=from_date,
             date__lte=to_date
         ).select_related('user', 'user__staff_profile', 'user__staff_profile__department')
-        
+
         # Filter by department if specified
         if department_id:
             queryset = queryset.filter(user__staff_profile__department_id=department_id)
-        
+
         # Get all unique staff in the range
         from accounts.models import User
         from academics.models import StaffProfile, Department
-        
+
         staff_users = User.objects.filter(
             staff_profile__isnull=False
         ).select_related('staff_profile', 'staff_profile__department')
-        
+
         if department_id:
             staff_users = staff_users.filter(staff_profile__department_id=department_id)
-        
+
         # Build analytics data
         analytics_by_staff = {}
         for user_obj in staff_users:
@@ -676,7 +676,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 'col_count': 0,
                 'others_count': 0,
             }
-        
+
         # Count records by FN/AN status (0.5 per session)
         for record in queryset:
             if record.user.id in analytics_by_staff:
@@ -686,30 +686,30 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                         analytics_by_staff[record.user.id]['present'] += 0.5
                     elif record.fn_status == 'absent':
                         analytics_by_staff[record.user.id]['absent'] += 0.5
-                
+
                 # AN (Afternoon) session - 0.5 day
                 if record.an_status:
                     if record.an_status == 'present':
                         analytics_by_staff[record.user.id]['present'] += 0.5
                     elif record.an_status == 'absent':
                         analytics_by_staff[record.user.id]['absent'] += 0.5
-        
+
         # Get staff request counts for each individual staff (combining normal and SPL forms)
         from staff_requests.models import StaffRequest
-        
+
         # Query all approved requests in the date range
         all_requests = StaffRequest.objects.filter(
             created_at__date__gte=from_date,
             created_at__date__lte=to_date,
             status='approved'
         ).select_related('template', 'applicant')
-        
+
         # Count forms per staff
         for request in all_requests:
             applicant_id = request.applicant_id
             if applicant_id in analytics_by_staff:
                 template_name = request.template.name if request.template else ''
-                
+
                 # CL: "Casual Leave" or "Casual Leave - SPL"
                 if template_name in ['Casual Leave', 'Casual Leave - SPL']:
                     analytics_by_staff[applicant_id]['cl_count'] += 1
@@ -725,10 +725,10 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 # Others: "Others" or "Others - SPL"
                 elif template_name in ['Others', 'Others - SPL']:
                     analytics_by_staff[applicant_id]['others_count'] += 1
-        
+
         # Convert to list
         analytics_list = list(analytics_by_staff.values())
-        
+
         # Calculate summary statistics
         total_staff = len(analytics_list)
         total_present = sum(item['present'] for item in analytics_list)
@@ -752,14 +752,14 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         except Exception:
             # Fallback to simple day count if holidays cannot be determined
             working_days = (to_date - from_date).days + 1
-        
+
         # Calculate unique staff counts by status
         staff_present_count = len([item for item in analytics_list if item['present'] > 0])
         staff_absent_count = len([item for item in analytics_list if item['absent'] > 0])
-        
+
         # Get staff request counts (combining normal and SPL forms)
         from staff_requests.models import StaffRequest
-        
+
         # CL: "Casual Leave" or "Casual Leave - SPL"
         cl_requests = StaffRequest.objects.filter(
             created_at__date__gte=from_date,
@@ -768,7 +768,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             status='approved'
         ).values_list('applicant_id', flat=True).distinct()
         staff_cl_count = len(set(cl_requests))
-        
+
         # OD: "ON duty" or "ON duty - SPL"
         od_requests = StaffRequest.objects.filter(
             created_at__date__gte=from_date,
@@ -777,7 +777,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             status='approved'
         ).values_list('applicant_id', flat=True).distinct()
         staff_od_count = len(set(od_requests))
-        
+
         # Late Entry: "Late Entry Permission" or "Late Entry Permission - SPL"
         late_entry_requests = StaffRequest.objects.filter(
             created_at__date__gte=from_date,
@@ -786,7 +786,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             status='approved'
         ).values_list('applicant_id', flat=True).distinct()
         staff_late_entry_count = len(set(late_entry_requests))
-        
+
         # COL: "Compensatory leave" or "Compensatory leave - SPL"
         col_requests = StaffRequest.objects.filter(
             created_at__date__gte=from_date,
@@ -795,7 +795,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             status='approved'
         ).values_list('applicant_id', flat=True).distinct()
         staff_col_count = len(set(col_requests))
-        
+
         # Others: "Others" or "Others - SPL"
         others_requests = StaffRequest.objects.filter(
             created_at__date__gte=from_date,
@@ -804,19 +804,19 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             status='approved'
         ).values_list('applicant_id', flat=True).distinct()
         staff_others_count = len(set(others_requests))
-        
+
         if export_format == 'csv':
             # Generate CSV export
             output = io.StringIO()
             writer = csv.writer(output)
-            
+
             # Write header
             writer.writerow([
                 'Date Range', f'{from_date_str} to {to_date_str}',
                 'Generated', datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             ])
             writer.writerow([])
-            
+
             # Write summary
             writer.writerow(['ORGANIZATION ATTENDANCE SUMMARY'])
             writer.writerow(['Total Staff', total_staff])
@@ -830,11 +830,11 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             writer.writerow(['Total Absent Days', total_absent])
             writer.writerow(['Total Working Days (excluding holidays)', working_days])
             writer.writerow([])
-            
+
             # Write staff-wise details
             writer.writerow(['STAFF-WISE ATTENDANCE'])
             writer.writerow(['Staff Name', 'Email', 'Department', 'Present', 'Absent', 'CL', 'OD', 'Late Entry', 'COL', 'Others', 'Attendance %'])
-            
+
             for item in sorted(analytics_list, key=lambda x: x['name']):
                 # Attendance percentage = present days / total working days (excluding holidays)
                 attendance_pct = (item['present'] / working_days * 100) if working_days and working_days > 0 else 0
@@ -851,20 +851,20 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                     item['others_count'],
                     f"{attendance_pct:.2f}%"
                 ])
-            
+
             # Return CSV file
             response = Response(output.getvalue(), content_type='text/csv')
             filename = f"organization_attendance_{from_date_str}_to_{to_date_str}.csv"
             response['Content-Disposition'] = f'attachment; filename="{filename}"'
             return response
-        
+
         elif export_format == 'excel':
             return self._export_organization_analytics_excel(
-                analytics_list, from_date_str, to_date_str, total_staff, total_records, 
+                analytics_list, from_date_str, to_date_str, total_staff, total_records,
                 total_present, total_absent, working_days, staff_cl_count, staff_od_count,
                 staff_late_entry_count, staff_col_count, staff_others_count
             )
-        
+
         else:
             # Return JSON
             return Response({
@@ -1097,7 +1097,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                     # Weighted attendance: 0=present, 0.5=half-day, 1=absent
                     is_fn_absence = fn_code and fn_code.upper() in ['A', 'OD', 'CL', 'COL', 'LATE', 'OTHERS', 'LE']
                     is_an_absence = an_code and an_code.upper() in ['A', 'OD', 'CL', 'COL', 'LATE', 'OTHERS', 'LE']
-                    
+
                     if is_fn_absence and is_an_absence:
                         value = '1'  # Full day absent
                     elif is_fn_absence or is_an_absence:
@@ -1188,7 +1188,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
 
         month = payload.get('month')
         report_type = payload.get('report_type')
-        
+
         # Add title and metadata
         ws.append(['Organization Staff Attendance Analytics'])
         ws.append(['Report Type', f"Type {report_type}"])
@@ -1239,7 +1239,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
-        
+
         response = HttpResponse(
             output.getvalue(),
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -1248,8 +1248,8 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
 
-    def _export_organization_analytics_excel(self, analytics_list, from_date_str, to_date_str, 
-                                             total_staff, total_records, total_present, total_absent, 
+    def _export_organization_analytics_excel(self, analytics_list, from_date_str, to_date_str,
+                                             total_staff, total_records, total_present, total_absent,
                                              working_days, staff_cl_count, staff_od_count,
                                              staff_late_entry_count, staff_col_count, staff_others_count):
         """Export organization analytics data as Excel file"""
@@ -1331,7 +1331,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
-        
+
         response = HttpResponse(
             output.getvalue(),
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -1344,7 +1344,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
     def available_departments(self, request):
         """Get list of departments the user can view attendance for"""
         user = request.user
-        
+
         # Check user permissions
         is_superuser = user.is_superuser
         is_ps = hasattr(user, 'user_roles') and user.user_roles.filter(role__name='PS').exists()
@@ -1352,11 +1352,11 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         is_iqac = hasattr(user, 'user_roles') and user.user_roles.filter(role__name='IQAC').exists()
         is_admin = hasattr(user, 'user_roles') and user.user_roles.filter(role__name='ADMIN').exists()
         is_hr = hasattr(user, 'user_roles') and user.user_roles.filter(role__name='HR').exists()
-        
+
         from academics.models import Department
-        
+
         departments = []
-        
+
         if is_superuser or is_ps or is_iqac or is_admin or is_hr:
             # These roles can see all departments
             dept_queryset = Department.objects.all()
@@ -1382,7 +1382,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         else:
             # Regular users don't get department list
             dept_queryset = Department.objects.none()
-        
+
         for dept in dept_queryset.order_by('name'):
             departments.append({
                 'id': dept.id,
@@ -1390,7 +1390,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 'code': getattr(dept, 'code', '') or '',
                 'short_name': getattr(dept, 'short_name', '') or dept.name,
             })
-        
+
         return Response({'departments': departments})
 
 
@@ -1479,15 +1479,15 @@ class CSVUploadViewSet(viewsets.ViewSet):
             settings = AttendanceSettings.objects.first()
             if not settings or not settings.apply_time_based_absence:
                 return False  # Don't apply time-based absence
-            
+
             # Late arrival = absent
             if morning_in and morning_in > settings.attendance_in_time_limit:
                 return True
-            
+
             # Early departure = absent
             if evening_out and evening_out < settings.attendance_out_time_limit:
                 return True
-            
+
             return False
         except Exception:
             return False
@@ -1570,7 +1570,7 @@ class CSVUploadViewSet(viewsets.ViewSet):
         - Full day: >= 8 hours → 1.0 COL
         - Half day: >= 4 hours → 0.5 COL
         - Less than 4 hours → No COL
-        
+
         Args:
             user: User object
             holiday_date: Date object
@@ -1580,9 +1580,9 @@ class CSVUploadViewSet(viewsets.ViewSet):
         from staff_requests.models import StaffLeaveBalance
         from datetime import datetime, time
         import logging
-        
+
         logger = logging.getLogger(__name__)
-        
+
         try:
             approved_col_request = self._get_approved_col_request_for_date(user, holiday_date)
             if not approved_col_request:
@@ -1595,31 +1595,31 @@ class CSVUploadViewSet(viewsets.ViewSet):
                 return False
 
             award_marker = f"COL_AWARDED:{approved_col_request.id}:{holiday_date.isoformat()}"
-            
+
             # Calculate hours worked if both IN and OUT times provided
             hours_worked = 0
             if morning_in and evening_out:
                 # Convert to datetime for calculation
                 in_dt = datetime.combine(holiday_date, morning_in)
                 out_dt = datetime.combine(holiday_date, evening_out)
-                
+
                 # Calculate hours
                 diff = out_dt - in_dt
                 hours_worked = diff.total_seconds() / 3600
-                
+
                 logger.info(f"[COL_HOURS] {user.username} on {holiday_date}: IN={morning_in}, OUT={evening_out}, Hours={hours_worked:.2f}")
             else:
                 logger.warning(f"[COL_HOURS] Cannot calculate hours for {user.username} on {holiday_date}: IN={morning_in}, OUT={evening_out}")
                 # Don't award COL without proper time data
                 return False
-            
+
             # Determine if it's a half-day claim (FN or AN)
             is_half_day_claim = False
             shift_claimed = None
             if approved_col_request and approved_col_request.form_data:
                 from_noon = approved_col_request.form_data.get('from_noon') or approved_col_request.form_data.get('from_shift')
                 to_noon = approved_col_request.form_data.get('to_noon') or approved_col_request.form_data.get('to_shift')
-                
+
                 # Check if it's a half-day claim (FN or AN, not FULL)
                 if from_noon and str(from_noon).upper() in ['FN', 'AN']:
                     is_half_day_claim = True
@@ -1627,9 +1627,9 @@ class CSVUploadViewSet(viewsets.ViewSet):
                 elif to_noon and str(to_noon).upper() in ['FN', 'AN']:
                     is_half_day_claim = True
                     shift_claimed = str(to_noon).upper()
-                
+
                 logger.info(f"[COL_CLAIM] Found approved COL request: Half day={is_half_day_claim}, Shift={shift_claimed}")
-            
+
             # Determine COL amount based on hours worked
             col_amount = 0
             if is_half_day_claim:
@@ -1691,7 +1691,7 @@ class CSVUploadViewSet(viewsets.ViewSet):
                     record.notes = award_marker
 
                 record.save(update_fields=['fn_status', 'an_status', 'status', 'notes'])
-            
+
             # Update COL balance
             balance, created = StaffLeaveBalance.objects.get_or_create(
                 staff=user,
@@ -1700,10 +1700,10 @@ class CSVUploadViewSet(viewsets.ViewSet):
             )
             balance.balance += col_amount
             balance.save()
-            
+
             logger.info(f"[COL_SUCCESS] Awarded {col_amount} COL to {user.username} for {holiday_date}. New balance: {balance.balance}")
             return True
-            
+
         except Exception as e:
             # Log error but don't fail the upload
             logger.error(f"Failed to create COL for {user.username} on {holiday_date}: {e}")
@@ -1716,9 +1716,9 @@ class CSVUploadViewSet(viewsets.ViewSet):
         """
         import logging
         from staff_requests.models import StaffRequest, StaffLeaveBalance
-        
+
         logger = logging.getLogger(__name__)
-        
+
         try:
             # Check approved COL earn requests for this date across all COL templates
             approved_col_requests = StaffRequest.objects.filter(
@@ -1728,12 +1728,12 @@ class CSVUploadViewSet(viewsets.ViewSet):
             ).filter(
                 Q(template__name__icontains='Compensatory') | Q(template__name__icontains='COL')
             ).select_related('template')
-            
+
             for request in approved_col_requests:
                 form_data = request.form_data
                 # Check if this request covers the holiday_date
                 covers_date = False
-                
+
                 # Check single date field
                 if 'date' in form_data:
                     from datetime import datetime
@@ -1747,24 +1747,24 @@ class CSVUploadViewSet(viewsets.ViewSet):
                             covers_date = True
                     except (ValueError, AttributeError):
                         pass
-                
+
                 # Check date range
                 if not covers_date and 'from_date' in form_data:
                     from datetime import datetime, timedelta
                     try:
                         from_date_val = form_data['from_date']
                         to_date_val = form_data.get('to_date', from_date_val)
-                        
+
                         if isinstance(from_date_val, str):
                             from_date = datetime.strptime(from_date_val, '%Y-%m-%d').date()
                         else:
                             from_date = from_date_val
-                        
+
                         if isinstance(to_date_val, str):
                             to_date = datetime.strptime(to_date_val, '%Y-%m-%d').date()
                         else:
                             to_date = to_date_val
-                        
+
                         # Check if holiday_date is in range
                         current = from_date
                         while current <= to_date:
@@ -1774,7 +1774,7 @@ class CSVUploadViewSet(viewsets.ViewSet):
                             current += timedelta(days=1)
                     except (ValueError, AttributeError):
                         pass
-                
+
                 if covers_date:
                     # This COL request covers the holiday date but staff was absent
                     # Revoke the COL (decrement balance by 1)
@@ -1786,7 +1786,7 @@ class CSVUploadViewSet(viewsets.ViewSet):
                         staff=user,
                         leave_type=template_name
                     ).first()
-                    
+
                     if balance and balance.balance > 0:
                         old_balance = balance.balance
                         balance.balance -= 1
@@ -1796,9 +1796,9 @@ class CSVUploadViewSet(viewsets.ViewSet):
                             f"despite approved COL form. Revoked COL: {old_balance} -> {balance.balance}"
                         )
                         return True
-            
+
             return False
-            
+
         except Exception as e:
             logger.error(f"Failed to check/revoke COL for {user.username} on {holiday_date}: {e}")
             return False
@@ -1857,7 +1857,7 @@ class CSVUploadViewSet(viewsets.ViewSet):
             if mode in ('today', 'yesterday', 'backfill'):
                 # For 'today' mode, always allow updates to ensure re-uploads work
                 allow_update = overwrite or (mode == 'today')
-                
+
                 if morning_in is not None and (allow_update or not record.morning_in):
                     record.morning_in = morning_in
                 if evening_out is not None and (allow_update or not record.evening_out):
@@ -2299,7 +2299,7 @@ class CSVUploadViewSet(viewsets.ViewSet):
     def bulk_delete_month(self, request):
         """
         Bulk delete all attendance records for a specific month/year.
-        
+
         Body parameters:
         - month: integer (1-12)
         - year: integer
@@ -2308,26 +2308,26 @@ class CSVUploadViewSet(viewsets.ViewSet):
         month = request.data.get('month')
         year = request.data.get('year')
         confirm = request.data.get('confirm', False)
-        
+
         if not month or not year:
-            return Response({'error': 'month and year are required'}, 
+            return Response({'error': 'month and year are required'},
                           status=status.HTTP_400_BAD_REQUEST)
-        
+
         try:
             month = int(month)
             year = int(year)
-            
+
             if month < 1 or month > 12:
-                return Response({'error': 'month must be between 1 and 12'}, 
+                return Response({'error': 'month must be between 1 and 12'},
                               status=status.HTTP_400_BAD_REQUEST)
-            
+
             if year < 2020 or year > 2100:
-                return Response({'error': 'year must be between 2020 and 2100'}, 
+                return Response({'error': 'year must be between 2020 and 2100'},
                               status=status.HTTP_400_BAD_REQUEST)
         except (ValueError, TypeError):
-            return Response({'error': 'Invalid month or year'}, 
+            return Response({'error': 'Invalid month or year'},
                           status=status.HTTP_400_BAD_REQUEST)
-        
+
         # Query records for the month
         records = AttendanceRecord.objects.filter(date__year=year, date__month=month)
         count = records.count()
@@ -2379,7 +2379,7 @@ class CSVUploadViewSet(viewsets.ViewSet):
         deletable_records = records.exclude(id__in=protected_ids)
         protected_count = len(protected_ids)
         deletable_count = deletable_records.count()
-        
+
         if not confirm:
             # Preview mode - show what would be deleted
             return Response({
@@ -2395,11 +2395,11 @@ class CSVUploadViewSet(viewsets.ViewSet):
                     f'Set confirm=true to delete {deletable_count} remaining record(s).'
                 )
             })
-        
+
         # Actually delete
         with transaction.atomic():
             deleted_count, _ = deletable_records.delete()
-        
+
         return Response({
             'success': True,
             'month': month,
@@ -2418,7 +2418,7 @@ class HalfDayRequestViewSet(viewsets.ModelViewSet):
     queryset = HalfDayRequest.objects.all()
     serializer_class = HalfDayRequestSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def _get_staff_departments_as_hod_or_ahod(self, user):
         """Get departments where user is HOD or AHOD"""
         try:
@@ -2426,12 +2426,12 @@ class HalfDayRequestViewSet(viewsets.ModelViewSet):
             staff_profile = getattr(user, 'staff_profile', None)
             if not staff_profile:
                 return []
-            
+
             # Get current academic year
             current_year = AcademicYear.objects.filter(is_active=True).first()
             if not current_year:
                 return []
-            
+
             # Get departments where user is active HOD or AHOD
             roles = DepartmentRole.objects.filter(
                 staff=staff_profile,
@@ -2439,33 +2439,33 @@ class HalfDayRequestViewSet(viewsets.ModelViewSet):
                 academic_year=current_year,
                 is_active=True
             ).select_related('department')
-            
+
             return [role.department for role in roles]
         except Exception as e:
             print(f"Error getting HOD/AHOD departments: {e}")
             return []
-    
+
     def _is_hod_or_ahod(self, user):
         """Check if user is HOD or AHOD for any department"""
         return len(self._get_staff_departments_as_hod_or_ahod(user)) > 0
-    
+
     def get_queryset(self):
         """Filter queryset based on user role"""
         user = self.request.user
-        
+
         # HOD/AHOD can see all requests from their department(s)
         departments = self._get_staff_departments_as_hod_or_ahod(user)
         if departments:
             return HalfDayRequest.objects.filter(
                 staff_user__staff_profile__department__in=departments
-            ).select_related('staff_user', 'staff_user__staff_profile', 'staff_user__staff_profile__department', 
+            ).select_related('staff_user', 'staff_user__staff_profile', 'staff_user__staff_profile__department',
                            'reviewed_by').order_by('-requested_at')
-        
+
         # Staff can only see their own requests
         return HalfDayRequest.objects.filter(staff_user=user).select_related(
             'staff_user', 'staff_user__staff_profile', 'reviewed_by'
         ).order_by('-requested_at')
-    
+
     def get_serializer_class(self):
         """Return appropriate serializer based on action"""
         if self.action == 'create':
@@ -2473,39 +2473,39 @@ class HalfDayRequestViewSet(viewsets.ModelViewSet):
         elif self.action in ['review_request'] and self._is_hod_or_ahod(self.request.user):
             return HalfDayRequestReviewSerializer
         return HalfDayRequestSerializer
-    
+
     def perform_create(self, serializer):
         """Create period attendance access request for current user"""
         serializer.save()
-    
+
     @action(detail=False, methods=['get'])
     def my_requests(self, request):
         """Get current user's period attendance access requests"""
         requests = HalfDayRequest.objects.filter(
             staff_user=request.user
         ).select_related('reviewed_by').order_by('-requested_at')
-        
+
         serializer = self.get_serializer(requests, many=True)
         return Response(serializer.data)
-    
+
     @action(detail=False, methods=['get'])
     def pending_for_review(self, request):
         """Get pending period attendance access requests for HOD/AHOD review"""
         if not self._is_hod_or_ahod(request.user):
-            return Response({'error': 'Only HOD or AHOD can access pending reviews'}, 
+            return Response({'error': 'Only HOD or AHOD can access pending reviews'},
                           status=status.HTTP_403_FORBIDDEN)
-        
+
         departments = self._get_staff_departments_as_hod_or_ahod(request.user)
         if not departments:
             return Response([])
-        
+
         # Query using explicit join to handle cases where staff_profile or department might be null
         # Get all users in these departments first
         from academics.models import StaffProfile
         staff_profiles_in_dept = StaffProfile.objects.filter(
             department__in=departments
         ).values_list('user_id', flat=True)
-        
+
         pending = HalfDayRequest.objects.filter(
             staff_user_id__in=staff_profiles_in_dept,
             status='pending'
@@ -2513,39 +2513,39 @@ class HalfDayRequestViewSet(viewsets.ModelViewSet):
             'staff_user', 'staff_user__staff_profile', 'staff_user__staff_profile__department',
             'reviewed_by'
         ).order_by('requested_at')
-        
+
         serializer = self.get_serializer(pending, many=True)
         return Response(serializer.data)
-    
+
     @action(detail=True, methods=['post'])
     def review_request(self, request, pk=None):
         """HOD/AHOD review of period attendance access request"""
         access_request = self.get_object()
-        
+
         # Check if user is HOD/AHOD for the requesting staff's department
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
-            return Response({'error': 'Staff profile required'}, 
+            return Response({'error': 'Staff profile required'},
                           status=status.HTTP_403_FORBIDDEN)
-        
+
         # Get the requesting staff's department
         requesting_staff_dept = getattr(
-            getattr(access_request.staff_user, 'staff_profile', None), 
-            'department', 
+            getattr(access_request.staff_user, 'staff_profile', None),
+            'department',
             None
         )
         if not requesting_staff_dept:
-            return Response({'error': 'Requesting staff has no department'}, 
+            return Response({'error': 'Requesting staff has no department'},
                           status=status.HTTP_400_BAD_REQUEST)
-        
+
         # Check if reviewer is HOD/AHOD for the same department
         from academics.models import DepartmentRole, AcademicYear
         current_year = AcademicYear.objects.filter(is_active=True).first()
         if not current_year:
-            return Response({'error': 'No active academic year'}, 
+            return Response({'error': 'No active academic year'},
                           status=status.HTTP_400_BAD_REQUEST)
-        
+
         reviewer_role = DepartmentRole.objects.filter(
             staff=staff_profile,
             department=requesting_staff_dept,
@@ -2553,55 +2553,55 @@ class HalfDayRequestViewSet(viewsets.ModelViewSet):
             academic_year=current_year,
             is_active=True
         ).first()
-        
+
         if not reviewer_role:
-            return Response({'error': 'You are not HOD/AHOD for this staff member\'s department'}, 
+            return Response({'error': 'You are not HOD/AHOD for this staff member\'s department'},
                           status=status.HTTP_403_FORBIDDEN)
-        
+
         # Both HOD and AHOD can approve/reject requests
         # Get action and review notes
         action_type = request.data.get('action')  # 'approve' or 'reject'
         review_notes = request.data.get('review_notes', '')
-        
+
         if action_type not in ['approve', 'reject']:
-            return Response({'error': 'Action must be "approve" or "reject"'}, 
+            return Response({'error': 'Action must be "approve" or "reject"'},
                           status=status.HTTP_400_BAD_REQUEST)
-        
+
         # Update request
         if action_type == 'approve':
             access_request.status = 'approved'
         else:
             access_request.status = 'rejected'
-        
+
         access_request.reviewed_by = user
         access_request.reviewed_at = timezone.now()
         access_request.review_notes = review_notes
         access_request.save()
-        
+
         serializer = self.get_serializer(access_request)
         return Response({
             'success': True,
             'message': f'Period attendance access request {action_type}d successfully',
             'request': serializer.data
         })
-    
+
     @action(detail=False, methods=['get'])
     def check_period_attendance_access(self, request):
         """Check if current user can mark period attendance for a specific date"""
         date_str = request.query_params.get('date')
         if not date_str:
             return Response({'error': 'date parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         try:
             from datetime import datetime
             target_date = datetime.fromisoformat(date_str).date()
         except:
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         # Check staff attendance record
         try:
             attendance_record = AttendanceRecord.objects.get(user=request.user, date=target_date)
-            
+
             # If staff is present or partial, allow access
             if attendance_record.status in ['present', 'partial']:
                 return Response({
@@ -2616,7 +2616,7 @@ class HalfDayRequestViewSet(viewsets.ModelViewSet):
                     },
                     'pending_request': None
                 })
-            
+
             # If staff is absent, check for approved or pending request
             if attendance_record.status == 'absent':
                 # Check for approved request
@@ -2625,7 +2625,7 @@ class HalfDayRequestViewSet(viewsets.ModelViewSet):
                     attendance_date=target_date,
                     status='approved'
                 ).first()
-                
+
                 if approved_request:
                     return Response({
                         'can_mark_attendance': True,
@@ -2639,14 +2639,14 @@ class HalfDayRequestViewSet(viewsets.ModelViewSet):
                         },
                         'pending_request': None
                     })
-                
+
                 # Check for pending request
                 pending_request = HalfDayRequest.objects.filter(
                     staff_user=request.user,
                     attendance_date=target_date,
                     status='pending'
                 ).first()
-                
+
                 if pending_request:
                     return Response({
                         'can_mark_attendance': False,
@@ -2665,7 +2665,7 @@ class HalfDayRequestViewSet(viewsets.ModelViewSet):
                             'reason': pending_request.reason
                         }
                     })
-                
+
                 # Staff is absent with no request
                 return Response({
                     'can_mark_attendance': False,
@@ -2679,7 +2679,7 @@ class HalfDayRequestViewSet(viewsets.ModelViewSet):
                     },
                     'pending_request': None
                 })
-        
+
         except AttendanceRecord.DoesNotExist:
             # No attendance record yet - allow access (PS hasn't uploaded yet)
             return Response({
@@ -2749,11 +2749,11 @@ class HolidayViewSet(viewsets.ModelViewSet):
         if self.action == 'create':
             return HolidayCreateSerializer
         return HolidaySerializer
-    
+
     def perform_create(self, serializer):
         """Save holiday with the current user"""
         serializer.save(created_by=self.request.user)
-    
+
     def destroy(self, request, *args, **kwargs):
         """Check if holiday is removable before deletion"""
         holiday = self.get_object()
@@ -2780,25 +2780,25 @@ class HolidayViewSet(viewsets.ModelViewSet):
         date_str = request.query_params.get('date')
         if not date_str:
             return Response({'error': 'date parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         try:
             from datetime import datetime
             check_date = datetime.fromisoformat(date_str).date()
         except:
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         # Check if date is a Sunday
         is_sunday = check_date.weekday() == 6
-        
+
         # Check if date is marked as holiday
         holiday = Holiday.objects.filter(date=check_date).first()
-        
+
         return Response({
             'is_holiday': holiday is not None,
             'holiday': HolidaySerializer(holiday).data if holiday else None,
             'is_sunday': is_sunday
         })
-    
+
     @action(detail=False, methods=['post'])
     def generate_sundays(self, request):
         """Generate Sunday holidays for a specific month/year or date range"""
@@ -2806,7 +2806,7 @@ class HolidayViewSet(viewsets.ModelViewSet):
         month = request.data.get('month')
         from_date_str = request.data.get('from_date')
         to_date_str = request.data.get('to_date')
-        
+
         try:
             if from_date_str and to_date_str:
                 from_date = datetime.strptime(from_date_str, '%Y-%m-%d').date()
@@ -2823,7 +2823,7 @@ class HolidayViewSet(viewsets.ModelViewSet):
                     {'error': 'Provide either (year, month) or (from_date, to_date)'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            
+
             # Find all Sundays in the date range
             sundays = []
             current_date = from_date
@@ -2831,7 +2831,7 @@ class HolidayViewSet(viewsets.ModelViewSet):
                 if current_date.weekday() == 6:  # Sunday
                     sundays.append(current_date)
                 current_date += timedelta(days=1)
-            
+
             # Create holiday records for Sundays that don't already exist
             created_count = 0
             for sunday in sundays:
@@ -2847,20 +2847,20 @@ class HolidayViewSet(viewsets.ModelViewSet):
                 )
                 if created:
                     created_count += 1
-            
+
             return Response({
                 'success': True,
                 'total_sundays': len(sundays),
                 'created': created_count,
                 'already_exists': len(sundays) - created_count
             })
-        
+
         except Exception as e:
             return Response(
                 {'error': f'Failed to generate Sundays: {str(e)}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-    
+
     @action(detail=False, methods=['post'])
     def remove_sundays(self, request):
         """Remove Sunday holidays for a specific month/year or date range"""
@@ -2868,7 +2868,7 @@ class HolidayViewSet(viewsets.ModelViewSet):
         month = request.data.get('month')
         from_date_str = request.data.get('from_date')
         to_date_str = request.data.get('to_date')
-        
+
         try:
             if from_date_str and to_date_str:
                 from_date = datetime.strptime(from_date_str, '%Y-%m-%d').date()
@@ -2884,7 +2884,7 @@ class HolidayViewSet(viewsets.ModelViewSet):
                     {'error': 'Provide either (year, month) or (from_date, to_date)'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            
+
             # Delete Sunday holidays in the date range
             deleted_count, _ = Holiday.objects.filter(
                 date__gte=from_date,
@@ -2892,12 +2892,12 @@ class HolidayViewSet(viewsets.ModelViewSet):
                 is_sunday=True,
                 is_removable=True
             ).delete()
-            
+
             return Response({
                 'success': True,
                 'deleted_count': deleted_count
             })
-        
+
         except Exception as e:
             return Response(
                 {'error': f'Failed to remove Sundays: {str(e)}'},
@@ -2910,22 +2910,22 @@ class AttendanceSettingsViewSet(viewsets.ModelViewSet):
     queryset = AttendanceSettings.objects.all()
     serializer_class = AttendanceSettingsSerializer
     permission_classes = [StaffAttendanceConfigPermission]  # HR/PS/Admin can manage settings
-    
+
     def perform_create(self, serializer):
         """Save settings with the current user"""
         serializer.save(updated_by=self.request.user)
-    
+
     def perform_update(self, serializer):
         """Update settings with the current user"""
         serializer.save(updated_by=self.request.user)
-    
+
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def current(self, request):
         """Get current attendance settings for the user's department or global.
         Returns department-specific settings if available, otherwise global settings.
         Available to all staff."""
         result = {}
-        
+
         # Try to get department-specific settings
         dept_settings = None
         if hasattr(request.user, 'staff_profile') and request.user.staff_profile.department:
@@ -2934,7 +2934,7 @@ class AttendanceSettingsViewSet(viewsets.ModelViewSet):
                 departments=request.user.staff_profile.department,
                 enabled=True
             ).first()
-        
+
         if dept_settings:
             # Return department-specific settings with a flag
             from .serializers import DepartmentAttendanceSettingsSerializer
@@ -2955,7 +2955,7 @@ class AttendanceSettingsViewSet(viewsets.ModelViewSet):
             from .serializers import AttendanceSettingsSerializer
             result = AttendanceSettingsSerializer(settings).data
             result['is_department_specific'] = False
-        
+
         return Response(result)
 
 
@@ -2967,15 +2967,15 @@ class DepartmentAttendanceSettingsViewSet(viewsets.ModelViewSet):
     filterset_fields = ['enabled', 'departments']
     search_fields = ['name', 'description']
     ordering_fields = ['name', 'created_at', 'updated_at']
-    
+
     def perform_create(self, serializer):
         """Save with the current user as creator"""
         serializer.save(created_by=self.request.user, updated_by=self.request.user)
-    
+
     def perform_update(self, serializer):
         """Update with the current user"""
         serializer.save(updated_by=self.request.user)
-    
+
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def for_my_department(self, request):
         """Get settings for the current user's department"""
@@ -2984,12 +2984,12 @@ class DepartmentAttendanceSettingsViewSet(viewsets.ModelViewSet):
                 {'error': 'User does not have a department assigned'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         settings = DepartmentAttendanceSettings.objects.filter(
             departments=request.user.staff_profile.department,
             enabled=True
         ).first()
-        
+
         if settings:
             return Response(DepartmentAttendanceSettingsSerializer(settings).data)
         else:

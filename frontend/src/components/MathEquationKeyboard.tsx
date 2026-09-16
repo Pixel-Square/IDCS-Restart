@@ -75,7 +75,7 @@ export default function MathEquationKeyboard({ isOpen, onClose, onApply, initial
             // Can track real-time if needed
           }}
         />
-        
+
         <div style={{ marginTop: '12px', fontSize: '12px', color: '#6b7280' }}>
           Tip: You can use LaTeX commands like \matrix, \frac, \sqrt, etc.
         </div>
@@ -89,7 +89,7 @@ export default function MathEquationKeyboard({ isOpen, onClose, onApply, initial
         justifyContent: 'flex-end',
         gap: '8px'
       }}>
-        <button 
+        <button
           onClick={onClose}
           style={{
             padding: '6px 12px',
@@ -102,7 +102,7 @@ export default function MathEquationKeyboard({ isOpen, onClose, onApply, initial
         >
           Cancel
         </button>
-        <button 
+        <button
           onClick={() => {
             if (mfRef.current) {
               onApply(mfRef.current.value);

@@ -361,7 +361,7 @@ class FinalInternalMarkAdmin(admin.ModelAdmin):
         sec = getattr(ta, 'section', None)
         if sec:
             return getattr(sec, 'name', '-')
-            
+
         category = None
         if getattr(ta, 'elective_subject', None):
             parent = getattr(ta.elective_subject, 'parent', None)
@@ -370,7 +370,7 @@ class FinalInternalMarkAdmin(admin.ModelAdmin):
         elif getattr(ta, 'curriculum_row', None) and getattr(ta.curriculum_row, 'is_elective', False):
             if getattr(ta.curriculum_row, 'category', None):
                 category = str(ta.curriculum_row.category).lower()
-                
+
         if category is not None:
             if 'open elective' in category or 'oe' in category.split():
                 return 'OE'
@@ -502,7 +502,7 @@ class CourseQuestionBankAdmin(admin.ModelAdmin):
         ('Finalization', {'fields': ('is_finalized', 'finalized_by', 'finalized_at')}),
         ('Audit', {'fields': ('created_by', 'created_at', 'updated_at')}),
     )
-    
+
     def question_text_preview(self, obj):
         return obj.question_text[:60] + '...' if len(obj.question_text) > 60 else obj.question_text
     question_text_preview.short_description = 'Question'
@@ -519,7 +519,7 @@ class CourseQuestionBankLogAdmin(admin.ModelAdmin):
         ('Action Details', {'fields': ('action', 'edited_by', 'edited_at')}),
         ('Changes', {'fields': ('old_values', 'new_values'), 'classes': ('collapse',)}),
     )
-    
+
     def get_course_code(self, obj):
         return obj.question_bank.course_code if obj.question_bank else '-'
     get_course_code.short_description = 'Course Code'

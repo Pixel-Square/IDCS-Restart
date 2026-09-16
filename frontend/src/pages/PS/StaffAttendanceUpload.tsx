@@ -351,7 +351,7 @@ const StaffAttendanceUpload: React.FC = () => {
         year: sundayYear,
         month: sundayMonth
       });
-      
+
       const data = response.data;
       alert(`Generated ${data.created} new Sunday holidays. ${data.already_exists} already existed.`);
       fetchHolidays();
@@ -373,7 +373,7 @@ const StaffAttendanceUpload: React.FC = () => {
         year: sundayYear,
         month: sundayMonth
       });
-      
+
       const data = response.data;
       alert(`Removed ${data.deleted_count} Sunday holidays.`);
       fetchHolidays();
@@ -388,7 +388,7 @@ const StaffAttendanceUpload: React.FC = () => {
     try {
       const response = await apiClient.get(`${getApiBase()}/api/staff-attendance/settings/current/`);
       const settings = response.data;
-      
+
       // Convert time format from "HH:MM:SS" to "HH:MM"
       setInTimeLimit(settings.attendance_in_time_limit.substring(0, 5));
       setOutTimeLimit(settings.attendance_out_time_limit.substring(0, 5));
@@ -515,7 +515,7 @@ const StaffAttendanceUpload: React.FC = () => {
         essl_skip_minutes: esslSkippingTime,
         apply_time_based_absence: applyTimeLimits
       });
-      
+
       alert('Attendance settings saved successfully!');
     } catch (err: any) {
       alert(err.response?.data?.error || 'Failed to save settings');
@@ -570,7 +570,7 @@ const StaffAttendanceUpload: React.FC = () => {
       formData.append('overwrite_existing', overwriteExisting ? 'true' : 'false');
       formData.append('month', uploadMonth.toString());
       formData.append('year', uploadYear.toString());
-      
+
       // Calculate upload_date from month, year, and date
       const uploadDateStr = `${uploadYear}-${uploadMonth.toString().padStart(2, '0')}-${uploadDate.toString().padStart(2, '0')}`;
       formData.append('upload_date', uploadDateStr);
@@ -607,7 +607,7 @@ const StaffAttendanceUpload: React.FC = () => {
       formData.append('overwrite_existing', overwriteExisting ? 'true' : 'false');
       formData.append('month', uploadMonth.toString());
       formData.append('year', uploadYear.toString());
-      
+
       // Calculate upload_date from month, year, and date
       const uploadDateStr = `${uploadYear}-${uploadMonth.toString().padStart(2, '0')}-${uploadDate.toString().padStart(2, '0')}`;
       formData.append('upload_date', uploadDateStr);
@@ -982,7 +982,7 @@ const StaffAttendanceUpload: React.FC = () => {
             Generate or remove Sunday holidays for a specific month
           </p>
         </div>
-        
+
         <div className="p-6">
           <div className="flex items-end gap-4 flex-wrap">
             <div>
@@ -1001,7 +1001,7 @@ const StaffAttendanceUpload: React.FC = () => {
                 ))}
               </select>
             </div>
-            
+
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Year
@@ -1015,7 +1015,7 @@ const StaffAttendanceUpload: React.FC = () => {
                 className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-24"
               />
             </div>
-            
+
             <button
               onClick={handleGenerateSundays}
               disabled={sundayLoading}
@@ -1024,7 +1024,7 @@ const StaffAttendanceUpload: React.FC = () => {
               <Plus className="h-4 w-4 mr-2" />
               {sundayLoading ? 'Generating...' : 'Generate Sundays'}
             </button>
-            
+
             <button
               onClick={handleRemoveSundays}
               disabled={sundayLoading}
@@ -1034,7 +1034,7 @@ const StaffAttendanceUpload: React.FC = () => {
               {sundayLoading ? 'Removing...' : 'Remove Sundays'}
             </button>
           </div>
-          
+
           <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
             <p className="text-sm text-blue-800">
               <strong>Note:</strong> Use "Generate Sundays" to automatically mark all Sundays in the selected month as holidays.
@@ -1055,7 +1055,7 @@ const StaffAttendanceUpload: React.FC = () => {
             Create configurations for different department groups (e.g., Type 1 for CSE/Mech, Type 2 for EEE/ECE)
           </p>
         </div>
-        
+
         <div className="p-6 space-y-4">
           {/* Add Button */}
           <div className="flex justify-end">
@@ -1546,7 +1546,7 @@ const StaffAttendanceUpload: React.FC = () => {
             Default time limits used when staff's department has no specific configuration
           </p>
         </div>
-        
+
         <div className="p-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
             <div>
@@ -1563,7 +1563,7 @@ const StaffAttendanceUpload: React.FC = () => {
                 If staff arrives after this time, mark as absent
               </p>
             </div>
-            
+
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Out Time Limit
@@ -1620,7 +1620,7 @@ const StaffAttendanceUpload: React.FC = () => {
               </p>
             </div>
           </div>
-          
+
           <div className="mb-4">
             <label className="flex items-center space-x-2">
               <input
@@ -1637,7 +1637,7 @@ const StaffAttendanceUpload: React.FC = () => {
               When enabled, attendance will be marked as absent if time limits are violated during CSV upload
             </p>
           </div>
-          
+
           <button
             onClick={handleSaveSettings}
             disabled={loadingSettings}
@@ -1646,11 +1646,11 @@ const StaffAttendanceUpload: React.FC = () => {
             <CheckCircle className="h-4 w-4 mr-2" />
             {loadingSettings ? 'Saving...' : 'Save Time Settings'}
           </button>
-          
+
           <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-md">
             <p className="text-sm text-amber-800">
-              <strong>How it works:</strong> When staff are marked as absent during CSV upload, these global time limits are used 
-              <strong> only if</strong> their department doesn't have a specific configuration. Departments with specific 
+              <strong>How it works:</strong> When staff are marked as absent during CSV upload, these global time limits are used
+              <strong> only if</strong> their department doesn't have a specific configuration. Departments with specific
               Type configurations will use those limits instead.
             </p>
           </div>
@@ -1915,10 +1915,10 @@ const StaffAttendanceUpload: React.FC = () => {
                       </div>
                       <div className="mt-1 text-sm text-gray-600">
                         <span className="font-mono bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
-                          {new Date(holiday.date).toLocaleDateString('en-US', { 
-                            year: 'numeric', 
-                            month: 'short', 
-                            day: 'numeric' 
+                          {new Date(holiday.date).toLocaleDateString('en-US', {
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric'
                           })}
                         </span>
                       </div>

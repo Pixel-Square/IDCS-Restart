@@ -70,7 +70,7 @@ class ActiveStudentPollsView(APIView):
 
             batch = section.batch
             semester = section.semester
-            
+
             home_dept = student_profile.home_department
             if not home_dept and getattr(section, 'batch', None) and getattr(section.batch, 'course', None):
                 home_dept = section.batch.course.department
@@ -84,15 +84,15 @@ class ActiveStudentPollsView(APIView):
 
             # Start with active polls
             query = Q(is_active=True)
-            
+
             # Match batch year if set
             if batch and getattr(batch, 'batch_year_id', None):
                 query &= (Q(batch_year_id__isnull=True) | Q(batch_year_id=batch.batch_year_id))
-            
+
             # Match semester if set
             if semester and getattr(semester, 'number', None):
                 query &= (Q(semester__isnull=True) | Q(semester=semester.number))
-                
+
             # Match department group if set
             if dept_groups:
                 query &= (Q(department_group_id__isnull=True) | Q(department_group_id__in=dept_groups))
@@ -121,7 +121,7 @@ class SubmitElectiveChoiceView(APIView):
 
             with transaction.atomic():
                 poll_subject = ElectivePollSubject.objects.select_for_update().get(id=poll_subject_id, poll=poll)
-                
+
                 # Check if the student has already chosen an elective for this poll
                 existing_choice = ElectiveChoice.objects.filter(
                     student=student_profile,
@@ -129,14 +129,14 @@ class SubmitElectiveChoiceView(APIView):
                 ).first()
                 if existing_choice:
                     return Response({'detail': 'You have already submitted a choice for this poll'}, status=status.HTTP_400_BAD_REQUEST)
-                
+
                 # Check seats
                 if poll_subject.seats is not None:
                     if poll_subject.seats <= 0:
                         return Response({'detail': 'Seats full for this subject'}, status=status.HTTP_400_BAD_REQUEST)
                     poll_subject.seats -= 1
                     poll_subject.save()
-                
+
                 # Get the active academic year to associate with the choice
                 from academics.models import AcademicYear
                 current_year = AcademicYear.objects.filter(is_active=True).first()
@@ -147,7 +147,7 @@ class SubmitElectiveChoiceView(APIView):
                     academic_year=current_year,
                     created_by=request.user
                 )
-            
+
             return Response({'detail': 'Choice submitted successfully'}, status=status.HTTP_201_CREATED)
         except ElectivePoll.DoesNotExist:
             return Response({'detail': 'Active poll not found'}, status=status.HTTP_404_NOT_FOUND)

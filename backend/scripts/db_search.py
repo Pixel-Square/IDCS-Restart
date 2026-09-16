@@ -11,14 +11,14 @@ def run():
                 print(f"Table: {t}")
                 cursor.execute(f"SELECT COUNT(*) FROM \"{t}\"")
                 print(f"  Count: {cursor.fetchone()[0]}")
-        
+
         print("\n--- Searching for External Emails in accounts_user ---")
         cursor.execute("SELECT id, username, email FROM accounts_user WHERE email NOT LIKE '%@krct.ac.in%' AND email NOT LIKE '%@krgi.ac.in%' AND email != ''")
         external_users = cursor.fetchall()
         print(f"Found {len(external_users)} potential external users.")
         for user in external_users[:20]:
             print(user)
-        
+
         print("\n--- DB Connection Info ---")
         from django.db import connections
         db_config = connections['default'].settings_dict

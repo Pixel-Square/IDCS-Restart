@@ -71,7 +71,7 @@ export default function RequestDetailsModal({ request, onClose }: Props) {
               <X size={24} />
             </button>
           </div>
-          
+
           {/* Status Badge */}
           <div className="mt-3">
             <span
@@ -136,12 +136,12 @@ export default function RequestDetailsModal({ request, onClose }: Props) {
           {/* Workflow Progress Timeline */}
           <div>
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Approval Timeline</h3>
-            
+
             {request.workflow_progress && request.workflow_progress.length > 0 ? (
               <div className="relative">
                 {/* Vertical Line */}
                 <div className="absolute left-6 top-6 bottom-6 w-0.5 bg-gray-200" />
-                
+
                 <div className="space-y-6">
                   {request.workflow_progress.map((step, index) => {
                     const status = getStepStatus(step);
@@ -208,7 +208,7 @@ export default function RequestDetailsModal({ request, onClose }: Props) {
           </div>
 
           {/* Approval Logs (if no workflow_progress) */}
-          {(!request.workflow_progress || request.workflow_progress.length === 0) && 
+          {(!request.workflow_progress || request.workflow_progress.length === 0) &&
            request.approval_logs && request.approval_logs.length > 0 && (
             <div className="mt-6">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Approval History</h3>

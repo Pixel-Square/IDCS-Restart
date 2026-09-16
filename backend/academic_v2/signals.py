@@ -29,10 +29,10 @@ def sync_teaching_assignment_to_acv2_section(sender, instance, **kwargs):
     try:
         from academic_v2.models import AcV2Section, AcV2Course, AcV2ClassType
         from academics.models import Subject as AcademicsSubject
-        
+
         # Get the associated staff user
         staff_user = getattr(getattr(instance, 'staff', None), 'user', None)
-        
+
         # Check if the assignment is active and has a section
         sec = instance.section
         if not getattr(instance, 'is_active', True) or not sec:
@@ -54,7 +54,7 @@ def sync_teaching_assignment_to_acv2_section(sender, instance, **kwargs):
                     s.faculty_user = staff_user
                     s.save(update_fields=['faculty_user'])
             return
-        
+
         course_code = (cr.course_code if cr else None) or (getattr(es, 'course_code', None)) or '-'
         course_name = (cr.course_name if cr else None) or (getattr(es, 'course_name', None)) or '-'
         class_type_code = getattr(es, 'class_type', None) or getattr(cr, 'class_type', None) or 'THEORY'
@@ -63,14 +63,14 @@ def sync_teaching_assignment_to_acv2_section(sender, instance, **kwargs):
             or getattr(es, 'question_paper_type', None)
             or ''
         ).strip()
-        
+
         # Find or create AcademicsSubject fallback
         subject = instance.subject or (
             AcademicsSubject.objects.filter(code=course_code).first()
             if course_code and course_code != '-' else None
         )
         semester = sec.semester if sec else None
-        
+
         if not subject and semester and course_code and course_code != '-':
             try:
                 # Try to get or create to avoid race conditions
@@ -91,7 +91,7 @@ def sync_teaching_assignment_to_acv2_section(sender, instance, **kwargs):
                 AcV2ClassType.objects.filter(is_active=True, short_code__iexact=class_type_code).first()
                 or AcV2ClassType.objects.filter(is_active=True, name__iexact=class_type_code).first()
             )
-            
+
             acv2_course, created = AcV2Course.objects.get_or_create(
                 subject=subject,
                 semester=semester,
@@ -111,7 +111,7 @@ def sync_teaching_assignment_to_acv2_section(sender, instance, **kwargs):
                 acv2_course.class_type = acv2_ct
                 acv2_course.class_type_name = acv2_ct.display_name if acv2_ct else class_type_code
                 acv2_course.save(update_fields=['class_type', 'class_type_name'])
-                
+
         if acv2_course:
             # Create/update AcV2Section
             acv2_sec, created = AcV2Section.objects.get_or_create(

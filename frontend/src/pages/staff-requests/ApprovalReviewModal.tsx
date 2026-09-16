@@ -221,7 +221,7 @@ export default function ApprovalReviewModal({ request, onClose, onProcessed }: A
           {/* Decision Section */}
           <div className="bg-gray-50 rounded-lg p-6 border-2 border-gray-200">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Your Decision</h3>
-            
+
             {/* Action Selection */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">

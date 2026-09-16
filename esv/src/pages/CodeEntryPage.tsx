@@ -62,7 +62,7 @@ export default function CodeEntryPage() {
     try {
       // 1. Check Backend DB (Primary)
       const dbResults = await fetchFacultyAllocations(code);
-      
+
       if (dbResults && dbResults.length > 0) {
         sessionStorage.setItem('esv-faculty-code', code);
         navigate('/profile');

@@ -157,12 +157,12 @@ def run_build(
             # Wait for container completion with timeout
             wait_res = container.wait(timeout=timeout_seconds)
             exit_code = wait_res.get('StatusCode', 0)
-            
+
             stdout = container.logs(stdout=True, stderr=False).decode('utf-8', errors='replace')
             stderr = container.logs(stdout=False, stderr=True).decode('utf-8', errors='replace')
-            
+
             container.remove(force=True)
-            
+
             if exit_code != 0:
                 return {
                     'success': False,
@@ -171,7 +171,7 @@ def run_build(
                     'exit_code': exit_code,
                 }
             return {'success': True, 'stdout': stdout + stderr, 'stderr': '', 'exit_code': 0}
-            
+
         except Exception as wait_err:
             try:
                 container.remove(force=True)

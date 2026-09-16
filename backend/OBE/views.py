@@ -5403,7 +5403,7 @@ def lab_published_sheet(request, assessment: str, subject_id: str):
     except OperationalError:
         data = None
     return Response({'subject': {'code': subject.code, 'name': subject.name}, 'assessment': assessment, 'data': data})
-    
+
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -10212,7 +10212,7 @@ def edit_request_reject(request, req_id: int):
 @permission_classes([IsAuthenticated])
 def get_reset_notifications(request):
     """Get unread reset notifications for the authenticated staff member.
-    
+
     Query params:
     - teaching_assignment_id (optional): filter for specific teaching assignment
     """
@@ -10225,7 +10225,7 @@ def get_reset_notifications(request):
     from academics.models import TeachingAssignment
 
     ta_id = request.query_params.get('teaching_assignment_id')
-    
+
     qs = IqacResetNotification.objects.filter(
         teaching_assignment__staff=staff_profile,
         teaching_assignment__is_active=True,
@@ -10260,7 +10260,7 @@ def get_reset_notifications(request):
 @permission_classes([IsAuthenticated])
 def dismiss_reset_notifications(request):
     """Mark reset notifications as read.
-    
+
     Body:
     - notification_ids: list of notification IDs to mark as read
     """
@@ -10296,7 +10296,7 @@ def list_course_questions(request, course_code: str):
         questions = CourseQuestionBank.objects.filter(
             course_code=course_code
         ).order_by('s_no')
-        
+
         serializer = CourseQuestionBankSerializer(questions, many=True)
         return Response({
             'status': 'success',
@@ -10324,17 +10324,17 @@ def create_course_question(request):
             'status': 'error',
             'detail': 'Staff profile not found'
         }, status=status.HTTP_403_FORBIDDEN)
-    
+
     try:
         data = request.data
         course_code = str(data.get('course_code', '')).strip().upper()
-        
+
         if not course_code:
             return Response({
                 'status': 'error',
                 'detail': 'course_code is required'
             }, status=status.HTTP_400_BAD_REQUEST)
-        
+
         # Get or create question
         question, created = CourseQuestionBank.objects.get_or_create(
             course_code=course_code,
@@ -10352,7 +10352,7 @@ def create_course_question(request):
                 'created_by': staff,
             }
         )
-        
+
         if not created:
             # Update existing question
             question.question_text = data.get('question_text', question.question_text)
@@ -10364,7 +10364,7 @@ def create_course_question(request):
             question.question_type = data.get('question_type', question.question_type)
             question.college = data.get('college', question.college)
             question.save()
-        
+
         # Log the action
         CourseQuestionBankLog.objects.create(
             question_bank=question,
@@ -10379,14 +10379,14 @@ def create_course_question(request):
                 'marks': float(question.marks) if question.marks else None,
             }
         )
-        
+
         serializer = CourseQuestionBankSerializer(question)
         return Response({
             'status': 'success',
             'question': serializer.data,
             'created': created
         }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
-        
+
     except Exception as e:
         return Response({
             'status': 'error',
@@ -10407,10 +10407,10 @@ def update_course_question(request, question_id: int):
             'status': 'error',
             'detail': 'Staff profile not found'
         }, status=status.HTTP_403_FORBIDDEN)
-    
+
     try:
         question = CourseQuestionBank.objects.get(id=question_id)
-        
+
         # Store old values for audit log
         old_values = {
             'question_text': question.question_text,
@@ -10422,7 +10422,7 @@ def update_course_question(request, question_id: int):
             'marks': float(question.marks) if question.marks else None,
             'college': question.college,
         }
-        
+
         # Update fields
         data = request.data
         question.question_text = data.get('question_text', question.question_text)
@@ -10434,7 +10434,7 @@ def update_course_question(request, question_id: int):
         question.marks = data.get('marks', question.marks)
         question.college = data.get('college', question.college)
         question.save()
-        
+
         # Log the action
         CourseQuestionBankLog.objects.create(
             question_bank=question,
@@ -10452,13 +10452,13 @@ def update_course_question(request, question_id: int):
                 'college': question.college,
             }
         )
-        
+
         serializer = CourseQuestionBankSerializer(question)
         return Response({
             'status': 'success',
             'question': serializer.data
         })
-        
+
     except CourseQuestionBank.DoesNotExist:
         return Response({
             'status': 'error',
@@ -10479,12 +10479,12 @@ def delete_course_question(request, question_id: int):
     try:
         question = CourseQuestionBank.objects.get(id=question_id)
         question.delete()
-        
+
         return Response({
             'status': 'success',
             'detail': 'Question deleted successfully'
         })
-        
+
     except CourseQuestionBank.DoesNotExist:
         return Response({
             'status': 'error',
@@ -10510,22 +10510,22 @@ def finalize_course_questions(request, course_code: str):
             'status': 'error',
             'detail': 'Staff profile not found'
         }, status=status.HTTP_403_FORBIDDEN)
-    
+
     try:
         course_code = course_code.strip().upper()
         now = timezone.now()
-        
+
         # Finalize all questions for this course
         questions = CourseQuestionBank.objects.filter(course_code=course_code)
         updated_count = 0
-        
+
         for question in questions:
             if not question.is_finalized:
                 question.is_finalized = True
                 question.finalized_by = staff
                 question.finalized_at = now
                 question.save()
-                
+
                 # Log the action
                 CourseQuestionBankLog.objects.create(
                     question_bank=question,
@@ -10534,13 +10534,13 @@ def finalize_course_questions(request, course_code: str):
                     new_values={'is_finalized': True}
                 )
                 updated_count += 1
-        
+
         return Response({
             'status': 'success',
             'detail': f'Finalized {updated_count} questions',
             'finalized_count': updated_count
         })
-        
+
     except Exception as e:
         return Response({
             'status': 'error',
@@ -10561,21 +10561,21 @@ def unfinalize_course_questions(request, course_code: str):
             'status': 'error',
             'detail': 'Staff profile not found'
         }, status=status.HTTP_403_FORBIDDEN)
-    
+
     try:
         course_code = course_code.strip().upper()
-        
+
         # Unfinalize all questions for this course
         questions = CourseQuestionBank.objects.filter(course_code=course_code)
         updated_count = 0
-        
+
         for question in questions:
             if question.is_finalized:
                 question.is_finalized = False
                 question.finalized_by = None
                 question.finalized_at = None
                 question.save()
-                
+
                 # Log the action
                 CourseQuestionBankLog.objects.create(
                     question_bank=question,
@@ -10585,13 +10585,13 @@ def unfinalize_course_questions(request, course_code: str):
                     new_values={'is_finalized': False}
                 )
                 updated_count += 1
-        
+
         return Response({
             'status': 'success',
             'detail': f'Unfinalized {updated_count} questions',
             'unffinalized_count': updated_count
         })
-        
+
     except Exception as e:
         return Response({
             'status': 'error',
@@ -10606,20 +10606,20 @@ def get_question_bank_logs(request, course_code: str):
     """Get audit logs for a course's question bank."""
     try:
         course_code = course_code.strip().upper()
-        
+
         logs = CourseQuestionBankLog.objects.filter(
             question_bank__course_code=course_code
         ).select_related('question_bank', 'edited_by__user').order_by('-edited_at')
-        
+
         serializer = CourseQuestionBankLogSerializer(logs, many=True)
-        
+
         return Response({
             'status': 'success',
             'course_code': course_code,
             'logs': serializer.data,
             'count': len(serializer.data)
         })
-        
+
     except Exception as e:
         return Response({
             'status': 'error',

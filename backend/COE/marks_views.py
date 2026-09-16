@@ -14,7 +14,7 @@ from .models import CoeStudentMarks
 class CoeStudentMarksView(APIView):
     """
     Row-based marks storage endpoints.
-    
+
     GET  ?dummy=<dummy_number>    → Single entry: { dummy_number, marks, qp_type }
     GET  (no params)              → All entries: { entries: [...] }
     POST { dummy_number, marks, qp_type }  → { saved: true }
@@ -24,7 +24,7 @@ class CoeStudentMarksView(APIView):
 
     def get(self, request):
         dummy = (request.query_params.get('dummy') or '').strip()
-        
+
         if dummy:
             # Get single entry
             try:
@@ -107,7 +107,7 @@ class CoeStudentMarksView(APIView):
 class CoeStudentMarksBulkView(APIView):
     """
     Bulk operations for marks.
-    
+
     GET  ?dummies=D1,D2,D3  → { entries: [...] } for specific dummies
     POST { dummies: [...] } → { entries: [...] } for specific dummies
     """
@@ -115,7 +115,7 @@ class CoeStudentMarksBulkView(APIView):
     def get(self, request):
         dummies_param = request.query_params.get('dummies', '')
         dummies = [d.strip() for d in dummies_param.split(',') if d.strip()]
-        
+
         if dummies:
             entries = CoeStudentMarks.objects.filter(
                 dummy_number__in=dummies
@@ -124,7 +124,7 @@ class CoeStudentMarksBulkView(APIView):
             entries = CoeStudentMarks.objects.all().values(
                 'dummy_number', 'marks', 'qp_type'
             )
-        
+
         return Response({'entries': list(entries)})
 
     def post(self, request):
@@ -134,9 +134,9 @@ class CoeStudentMarksBulkView(APIView):
                 {'detail': 'dummies array is required.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        
+
         entries = CoeStudentMarks.objects.filter(
             dummy_number__in=dummies
         ).values('dummy_number', 'marks', 'qp_type')
-        
+
         return Response({'entries': list(entries)})

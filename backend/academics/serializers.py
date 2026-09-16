@@ -18,11 +18,11 @@ from academics.models import AttendanceUnlockRequest
 
 class SemesterSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField(read_only=True)
-    
+
     class Meta:
         model = Semester
         fields = ('id', 'number', 'name')
-    
+
     def get_name(self, obj):
         return f"SEM{obj.number}"
 
@@ -449,7 +449,7 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
                 return str(category).title()
         except Exception:
             pass
-            
+
         return None
 
     def get_elective_subject_id(self, obj):
@@ -466,7 +466,7 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
                 return None
             user = getattr(st, 'user', None)
             return {
-                'id': st.id, 
+                'id': st.id,
                 'user': {
                     'username': getattr(user, 'username', None),
                     'first_name': getattr(user, 'first_name', None),
@@ -482,7 +482,7 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
             section = getattr(obj, 'section', None)
             if not section:
                 return None
-            
+
             batch = getattr(section, 'batch', None)
             batch_info = None
             if batch:
@@ -506,10 +506,10 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
                     'name': getattr(dept, 'name', None),
                     'short_name': getattr(dept, 'short_name', None),
                 }
-                
+
             return {
-                'id': section.id, 
-                'name': getattr(section, 'name', None), 
+                'id': section.id,
+                'name': getattr(section, 'name', None),
                 'batch': batch_info,
                 'semester': semester_info,
                 'department': dept_info,
@@ -522,12 +522,12 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
             row = getattr(obj, 'curriculum_row', None)
             if not row:
                 return None
-                
+
             semester = getattr(row, 'semester', None)
             semester_info = None
             if semester:
                 semester_info = getattr(semester, 'number', getattr(semester, 'name', str(semester)))
-                
+
             return {
                 'id': row.id,
                 'course_code': getattr(row, 'course_code', None),
@@ -854,8 +854,8 @@ class MixedSectionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = MixedSection
-        fields = ('id', 'name', 'batch', 'batch_id', 'batch_name', 'batch_department_id', 'batch_department_name', 
-                  'sections', 'section_ids', 'sections_detail', 'semester', 'semester_id', 'semester_number', 
+        fields = ('id', 'name', 'batch', 'batch_id', 'batch_name', 'batch_department_id', 'batch_department_name',
+                  'sections', 'section_ids', 'sections_detail', 'semester', 'semester_id', 'semester_number',
                   'academic_year', 'description', 'is_active', 'created_at', 'updated_at')
         read_only_fields = ('id', 'created_at', 'updated_at')
 
@@ -873,8 +873,8 @@ class AttendanceUnlockRequestSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AttendanceUnlockRequest
-        fields = ('id', 'session', 'session_id', 'session_display', 'requested_by', 'requested_by_display', 
-                 'requested_at', 'status', 'reviewed_by', 'reviewed_by_display', 'reviewed_at', 
+        fields = ('id', 'session', 'session_id', 'session_display', 'requested_by', 'requested_by_display',
+                 'requested_at', 'status', 'reviewed_by', 'reviewed_by_display', 'reviewed_at',
                  'hod_status', 'hod_reviewed_by', 'hod_reviewed_by_display', 'hod_reviewed_at', 'hod_note',
                  'note', 'final_note', 'department', 'request_type')
         read_only_fields = ('requested_at',)
@@ -889,7 +889,7 @@ class AttendanceUnlockRequestSerializer(serializers.ModelSerializer):
     def get_request_type(self, obj):
         """AttendanceUnlockRequest is always period attendance"""
         return 'period'
-    
+
     def get_department(self, obj):
         """Get the department for this request via section -> batch -> course -> department"""
         try:
@@ -953,8 +953,8 @@ class DailyAttendanceUnlockRequestSerializer(serializers.ModelSerializer):
     class Meta:
         from .models import DailyAttendanceUnlockRequest
         model = DailyAttendanceUnlockRequest
-        fields = ('id', 'session', 'session_id', 'session_display', 'requested_by', 'requested_by_display', 
-                 'requested_at', 'status', 'reviewed_by', 'reviewed_by_display', 'reviewed_at', 
+        fields = ('id', 'session', 'session_id', 'session_display', 'requested_by', 'requested_by_display',
+                 'requested_at', 'status', 'reviewed_by', 'reviewed_by_display', 'reviewed_at',
                  'hod_status', 'hod_reviewed_by', 'hod_reviewed_by_display', 'hod_reviewed_at', 'hod_note',
                  'note', 'final_note', 'department')
         read_only_fields = ('requested_at',)
@@ -1082,8 +1082,8 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
             if user:
                 name = f"{user.first_name} {user.last_name}".strip() or user.username
             return {
-                'id': st.id, 
-                'user': getattr(user, 'username', None), 
+                'id': st.id,
+                'user': getattr(user, 'username', None),
                 'staff_id': getattr(st, 'staff_id', None),
                 'name': name
             }
@@ -1100,8 +1100,8 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
             if user:
                 name = f"{user.first_name} {user.last_name}".strip() or user.username
             return {
-                'id': st.id, 
-                'user': getattr(user, 'username', None), 
+                'id': st.id,
+                'user': getattr(user, 'username', None),
                 'staff_id': getattr(st, 'staff_id', None),
                 'name': name
             }
@@ -1188,7 +1188,7 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
         curriculum_row_id = validated_data.pop('curriculum_row_id', None) or self.initial_data.get('curriculum_row_id')
         staff_id = validated_data.pop('staff_id', None)
         section_obj = validated_data.get('section')
-        
+
         # default academic year
         if 'academic_year' not in validated_data or not validated_data.get('academic_year'):
             ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
@@ -1203,7 +1203,7 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
             except StaffProfile.DoesNotExist:
                 pass  # staff will be set in view to current user's staff_profile
         # Otherwise, staff will be set in view to current user's staff_profile when creating
-        
+
         # attach curriculum_row if provided
         if curriculum_row_id:
             try:
@@ -1254,7 +1254,7 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
         student_ids = validated_data.pop('student_ids', None)
         curriculum_row_id = validated_data.pop('curriculum_row_id', None) or self.initial_data.get('curriculum_row_id')
         staff_id = validated_data.pop('staff_id', None)
-        
+
         # Handle staff assignment update
         if staff_id is not None:
             try:
@@ -1262,7 +1262,7 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
                 validated_data['staff'] = staff
             except StaffProfile.DoesNotExist:
                 pass  # Keep existing staff if invalid ID provided
-        
+
         if curriculum_row_id is not None:
             try:
                 from curriculum.models import CurriculumDepartment
@@ -1381,7 +1381,7 @@ class PeriodAttendanceSessionSerializer(serializers.ModelSerializer):
             if not b:
                 return None
             return {
-                'id': b.id, 
+                'id': b.id,
                 'name': b.name,
                 'student_count': b.students.count() if hasattr(b, 'students') else 0
             }
@@ -1409,13 +1409,13 @@ class StaffProfileSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
     last_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
     email = serializers.EmailField(write_only=True, required=False, allow_blank=True)
-    
+
     # Read-only user info
     user_username = serializers.CharField(source='user.username', read_only=True)
     user_first_name = serializers.CharField(source='user.first_name', read_only=True)
     user_last_name = serializers.CharField(source='user.last_name', read_only=True)
     user_email = serializers.CharField(source='user.email', read_only=True)
-    
+
     # Roles
     roles = serializers.ListField(
         child=serializers.CharField(),
@@ -1424,7 +1424,7 @@ class StaffProfileSerializer(serializers.ModelSerializer):
         allow_empty=True
     )
     user_roles = serializers.SerializerMethodField(read_only=True)
-    
+
     class Meta:
         model = StaffProfile
         fields = [
@@ -1438,21 +1438,21 @@ class StaffProfileSerializer(serializers.ModelSerializer):
             'roles', 'user_roles',
         ]
         read_only_fields = ['id', 'mobile_number_verified_at', 'internal_id']
-    
+
     def get_user_roles(self, obj):
         """Get user roles."""
         try:
             return [r.name for r in obj.user.roles.all()]
         except Exception:
             return []
-    
+
     def create(self, validated_data):
         """Create a staff profile with a new user."""
         from django.contrib.auth import get_user_model
         from accounts.models import Role
-        
+
         User = get_user_model()
-        
+
         # Extract user-related fields
         username = validated_data.pop('username', None)
         password = validated_data.pop('password', None)
@@ -1460,12 +1460,12 @@ class StaffProfileSerializer(serializers.ModelSerializer):
         last_name = validated_data.pop('last_name', '')
         email = validated_data.pop('email', '')
         roles = validated_data.pop('roles', [])
-        
+
         if not username:
             raise serializers.ValidationError({'username': 'Username is required for new staff.'})
         if not password:
             raise serializers.ValidationError({'password': 'Password is required for new staff.'})
-        
+
         # Create user
         try:
             user = User.objects.create_user(
@@ -1477,28 +1477,28 @@ class StaffProfileSerializer(serializers.ModelSerializer):
             )
         except IntegrityError:
             raise serializers.ValidationError({'username': 'Username already exists.'})
-        
+
         # Create staff profile
         validated_data['user'] = user
         staff_profile = StaffProfile.objects.create(**validated_data)
-        
+
         # Assign roles
         if roles:
             role_objects = Role.objects.filter(name__in=roles)
             user.roles.set(role_objects)
-            
+
             # Handle DepartmentRole synchronization for HOD/AHOD roles in new staff
             self._sync_department_roles(staff_profile, set(), set(roles))
-        
+
         return staff_profile
-    
+
     def update(self, instance, validated_data):
         """Update staff profile and optionally user details."""
         from accounts.models import Role
         from django.contrib.auth import get_user_model
-        
+
         User = get_user_model()
-        
+
         # Extract user-related fields
         first_name = validated_data.pop('first_name', None)
         last_name = validated_data.pop('last_name', None)
@@ -1506,14 +1506,14 @@ class StaffProfileSerializer(serializers.ModelSerializer):
         password = validated_data.pop('password', None)
         username = validated_data.pop('username', None)  # Allow username updates
         roles = validated_data.pop('roles', None)
-        
+
         # Validate staff_id uniqueness if being changed
         new_staff_id = validated_data.get('staff_id')
         if new_staff_id and new_staff_id != instance.staff_id:
             from academics.models import StaffProfile
             if StaffProfile.objects.filter(staff_id=new_staff_id).exclude(pk=instance.pk).exists():
                 raise serializers.ValidationError({'staff_id': 'This staff ID is already in use.'})
-        
+
         # Update user fields if provided
         user = instance.user
         if first_name is not None:
@@ -1530,37 +1530,37 @@ class StaffProfileSerializer(serializers.ModelSerializer):
         if password:
             user.set_password(password)
         user.save()
-        
+
         # Update roles if provided
         if roles is not None:
             role_objects = Role.objects.filter(name__in=roles)
-            
+
             # Get current roles before update for comparison
             old_role_names = set(user.roles.values_list('name', flat=True))
             new_role_names = set(roles)
-            
+
             # Update user roles
             user.roles.set(role_objects)
-            
+
             # Handle DepartmentRole synchronization for HOD/AHOD roles
             self._sync_department_roles(instance, old_role_names, new_role_names)
-        
+
         # Update staff profile fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
-        
+
         return instance
-    
+
     def _sync_department_roles(self, staff_instance, old_roles, new_roles):
         """
         Synchronize DepartmentRole table when HOD/AHOD roles are assigned or removed.
         """
         from academics.models import DepartmentRole, AcademicYear
         import logging
-        
+
         logger = logging.getLogger(__name__)
-        
+
         # Define which roles should create department roles
         dept_role_mapping = {
             'HOD': DepartmentRole.DeptRole.HOD,
@@ -1568,30 +1568,30 @@ class StaffProfileSerializer(serializers.ModelSerializer):
             'Head of Department': DepartmentRole.DeptRole.HOD,
             'Assistant HOD': DepartmentRole.DeptRole.AHOD,
         }
-        
+
         # Get active academic year
         active_academic_year = AcademicYear.objects.filter(is_active=True).first()
         if not active_academic_year:
             active_academic_year = AcademicYear.objects.order_by('-id').first()
-        
+
         if not active_academic_year:
             logger.warning(f"No academic year found for department role sync - Staff: {staff_instance.staff_id}")
             return
-        
+
         # Get staff's department (prefer current assignment, fallback to profile department)
         staff_department = staff_instance.get_current_department()
         if not staff_department:
             logger.warning(f"No department assigned for staff {staff_instance.staff_id} - skipping department role sync")
             return
-        
+
         logger.info(f"Syncing department roles for staff {staff_instance.staff_id} in department {staff_department.code}")
-        
+
         # Handle newly added HOD/AHOD roles
         added_roles = new_roles - old_roles
         for role_name in added_roles:
             if role_name in dept_role_mapping:
                 dept_role_type = dept_role_mapping[role_name]
-                
+
                 # Check if there's already an active role of this type for this staff in this department
                 existing_role = DepartmentRole.objects.filter(
                     staff=staff_instance,
@@ -1600,7 +1600,7 @@ class StaffProfileSerializer(serializers.ModelSerializer):
                     academic_year=active_academic_year,
                     is_active=True
                 ).first()
-                
+
                 if not existing_role:
                     # If HOD role, deactivate any existing HOD for this department (only one HOD per dept)
                     if dept_role_type == DepartmentRole.DeptRole.HOD:
@@ -1613,7 +1613,7 @@ class StaffProfileSerializer(serializers.ModelSerializer):
                         if old_hods.exists():
                             logger.info(f"Deactivating previous HOD(s) for department {staff_department.code}")
                             old_hods.update(is_active=False)
-                    
+
                     # Create new department role
                     new_dept_role = DepartmentRole.objects.create(
                         staff=staff_instance,
@@ -1625,13 +1625,13 @@ class StaffProfileSerializer(serializers.ModelSerializer):
                     logger.info(f"Created department role: {new_dept_role}")
                 else:
                     logger.info(f"Department role {dept_role_type} already exists for staff {staff_instance.staff_id} in {staff_department.code}")
-        
+
         # Handle removed HOD/AHOD roles
         removed_roles = old_roles - new_roles
         for role_name in removed_roles:
             if role_name in dept_role_mapping:
                 dept_role_type = dept_role_mapping[role_name]
-                
+
                 # Deactivate existing department roles of this type for this staff
                 deactivated_roles = DepartmentRole.objects.filter(
                     staff=staff_instance,
@@ -1640,11 +1640,11 @@ class StaffProfileSerializer(serializers.ModelSerializer):
                     academic_year=active_academic_year,
                     is_active=True
                 )
-                
+
                 if deactivated_roles.exists():
                     logger.info(f"Deactivating department role {dept_role_type} for staff {staff_instance.staff_id} in {staff_department.code}")
                     deactivated_roles.update(is_active=False)
- 
+
 
 
 # ---------------------------------------------------------------------------

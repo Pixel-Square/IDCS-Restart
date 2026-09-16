@@ -12,7 +12,7 @@ User = get_user_model()
 class SuperuserImpersonationSerializer(serializers.Serializer):
     """
     Allows a superuser to log in as another user.
-    
+
     POST /accounts/impersonate/
     {
         "superuser_identifier": "admin@example.com",
@@ -20,10 +20,10 @@ class SuperuserImpersonationSerializer(serializers.Serializer):
         "target_user_id": 123,
         "reason": "Debugging user issue"
     }
-    
+
     Returns JWT tokens valid for the target user.
     """
-    
+
     superuser_identifier = serializers.CharField(write_only=True, help_text="Email, reg_no, or staff_id of superuser")
     superuser_password = serializers.CharField(write_only=True, help_text="Superuser password")
     # Backward-compatible: older clients send target_user_id.
@@ -45,7 +45,7 @@ class SuperuserImpersonationSerializer(serializers.Serializer):
         default='',
         help_text="Reason for impersonation (for audit log)"
     )
-    
+
     # Output fields
     refresh = serializers.CharField(read_only=True)
     access = serializers.CharField(read_only=True)
@@ -53,10 +53,10 @@ class SuperuserImpersonationSerializer(serializers.Serializer):
     name = serializers.CharField(read_only=True)
     roles = serializers.ListField(read_only=True)
     impersonation_notice = serializers.CharField(read_only=True, help_text="Warning message for frontend")
-    
+
     def validate(self, attrs):
         from accounts.serializers import _compute_effective_role_names
-        
+
         superuser_identifier = attrs.get('superuser_identifier')
         superuser_password = attrs.get('superuser_password')
         target_user_id = attrs.get('target_user_id', None)
@@ -67,19 +67,19 @@ class SuperuserImpersonationSerializer(serializers.Serializer):
             raise serializers.ValidationError('All fields required: superuser_identifier, superuser_password, and a target (target_identifier or target_user_id)')
         if not target_user_id and not target_identifier:
             raise serializers.ValidationError('Target is required: provide target_identifier (student reg_no / staff_id) or target_user_id')
-        
+
         # ===== STEP 1: Authenticate superuser =====
         superuser: Optional[User] = None
-        
+
         superuser = self._resolve_user_from_identifier(superuser_identifier)
-        
+
         if superuser is None:
             raise serializers.ValidationError('Invalid superuser credentials.')
-        
+
         # Verify password
         if not superuser.check_password(superuser_password):
             raise serializers.ValidationError('Invalid superuser credentials.')
-        
+
         # ===== STEP 2: Check if this account is allowed to impersonate =====
         # In this codebase, "superuser" impersonation is used by the IQAC/admin flow.
         # Some deployments do not mark the IQAC account as Django `is_superuser=True`.
@@ -106,10 +106,10 @@ class SuperuserImpersonationSerializer(serializers.Serializer):
 
         if not (is_django_superuser or has_iqac_role or has_admin_manage):
             raise serializers.ValidationError('Account is not authorized to impersonate users.')
-        
+
         if not getattr(superuser, 'is_active', True):
             raise serializers.ValidationError('Superuser account is inactive.')
-        
+
         # ===== STEP 3: Get target user =====
         target_user: Optional[User] = None
 
@@ -122,16 +122,16 @@ class SuperuserImpersonationSerializer(serializers.Serializer):
             target_user = self._resolve_user_from_identifier(target_identifier)
             if target_user is None:
                 raise serializers.ValidationError('Target user not found for the given target_identifier.')
-        
+
         if not getattr(target_user, 'is_active', True):
             raise serializers.ValidationError('Target user account is inactive.')
-        
+
         # ===== STEP 4: Check impersonation permissions =====
         try:
             from accounts.models_impersonation import SuperuserImpersonationPermission
-            
+
             perm = SuperuserImpersonationPermission.objects.filter(superuser=superuser).first()
-            
+
             if perm:
                 can_impersonate, reason_msg = perm.can_impersonate(target_user)
                 if not can_impersonate:
@@ -140,35 +140,35 @@ class SuperuserImpersonationSerializer(serializers.Serializer):
         except ImportError:
             # If permission model doesn't exist yet, allow
             pass
-        
+
         # ===== STEP 5: Create JWT for target user =====
         refresh = RefreshToken.for_user(target_user)
-        
+
         # Add roles to token
         try:
             refresh['roles'] = _compute_effective_role_names(target_user)
         except Exception:
             refresh['roles'] = []
-        
+
         # Mark token as impersonation token in metadata
         refresh['impersonated_by'] = superuser.id
         refresh['impersonated_at'] = str(serializers.DateTimeField().to_representation(
             __import__('django.utils.timezone', fromlist=['now']).now()
         ))
-        
+
         # ===== STEP 6: Log the impersonation =====
         try:
             from accounts.models_impersonation import SuperuserImpersonationLog
             from django.utils import timezone
-            
+
             request = self.context.get('request')
             ip_address = ''
             user_agent = ''
-            
+
             if request:
                 ip_address = self._get_client_ip(request)
                 user_agent = request.META.get('HTTP_USER_AGENT', '')[:500]
-            
+
             SuperuserImpersonationLog.log_impersonation(
                 superuser=superuser,
                 target_user=target_user,
@@ -183,7 +183,7 @@ class SuperuserImpersonationSerializer(serializers.Serializer):
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f'Failed to log impersonation: {e}')
-        
+
         return {
             'refresh': str(refresh),
             'access': str(refresh.access_token),
@@ -230,7 +230,7 @@ class SuperuserImpersonationSerializer(serializers.Serializer):
             return User.objects.filter(id=int(identifier)).first()
 
         return None
-    
+
     @staticmethod
     def _get_client_ip(request):
         """Extract client IP from request."""
@@ -244,7 +244,7 @@ class SuperuserImpersonationSerializer(serializers.Serializer):
 
 class SuperuserImpersonationHistorySerializer(serializers.Serializer):
     """Serializer for viewing impersonation history (audit log)."""
-    
+
     id = serializers.IntegerField()
     superuser_id = serializers.IntegerField(source='superuser.id')
     superuser_username = serializers.CharField(source='superuser.username')
@@ -254,7 +254,7 @@ class SuperuserImpersonationHistorySerializer(serializers.Serializer):
     ip_address = serializers.CharField()
     reason = serializers.CharField()
     created_at = serializers.DateTimeField()
-    
+
     class Meta:
         fields = [
             'id', 'superuser_id', 'superuser_username',

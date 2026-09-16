@@ -107,7 +107,7 @@ export default function BarScanMarkEntry() {
       setIsLocked(true);
       setSaved(true);
     }
-    
+
     return finalQp;
   };
 
@@ -168,7 +168,7 @@ export default function BarScanMarkEntry() {
           return;
         }
         const data = await res.json();
-        
+
         // URL qp_type is the source of truth for mark-entry layout when provided.
         const dbQpType = String(data.qp_type || 'QP1').toUpperCase();
         const urlQpType = queryQpType ? String(queryQpType).toUpperCase() : null;
@@ -235,12 +235,12 @@ export default function BarScanMarkEntry() {
     try {
       // In a real implementation, we would send this to the backend endpoint.
       // E.g., await fetchWithAuth('/api/coe/marks/save', { method: 'POST', body: JSON.stringify(...) });
-      
+
       // Simulating network delay for save
       await new Promise(resolve => setTimeout(resolve, 800));
-      
+
       saveMarksForDummy(student.dummy_number || student.reg_no, marks, student.qp_type);
-      
+
       console.log('Saved marks for', student.dummy_number || student.reg_no, ':', marks);
       setSaved(true);
       setIsLocked(true);
@@ -261,21 +261,21 @@ export default function BarScanMarkEntry() {
     try {
       const me = getCachedMe();
       const identifier = me?.email || me?.username || me?.staff_profile?.staff_id;
-      
+
       if (!identifier) {
         throw new Error('User identifier not found. Please log in again.');
       }
-      
+
       const res = await fetchWithAuth('/api/accounts/token/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identifier, password: passwordInput })
       });
-      
+
       if (!res.ok) {
         throw new Error('Invalid password');
       }
-      
+
       setIsLocked(false);
       setSaved(false); // Enable editing again
       setShowPasswordModal(false);
@@ -328,7 +328,7 @@ export default function BarScanMarkEntry() {
           </div>
         </div>
       )}
-      
+
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
         <div className="flex items-center justify-between rounded-xl border border-blue-100 bg-white p-6 shadow-sm">
           <div>
@@ -421,7 +421,7 @@ export default function BarScanMarkEntry() {
                         disabled={isLocked}
                         onChange={(e) => {
                           const val = e.target.value;
-                          
+
                           if (val !== '') {
                             const num = Number(val);
                             if (num < 0) return;
@@ -435,8 +435,8 @@ export default function BarScanMarkEntry() {
                           setMarks((prev) => ({ ...prev, [q.key]: val }));
                         }}
                         className={`w-full min-w-[2rem] rounded border px-2 py-1 text-center focus:outline-none focus:border-blue-500 ${
-                          isLocked 
-                            ? 'bg-gray-100 text-gray-500 cursor-not-allowed border-gray-200' 
+                          isLocked
+                            ? 'bg-gray-100 text-gray-500 cursor-not-allowed border-gray-200'
                             : 'border-gray-300'
                         }`}
                       />

@@ -263,13 +263,13 @@ class SeatingArrangementExcelView(APIView):
                     continue
                 # 1. Check if student register number directly identifies department (Anna Univ code)
                 d = get_student_dept(s_clean, dept_cache, dept_mapping)
-                
+
                 # 2. If not found by register number, check student_depts list
                 if not d and i < len(student_depts):
                     cand = str(student_depts[i]).strip()
                     if cand and " / " not in cand:
                         d = cand
-                
+
                 # 3. Fallback to single department if hall only has one dept
                 if not d and dept_name and " / " not in dept_name:
                     d = dept_name
@@ -422,7 +422,7 @@ class SeatingArrangementExcelView(APIView):
             title_value = f"Office of the Controller of Examinations\nSeating Arrangement for {exam_title}\n{semester_text}"
             ws.merge_cells(start_row=title_row, end_row=title_row, start_column=1, end_column=total_cols)
             style_merge_range(ws, title_row, title_row, 1, total_cols, border_style=border, fill_style=header_fill)
-            
+
             title_cell = ws.cell(row=title_row, column=1, value=title_value)
             title_cell.font = title_font
             title_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)

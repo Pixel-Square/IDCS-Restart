@@ -86,7 +86,7 @@ export default function AdminCourseDetail() {
           className = selectedSection.name
         }
       }
-      
+
       await classesApi.create({ ...classForm, name: className, course: courseId })
       setShowClassModal(false)
       setClassForm({ name: '', academic_year: '', idcs_section: '' })
@@ -289,9 +289,9 @@ export default function AdminCourseDetail() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div className="form-group">
                 <label className="label">IDCS Section *</label>
-                <select 
-                  className="input" 
-                  value={classForm.idcs_section} 
+                <select
+                  className="input"
+                  value={classForm.idcs_section}
                   onChange={e => setClassForm(f => ({ ...f, idcs_section: e.target.value }))}
                 >
                   <option value="">-- Select Section --</option>
@@ -328,24 +328,24 @@ export default function AdminCourseDetail() {
                 <label className="label">Search User</label>
                 {!selectedUser ? (
                   <div style={{ position: 'relative' }}>
-                    <input 
-                      className="input" 
-                      value={searchQuery} 
-                      onChange={e => setSearchQuery(e.target.value)} 
-                      placeholder="Type name, email, or username..." 
+                    <input
+                      className="input"
+                      value={searchQuery}
+                      onChange={e => setSearchQuery(e.target.value)}
+                      placeholder="Type name, email, or username..."
                       autoFocus
                     />
                     {searching && <div className="spinner" style={{ position: 'absolute', right: 10, top: 10, width: 16, height: 16 }} />}
-                    
+
                     {searchResults.length > 0 && (
-                      <div style={{ 
-                        position: 'absolute', top: '100%', left: 0, right: 0, 
-                        background: 'var(--bg-elevated)', border: '1px solid var(--border)', 
-                        borderRadius: 'var(--radius-md)', marginTop: '4px', maxHeight: 200, overflowY: 'auto', zIndex: 10 
+                      <div style={{
+                        position: 'absolute', top: '100%', left: 0, right: 0,
+                        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius-md)', marginTop: '4px', maxHeight: 200, overflowY: 'auto', zIndex: 10
                       }}>
                         {searchResults.map(u => (
-                          <div 
-                            key={u.id} 
+                          <div
+                            key={u.id}
                             onClick={() => { setSelectedUser(u); setSearchResults([]); setSearchQuery('') }}
                             style={{ padding: '0.5rem 1rem', cursor: 'pointer', borderBottom: '1px solid var(--border)' }}
                           >

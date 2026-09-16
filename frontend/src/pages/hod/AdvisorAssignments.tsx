@@ -231,7 +231,7 @@ export default function AdvisorAssignments() {
                 </div>
               </div>
             )}
-            
+
             {/* Department Filter Pills */}
             <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
               <h3 className="text-lg font-medium text-gray-900 mb-4">Filter by Department</h3>
@@ -341,7 +341,7 @@ export default function AdvisorAssignments() {
                                     <button
                                       disabled={!canAssign}
                                       className={`p-2 text-sm font-medium rounded-lg transition-colors ${
-                                        canAssign 
+                                        canAssign
                                           ? 'text-blue-600 hover:bg-blue-50 border border-blue-300'
                                           : 'text-gray-400 bg-gray-100 cursor-not-allowed'
                                       }`}
@@ -355,7 +355,7 @@ export default function AdvisorAssignments() {
                                       <button
                                         disabled={!canAssign}
                                         className={`p-2 text-sm font-medium rounded-lg transition-colors ${
-                                          canAssign 
+                                          canAssign
                                             ? 'text-blue-600 hover:bg-blue-50 border border-blue-300'
                                             : 'text-gray-400 bg-gray-100 cursor-not-allowed'
                                         }`}

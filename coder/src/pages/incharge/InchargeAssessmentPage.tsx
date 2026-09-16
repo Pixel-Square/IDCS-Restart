@@ -80,18 +80,18 @@ export default function InchargeAssessmentPage() {
     env_vars: {} as Record<string, string>,
     working_directory: '',
   })
-  
+
   // Virtual filesystem tree
   const [vfsTree, setVfsTree] = useState<TreeNode[]>([])
   const [rawFilesMap, setRawFilesMap] = useState<Record<number, any>>({})
-  
+
   // Templates state
   const [availableTemplates, setAvailableTemplates] = useState<Record<string, any>>({})
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('')
   const [applyingTemplate, setApplyingTemplate] = useState(false)
 
   const [savingProject, setSavingProject] = useState(false)
-  
+
   // Add Folder/File state modals
   const [showAddFolder, setShowAddFolder] = useState(false)
   const [showAddFile, setShowAddFile] = useState(false)
@@ -158,16 +158,16 @@ export default function InchargeAssessmentPage() {
             env_vars: pRes.data.env_vars || {},
             working_directory: pRes.data.working_directory || '',
           })
-          
+
           await loadTree()
-          
+
           const fRes = await projectsApi.listFiles(pRes.data.id)
           const fMap: Record<number, any> = {}
           fRes.data.forEach((f: any) => { fMap[f.id] = f })
           setRawFilesMap(fMap)
-          
+
         } catch { /* no project yet */ }
-        
+
         // Fetch templates
         try {
           const templatesRes = await templatesApi.list()
@@ -308,7 +308,7 @@ export default function InchargeAssessmentPage() {
       setShowAddFile(false)
       setNewItemName('')
       await loadTree()
-      
+
       // Update files cache
       const fRes = await projectsApi.listFiles(project.id)
       const fMap: Record<number, any> = {}
@@ -353,7 +353,7 @@ export default function InchargeAssessmentPage() {
       setNewItemName('')
       setRenameTarget(null)
       await loadTree()
-      
+
       const fRes = await projectsApi.listFiles(project.id)
       const fMap: Record<number, any> = {}
       fRes.data.forEach((f: any) => { fMap[f.id] = f })
@@ -376,7 +376,7 @@ export default function InchargeAssessmentPage() {
       }
       showToast('Deleted successfully!')
       await loadTree()
-      
+
       const fRes = await projectsApi.listFiles(project.id)
       const fMap: Record<number, any> = {}
       fRes.data.forEach((f: any) => { fMap[f.id] = f })
@@ -721,21 +721,21 @@ export default function InchargeAssessmentPage() {
                   <div className="form-group" style={{ background: 'rgba(99,102,241,0.04)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px dashed var(--border)' }}>
                     <label className="label" style={{ fontWeight: 600 }}>Apply Framework / Boilerplate Template</label>
                     <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
-                      <select 
-                        className="input" 
+                      <select
+                        className="input"
                         style={{ flex: 1 }}
-                        value={selectedTemplateId} 
+                        value={selectedTemplateId}
                         onChange={e => setSelectedTemplateId(e.target.value)}
                       >
                         <option value="">-- Choose template --</option>
-                        {Object.entries(availableTemplates[projectForm.project_type]).flatMap(([framework, list]: any) => 
+                        {Object.entries(availableTemplates[projectForm.project_type]).flatMap(([framework, list]: any) =>
                           list.map((t: any) => (
                             <option key={t.id} value={t.id}>{framework} - {t.label}</option>
                           ))
                         )}
                       </select>
-                      <button 
-                        className="btn btn-brand btn-sm" 
+                      <button
+                        className="btn btn-brand btn-sm"
                         disabled={applyingTemplate || !selectedTemplateId}
                         onClick={handleApplyTemplate}
                       >
@@ -891,13 +891,13 @@ export default function InchargeAssessmentPage() {
                   </div>
                 )}
               </div>
-              
+
               <div style={{ display: 'grid', gridTemplateColumns: isSingleFile ? '1fr' : '260px 1fr', gap: '1.25rem', minHeight: '420px' }}>
-                
+
                 {/* Left Side: VFS File Tree Explorer */}
                 {!isSingleFile && (
                   <div style={{ borderRight: '1px solid var(--border)', paddingRight: '0.75rem', display: 'flex', flexDirection: 'column' }}>
-                    <FileTree 
+                    <FileTree
                       tree={vfsTree}
                       selectedFileId={selectedFile?.id}
                       selectedFolderId={selectedFolder?.id}

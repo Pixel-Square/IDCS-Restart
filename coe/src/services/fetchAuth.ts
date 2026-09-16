@@ -75,14 +75,14 @@ async function refreshToken(): Promise<string> {
         window.localStorage.removeItem('refresh')
         throw new Error(String(lastErr?.message || lastErr || 'refresh failed'))
       }
-      
+
       if (!res.ok) {
         // If refresh fails, clear auth tokens
         window.localStorage.removeItem('access')
         window.localStorage.removeItem('refresh')
         throw new Error('refresh failed')
       }
-      
+
       const data = await res.json()
       if (data.access) window.localStorage.setItem('access', data.access)
       if (data.refresh) window.localStorage.setItem('refresh', data.refresh)
@@ -180,7 +180,7 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
     headers2['Authorization'] = `Bearer ${newAccess}`
     // retry the same resolved URL (finalInput) so we don't accidentally hit the Vite dev server
     const retryRes = await fetch(finalInput, { ...init, headers: headers2 })
-    
+
     // If retry also fails with 401, the session is truly expired
     if (retryRes.status === 401) {
       console.error('Session expired - redirecting to login')
@@ -193,7 +193,7 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
         }
       } catch (_) {}
     }
-    
+
     maybeLogGlobalRetrival(String(finalInput), init, retryRes)
     return retryRes
   } catch (e) {

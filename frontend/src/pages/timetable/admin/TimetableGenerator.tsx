@@ -355,7 +355,7 @@ const getLabPairKey = (pair: any[]) => pair.map((subject) => getSubjectCode(subj
 const mapToStandardDept = (deptName: string): string => {
   const norm = String(deptName || '').toLowerCase().trim();
   if (!norm) return 'OTHER';
-  
+
   if (norm.includes('science and humanities') || norm.includes('s&h') || norm.includes('sh') || norm.includes('science & humanities')) return 'S&H';
   if (norm.includes('information technology') || norm === 'it') return 'IT';
   if (norm.includes('artificial intelligence') && (norm.includes('data science') || norm.includes('ds') || norm.includes('aids'))) return 'AI&DS';
@@ -365,7 +365,7 @@ const mapToStandardDept = (deptName: string): string => {
   if (norm.includes('electrical and electronics') || norm === 'eee') return 'EEE';
   if (norm.includes('mechanical') || norm === 'mech' || norm === 'me') return 'MECH';
   if (norm.includes('civil') || norm === 'ce') return 'CIVIL';
-  
+
   return deptName.toUpperCase();
 };
 
@@ -392,7 +392,7 @@ import { CreditAllocationMap } from './CreditBasedAllocationModal';
 
 const getRequiredSlotPlan = (row: any, creditAllocations?: Record<number, number>) => {
   const credits = Number(row?.c ?? row?.credits ?? 0) || 0;
-  
+
   // 1. Check if credit-based period allocation override exists for this Credit rating (C)
   if (credits > 0 && creditAllocations && creditAllocations[credits] !== undefined) {
     const configuredSlots = Math.max(1, Number(creditAllocations[credits]));
@@ -653,7 +653,7 @@ const buildGeneratedSection = (
       const semMatch = snapshot.semester !== undefined && snapshot.semester !== null
         ? semestersOrYears.includes(Number(snapshot.semester))
         : (snapshot.year !== undefined && snapshot.year !== null && (
-            semestersOrYears.includes(Number(snapshot.year) * 2) || 
+            semestersOrYears.includes(Number(snapshot.year) * 2) ||
             semestersOrYears.includes(Number(snapshot.year) * 2 - 1)
           ));
       if (!semMatch) return false;
@@ -849,7 +849,7 @@ const buildGeneratedSection = (
     const secKey = snapshot.sectionKey || '';
     const snapDept = (snapshot.department || '').toUpperCase();
     const snapYear = snapshot.year ? Number(snapshot.year) : null;
-    
+
     return courseExceptions.find((rule) => {
       // 1. Course Code / Name Match
       const rCode = (rule.course_code || '').toUpperCase();
@@ -1450,7 +1450,7 @@ export default function TimetableGenerator({ templates, initialView = 'generator
   const [creditAllocations, setCreditAllocations] = useState<Record<number, number>>({});
   const [groupAllocations, setGroupAllocations] = useState<GroupAllocation[]>([]);
   const [specialPeriodAllocations, setSpecialPeriodAllocations] = useState<SpecialPeriodAllocation[]>([]);
-  
+
   // Slot Pinning State
   const [pinnedSlots, setPinnedSlots] = useState<Record<string, Record<string, PinnedSlot>>>({});
   const [slotPinModal, setSlotPinModal] = useState<{
@@ -1575,7 +1575,7 @@ export default function TimetableGenerator({ templates, initialView = 'generator
         if (res.ok) {
           const data = await res.json();
           const raw = data.results || data || [];
-          
+
           const mapped = raw.map((r: any) => {
             let batchStr = r.batch_name || r.batch || '';
             if (typeof batchStr === 'object' && batchStr !== null) {
@@ -1600,11 +1600,11 @@ export default function TimetableGenerator({ templates, initialView = 'generator
               else if (batchName.includes('2022')) yearNum = 4;
               else if (batchName.includes('2021')) yearNum = 4;
             }
-            
+
             const sectionName = normalizeText(r.section_name || r.name || r.label || `Section ${r.id}`);
             const sectionDept = inferSectionDepartmentLabel(r) || 'SECTION';
             const sKey = `${yearNum}-${sectionDept}-${sectionName}`;
-            
+
             return {
               id: r.id || r.section_id,
               name: sectionName,
@@ -1666,9 +1666,9 @@ export default function TimetableGenerator({ templates, initialView = 'generator
     sectionsList.forEach(sec => {
       const year = sec.year;
       if (year !== 1 && year !== 2 && year !== 3 && year !== 4) return;
-      
+
       const stdDept = sec.department || 'OTHER';
-      
+
       if (year === 1) {
         const nameUpper = String(sec.name).toUpperCase().trim();
         const allowedSecs = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
@@ -1949,17 +1949,17 @@ export default function TimetableGenerator({ templates, initialView = 'generator
         const rawSections = data.results || data || [];
         const fetchedSnapshots: SectionSnapshot[] = [];
         const failedSectionLoads: Array<{ sectionId: number; sectionName: string; status?: number; message?: string }> = [];
-        
+
         let count = 0;
         for (const section of rawSections) {
           count++;
           const sectionId = Number(section.id || section.section_id || 0);
           if (!sectionId) continue;
-          
+
           const sectionName = normalizeText(section.section_name || section.name || section.label || `Section ${sectionId}`);
           const sectionDept = inferSectionDepartmentLabel(section) || 'SECTION';
           setProgressMessage(`Loading subjects and staff for section ${count} of ${rawSections.length}: ${sectionDept} - ${sectionName}...`);
-          
+
           try {
             const subjectsRes = await fetchWithAuth(`/api/timetable/section/${sectionId}/subjects-staff/`);
             if (!subjectsRes.ok) {
@@ -1975,7 +1975,7 @@ export default function TimetableGenerator({ templates, initialView = 'generator
             }
             const subjectsData = await subjectsRes.json();
             const subjectStaff = subjectsData.results || subjectsData || [];
-            
+
             let batchStr = section.batch_name || section.batch || '';
             if (typeof batchStr === 'object' && batchStr !== null) {
               batchStr = batchStr.name || '';
@@ -2505,7 +2505,7 @@ export default function TimetableGenerator({ templates, initialView = 'generator
   const handlePlaceUnfilledCell = (sectionKey: string, targetCellKey: string, cellData: any) => {
     const isPair = Boolean(cellData.isPair || cellData.colSpan === 2);
     const [rowId, colId] = targetCellKey.split('-');
-    
+
     // If it's a pair block, find next column if available
     let nextCellKey: string | null = null;
     if (isPair && selectedTemplate) {
@@ -2523,7 +2523,7 @@ export default function TimetableGenerator({ templates, initialView = 'generator
       prev.map((sec) => {
         if (sec.sectionKey === sectionKey) {
           const updatedCells = { ...sec.cells };
-          
+
           if (isPair && nextCellKey) {
             updatedCells[targetCellKey] = {
               subject: cellData.subject,
@@ -2697,33 +2697,33 @@ export default function TimetableGenerator({ templates, initialView = 'generator
             <ChevronLeft size={20} />
             Back to Templates
           </button>
-          
+
           <div className="flex items-center gap-3 flex-wrap">
-            <button 
+            <button
               onClick={() => setShowGroupModal(true)}
               className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-sm font-semibold shadow-xs flex items-center gap-1.5"
             >
               🏢 Group Allocation
             </button>
-            <button 
+            <button
               onClick={() => setShowSpecialModal(true)}
               className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors text-sm font-semibold shadow-xs flex items-center gap-1.5"
             >
               ✨ Special Period
             </button>
-            <button 
+            <button
               onClick={() => setShowCreditModal(true)}
               className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-semibold shadow-xs flex items-center gap-1.5"
             >
               🎯 Credit Allocations
             </button>
-            <button 
+            <button
               onClick={() => setShowVenueModal(true)}
               className="bg-sky-600 text-white px-4 py-2 rounded-lg hover:bg-sky-700 transition-colors text-sm font-semibold shadow-xs flex items-center gap-1.5"
             >
               🏛️ Venue Exceptions
             </button>
-            <button 
+            <button
               onClick={() => {
                 navigator.clipboard.writeText(JSON.stringify(selectedTemplate, null, 2));
                 alert('Template copied to clipboard!');
@@ -2733,14 +2733,14 @@ export default function TimetableGenerator({ templates, initialView = 'generator
               <Copy size={16} />
               Copy Template
             </button>
-            <button 
+            <button
               onClick={() => setShowTeachingModal(true)}
               className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-sm font-semibold shadow-xs"
             >
               <Users size={16} />
               Teaching Assignment
             </button>
-            <button 
+            <button
               onClick={() => {
                 setTemplateSaveName(selectedTemplate?.name ? `${selectedTemplate.name} (Generated)` : '');
                 setSaveTemplatePromptModal(true);
@@ -3026,10 +3026,10 @@ export default function TimetableGenerator({ templates, initialView = 'generator
                     : 'No Section Selected'}
                 </h3>
               </div>
-              
+
               <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${
-                activeGenerated 
-                  ? 'bg-green-50 border-green-200 text-green-700' 
+                activeGenerated
+                  ? 'bg-green-50 border-green-200 text-green-700'
                   : 'bg-amber-50 border-amber-200 text-amber-700'
               }`}>
                 {activeGenerated ? '● Timetable Generated' : '○ Not Generated Yet'}
@@ -3758,9 +3758,9 @@ export default function TimetableGenerator({ templates, initialView = 'generator
                 </button>
               </div>
               <div className="p-6">
-                <TeachingAssignSection 
-                  facultyOptions={facultyOptions} 
-                  onSectionSnapshot={handleSectionSnapshot} 
+                <TeachingAssignSection
+                  facultyOptions={facultyOptions}
+                  onSectionSnapshot={handleSectionSnapshot}
                 />
               </div>
               <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-3 flex justify-end">
@@ -3981,19 +3981,19 @@ export default function TimetableGenerator({ templates, initialView = 'generator
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
-          <button 
+          <button
             onClick={() => setShowGroupModal(true)}
             className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg font-bold shadow-md transition-colors flex items-center gap-2"
           >
             🏢 Group Allocation
           </button>
-          <button 
+          <button
             onClick={() => setShowSpecialModal(true)}
             className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-lg font-bold shadow-md transition-colors flex items-center gap-2"
           >
             ✨ Special Period
           </button>
-          <button 
+          <button
             onClick={() => setShowCreditModal(true)}
             className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-lg font-bold shadow-md transition-colors flex items-center gap-2"
           >
@@ -4116,9 +4116,9 @@ export default function TimetableGenerator({ templates, initialView = 'generator
               </button>
             </div>
             <div className="p-6">
-              <TeachingAssignSection 
-                facultyOptions={facultyOptions} 
-                onSectionSnapshot={handleSectionSnapshot} 
+              <TeachingAssignSection
+                facultyOptions={facultyOptions}
+                onSectionSnapshot={handleSectionSnapshot}
               />
             </div>
             <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-3 flex justify-end">

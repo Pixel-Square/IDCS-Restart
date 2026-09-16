@@ -74,24 +74,24 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
   }, [avatarSourceValue]);
 
   const currentAvatarUrl = avatarUrlCandidates[avatarCandidateIndex] || '';
-  
+
   // Get designation based on profile type
   const getDesignation = () => {
     if (!user) return 'Welcome to the dashboard.';
-    
+
     const profileType = (user.profile_type || '').toUpperCase();
-    
+
     if (profileType === 'STAFF' && user.profile?.designation) {
       return user.profile.designation;
     }
-    
+
     if (profileType === 'STUDENT') {
       return 'Student';
     }
-    
+
     return 'Welcome to the dashboard.';
   };
-  
+
   const designation = getDesignation();
   const rawRoles = Array.isArray(user?.roles) ? user.roles : [];
   const upperRoles = rawRoles.map((r: any) => (typeof r === 'string' ? r : r?.name || '').toUpperCase());
@@ -174,7 +174,7 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
     }
     if (isStudent) {
       fetchBioSecureStatus();
-      
+
       // Real-time live polling for student BioSecure scan updates without requiring page refresh
       const pollInterval = setInterval(() => {
         if (document.visibilityState === 'visible') {
@@ -334,7 +334,7 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
 
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   };
-  
+
   return (
     <div className="space-y-6">
       <div

@@ -22,7 +22,7 @@ export default function QuestionBankTypesModal({ onClose }: { onClose: () => voi
   const [types, setTypes] = useState<QuestionBankType[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
+
   const [editingId, setEditingId] = useState<number | 'new' | null>(null);
   const [formData, setFormData] = useState<Partial<QuestionBankType>>({
     code: '',
@@ -131,7 +131,7 @@ export default function QuestionBankTypesModal({ onClose }: { onClose: () => voi
               <input value={formData.label || ''} onChange={e => setFormData({ ...formData, label: e.target.value })} placeholder="e.g. Theory Question Bank" style={{ width: '100%', padding: '6px', border: '1px solid #d1d5db', borderRadius: '4px' }} />
             </div>
           </div>
-          
+
           <div style={{ marginBottom: '16px' }}>
             <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>Active Columns</label>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
@@ -218,10 +218,10 @@ export default function QuestionBankTypesModal({ onClose }: { onClose: () => voi
           <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Customise Question Bank Types</h2>
           <button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer' }}><X size={20} /></button>
         </div>
-        
+
         <div style={{ padding: '16px', overflowY: 'auto', flex: 1 }}>
           {error && <div style={{ color: 'red', marginBottom: '16px' }}>{error}</div>}
-          
+
           <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'flex-end' }}>
             <button
               onClick={handleNew}

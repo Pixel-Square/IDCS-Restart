@@ -124,10 +124,10 @@ function HrApplyModal({
   const handleTemplatePick = (template: RequestTemplate) => {
     setSelectedTemplate(template);
     const initialData: Record<string, any> = {};
-    
+
     // Set first text field to '-' by default
     let firstTextFieldSet = false;
-    
+
     template.form_schema.forEach((field) => {
       if (field.type === 'date' && (field.name === 'from_date' || field.name === 'date' || field.name === 'start_date')) {
         initialData[field.name] = selectedDate;

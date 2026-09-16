@@ -152,7 +152,7 @@ class DisciplineApprovalFlowConfigView(APIView):
                 is_active=True,
             )
         serializer = DisciplineApprovalFlowConfigSerializer(flow)
-        
+
         # Also return list of all available system roles for convenience
         all_roles = list(Role.objects.values_list('name', flat=True).distinct())
         # Filter out student/ext_staff if needed or sort
@@ -677,7 +677,7 @@ class DisciplineStudentIncidentsView(APIView):
     def get(self, request):
         user = request.user
         st = StudentProfile.objects.filter(user=user).first()
-        
+
         # Query incidents matching user id or student reg_no/username
         qs = DisciplineIncidentLog.objects.select_related('category', 'reported_by').prefetch_related('actions').filter(
             Q(student=st) if st else Q(username__iexact=user.username) | Q(reg_no__iexact=user.username)
@@ -741,7 +741,7 @@ class DisciplineStudentDirectoryView(APIView):
         for st in qs:
             u = st.user
             full_name = f"{getattr(u, 'first_name', '')} {getattr(u, 'last_name', '')}".strip()
-            
+
             dept = st.home_department
             if not dept and st.section and st.section.batch:
                 course = getattr(st.section.batch, 'course', None)

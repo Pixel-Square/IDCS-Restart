@@ -26,7 +26,7 @@ weights = _get_internal_weight_slots(ct)
 print(f'Weights ({len(weights)} slots): {weights}')
 print(f'Sum: {sum(weights)}')
 
-# Model pattern  
+# Model pattern
 model_pattern = _get_qp_pattern(class_type=ct, qp_type=None, exam='MODEL', batch_id=batch_id)
 print(f'\nModel pattern: {model_pattern}')
 
@@ -43,7 +43,7 @@ for fim in fims:
     reg = getattr(sp, 'reg_no', '')
     print(f'\n--- Student {sid} ({reg}) ---')
     print(f'  Stored FIM: mark={fim.final_mark}, max={fim.max_mark}')
-    
+
     row_data = None
     if isinstance(model_sheet, dict):
         row_data = model_sheet.get(f'id:{sid}') or model_sheet.get(f'reg:{reg}')
@@ -58,13 +58,13 @@ for fim in fims:
         print(f'  lab: {row_data.get("lab")}')
         print(f'  review: {row_data.get("review")}')
         print(f'  absent: {row_data.get("absent")}')
-    
+
     model_marks = _extract_model_co_marks_for_student(
         model_sheet=model_sheet, student_id=sid, reg_no=reg, model_pattern=model_pattern, class_type=ct
     )
     if model_marks:
         print(f'  model marks: {model_marks}')
-    
+
     ref = {'id': sid, 'reg_no': reg}
     result = _compute_tcpr_final_total(ta=ta, subject=subject, student=ref, ta_id=TA_ID, return_details=True)
     if isinstance(result, dict):

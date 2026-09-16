@@ -9,7 +9,7 @@ export default function MentorAssign() {
   const [students, setStudents] = useState<any[]>([])
   const [assignedStudents, setAssignedStudents] = useState<any[]>([])
   const [searchTerm, setSearchTerm] = useState('')
-  
+
   const [loading, setLoading] = useState(false)
 
   useEffect(()=>{ loadStaff() }, [])
@@ -36,7 +36,7 @@ export default function MentorAssign() {
     // assigned students and the advisor's available students, then compute
     // the unassigned list.
     setSelectedStaff(id)
-    
+
     setAssignedStudents([])
     setStudents([])
 
@@ -60,7 +60,7 @@ export default function MentorAssign() {
     setStudents(available)
   }
 
-  
+
 
   async function assignSingle(studentId:number){
     if (!selectedStaff) return alert('Select a mentor first')
@@ -126,11 +126,11 @@ export default function MentorAssign() {
               ) : (
                 <div className="space-y-2">
                   {staff.map(s => (
-                    <div 
-                      key={s.id} 
+                    <div
+                      key={s.id}
                       className={`p-4 rounded-lg border transition-all cursor-pointer ${
-                        selectedStaff === s.id 
-                          ? 'bg-gradient-to-r from-indigo-50 to-blue-50 border-indigo-300 shadow-md' 
+                        selectedStaff === s.id
+                          ? 'bg-gradient-to-r from-indigo-50 to-blue-50 border-indigo-300 shadow-md'
                           : 'bg-white border-slate-200 hover:border-indigo-200 hover:shadow-sm'
                       }`}
                       onClick={() => onSelectStaff(s.id)}
@@ -214,9 +214,9 @@ export default function MentorAssign() {
                             <div className="text-sm font-medium text-slate-900">{st.reg_no} — {st.username}</div>
                             <div className="text-xs text-slate-600 mt-0.5">{st.section_name}</div>
                           </div>
-                          <button 
+                          <button
                             className="px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:bg-red-300 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5"
-                            onClick={()=>removeAssigned(st.id)} 
+                            onClick={()=>removeAssigned(st.id)}
                             disabled={loading}
                           >
                             <UserX className="w-4 h-4" />
@@ -242,7 +242,7 @@ export default function MentorAssign() {
                     </span>
                   </h4>
                 </div>
-                
+
                 {/* Search Input */}
                 <div className="px-4 pt-4">
                   <div className="relative">
@@ -284,9 +284,9 @@ export default function MentorAssign() {
                               <div className="text-sm font-medium text-slate-900">{st.reg_no} — {st.username}</div>
                               <div className="text-xs text-slate-600 mt-0.5">{st.section_name}</div>
                             </div>
-                            <button 
+                            <button
                               className="px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5"
-                              onClick={()=>assignSingle(st.id)} 
+                              onClick={()=>assignSingle(st.id)}
                               disabled={loading || !selectedStaff}
                             >
                               {loading ? (

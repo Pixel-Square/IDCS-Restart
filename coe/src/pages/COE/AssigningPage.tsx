@@ -905,7 +905,7 @@ export default function AssigningPage() {
                           </>
                         )}
                       </p>
-                      
+
                       {!assignedValuator && !isLocked && (
                         <div className="flex flex-col gap-2">
                           <label className="text-[10px] font-bold text-gray-500 uppercase">Assign To</label>

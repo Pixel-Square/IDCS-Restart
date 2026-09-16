@@ -210,7 +210,7 @@ export default function HODStaffAttendancePage() {
           <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
             <XCircle className="w-8 h-8 text-red-600 mx-auto mb-4" />
             <p className="text-red-800 font-medium">{error}</p>
-            <button 
+            <button
               onClick={fetchAttendanceForDate}
               className="mt-4 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
             >

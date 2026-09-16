@@ -234,7 +234,7 @@ const AttendanceAnalytics: React.FC = () => {
       if (s.length && s.length < 60) return s
     }
 
-    return '-' 
+    return '-'
   }
 
   const getSectionDisplay = (s: any) => {
@@ -291,7 +291,7 @@ const AttendanceAnalytics: React.FC = () => {
     }catch(e){ console.error('Failed to load analytics filters', e); setPermissionLevel(null) }
   }
 
-  
+
 
   async function loadTodayPeriods(){
     setPeriodLoading(true)
@@ -493,14 +493,14 @@ const AttendanceAnalytics: React.FC = () => {
       }
       const data = await res.json().catch(()=>({ sections: [] }))
       const sections = data.sections || []
-      
+
       setOverallSections(sections)
       console.debug('loadOverallSections: sections loaded', sections.slice(0,5))
-      
+
       // count how many entries appear to be missing batch information
       const missing = (sections || []).filter((s: any) => !(s.batch || s.batch_name || s.academic_year || (s.academic_year && (s.academic_year.name || s.academic_year.display)))).length
       setOverallBatchMissingCount(missing)
-      
+
     }catch(e){ console.error('Failed to load overall sections', e); setOverallSections([]) }
     finally{ setOverallLoading(false) }
   }
@@ -516,7 +516,7 @@ const AttendanceAnalytics: React.FC = () => {
       }
       const data = await res.json().catch(()=>({ sections: [] }))
       const sections = data.sections || []
-      
+
       setDepartmentSections(sections)
       console.debug('loadDepartmentSections: sections loaded', sections.slice(0,5))
     }catch(e){ console.error('Failed to load department sections', e); setDepartmentSections([]) }
@@ -536,7 +536,7 @@ const AttendanceAnalytics: React.FC = () => {
       const data = await res.json().catch(()=>({ sections: [], daily_attendance: {} }))
       const sections = data.sections || []
       const dailyAttendance = data.daily_attendance || {}
-      
+
       setMyClassSections(sections)
       setMyClassDailyAttendance(dailyAttendance)
       console.debug('loadMyClassSections: sections loaded', sections.slice(0,5))
@@ -609,7 +609,7 @@ const AttendanceAnalytics: React.FC = () => {
 
       for (const sid of uniqueSess) {
         try {
-          const endpoint = isDailyAttendance 
+          const endpoint = isDailyAttendance
             ? `/api/academics/analytics/daily-attendance/${sid}/`
             : `/api/academics/period-attendance/${sid}/`
           const r = await fetchWithAuth(endpoint)
@@ -628,7 +628,7 @@ const AttendanceAnalytics: React.FC = () => {
               reg = studentRegMap[String(sidKey)]
             }
             // reg may be null — still count the status, just can't list by regno
-            
+
             const status = String(rec.status || rec.attendance || rec.type || '').toLowerCase()
             if (status === 'p' || status === 'present') present++
             else if (status === 'a' || status === 'absent') { absent++; if (reg) absentRegs.add(String(reg)) }
@@ -664,7 +664,7 @@ const AttendanceAnalytics: React.FC = () => {
     }
   }
 
-  
+
 
   async function performAction(id: number, action: 'approve'|'reject', requestType?: string){
     // Use unified endpoint with request type information
@@ -672,21 +672,21 @@ const AttendanceAnalytics: React.FC = () => {
       // Get the request to find its type if not provided
       const request = unlockRequests.find(r => r.id === id)
       const request_type = requestType || request?.request_type || 'period'
-      
-      const body = { 
-        id: id, 
-        action: action, 
-        request_type: request_type 
+
+      const body = {
+        id: id,
+        action: action,
+        request_type: request_type
       }
-      const res = await fetchWithAuth('/api/academics/unified-unlock-requests/', { 
-        method: 'PATCH', 
-        body: JSON.stringify(body) 
+      const res = await fetchWithAuth('/api/academics/unified-unlock-requests/', {
+        method: 'PATCH',
+        body: JSON.stringify(body)
       })
-      
+
       if (res.ok) {
         setUnlockRequests((prev:any[]) => prev.filter(r => String(r.id) !== String(id)))
         setCompletedRequests(prev => ({ ...prev, [String(id)]: action }))
-        await loadOverallSections(); await loadAssignedPeriods(); 
+        await loadOverallSections(); await loadAssignedPeriods();
         if (permissionLevel === 'class') await loadMyClassSections();
         return true
       }
@@ -859,8 +859,8 @@ const AttendanceAnalytics: React.FC = () => {
             )}
           </div>
           { (permissionLevel === 'all' || permissionLevel === 'department') && (
-            <button 
-              onClick={() => { setShowRequestsModal(true); }} 
+            <button
+              onClick={() => { setShowRequestsModal(true); }}
               className="relative px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 shadow-sm"
             >
               <Lock className="w-4 h-4" />
@@ -893,8 +893,8 @@ const AttendanceAnalytics: React.FC = () => {
             <button
               onClick={() => setViewMode('overall')}
               className={`px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 transition-colors ${
-                viewMode==='overall' 
-                  ? 'border-indigo-600 text-indigo-600' 
+                viewMode==='overall'
+                  ? 'border-indigo-600 text-indigo-600'
                   : 'border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300'
               }`}
             >
@@ -906,8 +906,8 @@ const AttendanceAnalytics: React.FC = () => {
             <button
               onClick={() => setViewMode('department')}
               className={`px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 transition-colors ${
-                viewMode==='department' 
-                  ? 'border-indigo-600 text-indigo-600' 
+                viewMode==='department'
+                  ? 'border-indigo-600 text-indigo-600'
                   : 'border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300'
               }`}
             >
@@ -919,8 +919,8 @@ const AttendanceAnalytics: React.FC = () => {
             <button
               onClick={() => setViewMode('myclass')}
               className={`px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 transition-colors ${
-                viewMode==='myclass' 
-                  ? 'border-indigo-600 text-indigo-600' 
+                viewMode==='myclass'
+                  ? 'border-indigo-600 text-indigo-600'
                   : 'border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300'
               }`}
             >
@@ -936,8 +936,8 @@ const AttendanceAnalytics: React.FC = () => {
               setViewMode('assigned')
             }}
             className={`px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 transition-colors ${
-              viewMode==='assigned' 
-                ? 'border-indigo-600 text-indigo-600' 
+              viewMode==='assigned'
+                ? 'border-indigo-600 text-indigo-600'
                 : 'border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300'
             }`}
           >
@@ -959,23 +959,23 @@ const AttendanceAnalytics: React.FC = () => {
           const batch = extractBatch(s)
           const section = extractSection(s)
           const key = `${deptShort}||${batch}||${section}`
-          
+
           // Backend returns one entry per section (Period 1 data only)
           if (!map[key]) {
             const isRangeMode = dateMode !== 'today'
-            map[key] = { 
-              deptShort, 
-              batch, 
-              section, 
-              present: Number(s.present) || 0, 
-              absent: Number(s.absent) || 0, 
-              on_duty: Number(s.on_duty) || 0, 
-              leave: Number(s.leave) || 0, 
+            map[key] = {
+              deptShort,
+              batch,
+              section,
+              present: Number(s.present) || 0,
+              absent: Number(s.absent) || 0,
+              on_duty: Number(s.on_duty) || 0,
+              leave: Number(s.leave) || 0,
               total: isRangeMode && Number(s.total_marked) > 0
                 ? Number(s.total_marked)
-                : (Number(s.total_strength) || 0), 
-              is_locked: Boolean(s.is_locked) || Boolean(s.attendance_session_locked), 
-              items: [s] 
+                : (Number(s.total_strength) || 0),
+              is_locked: Boolean(s.is_locked) || Boolean(s.attendance_session_locked),
+              items: [s]
             }
           }
         }
@@ -1206,10 +1206,10 @@ const AttendanceAnalytics: React.FC = () => {
                               onClick={() => {
                                 // Adapt aggregated row data for openReportCard
                                 const firstItem = r.items?.[0] || {}
-                                const sessionIds = r.items?.map((it: any) => 
+                                const sessionIds = r.items?.map((it: any) =>
                                   it.attendance_session_id || it.session_id || it.id
                                 ).filter(Boolean) || []
-                                const sectionIds = r.items?.map((it: any) => 
+                                const sectionIds = r.items?.map((it: any) =>
                                   it.section_id || it.section?.id
                                 ).filter(Boolean) || []
                                 const adaptedRow = {
@@ -1265,22 +1265,22 @@ const AttendanceAnalytics: React.FC = () => {
           const batch = extractBatch(s)
           const section = extractSection(s)
           const key = `${deptShort}||${batch}||${section}`
-          
+
           if (!map[key]) {
             const isRangeMode = dateMode !== 'today'
-            map[key] = { 
-              deptShort, 
-              batch, 
-              section, 
-              present: Number(s.present) || 0, 
-              absent: Number(s.absent) || 0, 
-              on_duty: Number(s.on_duty) || 0, 
-              leave: Number(s.leave) || 0, 
+            map[key] = {
+              deptShort,
+              batch,
+              section,
+              present: Number(s.present) || 0,
+              absent: Number(s.absent) || 0,
+              on_duty: Number(s.on_duty) || 0,
+              leave: Number(s.leave) || 0,
               total: isRangeMode && Number(s.total_marked) > 0
                 ? Number(s.total_marked)
-                : (Number(s.total_strength) || 0), 
-              is_locked: Boolean(s.is_locked) || Boolean(s.attendance_session_locked), 
-              items: [s] 
+                : (Number(s.total_strength) || 0),
+              is_locked: Boolean(s.is_locked) || Boolean(s.attendance_session_locked),
+              items: [s]
             }
           }
         }
@@ -1492,10 +1492,10 @@ const AttendanceAnalytics: React.FC = () => {
                               onClick={() => {
                                 // Adapt aggregated row data for openReportCard
                                 const firstItem = r.items?.[0] || {}
-                                const sessionIds = r.items?.map((it: any) => 
+                                const sessionIds = r.items?.map((it: any) =>
                                   it.attendance_session_id || it.session_id || it.id
                                 ).filter(Boolean) || []
-                                const sectionIds = r.items?.map((it: any) => 
+                                const sectionIds = r.items?.map((it: any) =>
                                   it.section_id || it.section?.id
                                 ).filter(Boolean) || []
                                 const adaptedRow = {
@@ -1582,8 +1582,8 @@ const AttendanceAnalytics: React.FC = () => {
                   {sectionReport.date}
                 </div>
               </div>
-              <button 
-                onClick={() => setViewMode('overall')} 
+              <button
+                onClick={() => setViewMode('overall')}
                 className="px-4 py-2 rounded-lg bg-white/20 hover:bg-white/30 text-white font-medium transition-colors"
               >
                 ← Back
@@ -1631,11 +1631,11 @@ const AttendanceAnalytics: React.FC = () => {
                       {displayAssigned.length} periods
                     </span>
                   </div>
-                  <button 
-                    onClick={loadAssignedPeriods} 
+                  <button
+                    onClick={loadAssignedPeriods}
                     className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
                   >
-                    <RefreshCw className="w-4 h-4" /> 
+                    <RefreshCw className="w-4 h-4" />
                     Refresh
                   </button>
                 </div>
@@ -1781,7 +1781,7 @@ const AttendanceAnalytics: React.FC = () => {
         // Group by section name and display periods
         const map: Record<string, any> = {}
         const extractSectionName = (s: any) => s.section_name || (s.section && (s.section.name || s.section.display)) || s.section || s.name || 'Unknown'
-        
+
         // First, process period attendance data
         for (const s of myClassSections) {
           const sectionName = extractSectionName(s)
@@ -1796,17 +1796,17 @@ const AttendanceAnalytics: React.FC = () => {
           }
           map[sectionName].periods.push(s)
         }
-        
+
         // Also process sections that have daily attendance but no period attendance
         // We need to get section details from the backend response
         // For now, we'll create entries for sections with daily attendance that aren't in the map yet
         Object.keys(myClassDailyAttendance).forEach((sectionIdStr) => {
           const sectionId = parseInt(sectionIdStr)
           const dailyData = myClassDailyAttendance[sectionId]
-          
+
           // Check if this section is not already in the map
           const alreadyExists = Object.values(map).some((group: any) => group.section_id === sectionId)
-          
+
           if (!alreadyExists && dailyData) {
             // Use section details from daily attendance data
             const sectionKey = dailyData.section_name || `Section-${sectionId}`
@@ -1819,9 +1819,9 @@ const AttendanceAnalytics: React.FC = () => {
             }
           }
         })
-        
+
         const grouped = Object.values(map)
-        
+
         return (
           <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -1834,8 +1834,8 @@ const AttendanceAnalytics: React.FC = () => {
                   <p className="text-sm text-gray-600">Daily and period attendance data for your assigned sections</p>
                 </div>
               </div>
-              <button 
-                onClick={loadMyClassSections} 
+              <button
+                onClick={loadMyClassSections}
                 className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
                 disabled={myClassLoading}
               >
@@ -1843,7 +1843,7 @@ const AttendanceAnalytics: React.FC = () => {
                 Refresh
               </button>
             </div>
-            
+
             {grouped.map((group, idx) => (
               <div key={`${group.section_name}-${idx}`} className="bg-white rounded-lg shadow-sm border border-gray-200">
                 <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border-b border-gray-200 px-6 py-4">
@@ -1853,13 +1853,13 @@ const AttendanceAnalytics: React.FC = () => {
                       <p className="text-sm text-gray-600">{group.department} - Batch {group.batch}</p>
                     </div>
                     <span className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-sm font-medium">
-                      {dateMode === 'today' && group.periods.length > 0 
+                      {dateMode === 'today' && group.periods.length > 0
                         ? (() => { const uniq = new Set(group.periods.map((p: any) => p.period_number)); const n = uniq.size; return `${n} period${n !== 1 ? 's' : ''}` })()
                         : 'Daily attendance only'}
                     </span>
                   </div>
                 </div>
-                
+
                 <div className="overflow-x-auto">
                   <table className="w-full table-fixed">
                     <thead className="bg-gray-50">
@@ -1883,7 +1883,7 @@ const AttendanceAnalytics: React.FC = () => {
                         const sectionId = group.section_id
                         const dailyData = sectionId ? myClassDailyAttendance[sectionId] : null
                         if (!dailyData) return null
-                        
+
                         const present = dailyData.present_count || 0
                         const absent = dailyData.absent_count || 0
                         const leaveCount = dailyData.leave_count || 0
@@ -1893,7 +1893,7 @@ const AttendanceAnalytics: React.FC = () => {
                         const status = dailyData.attendance_marked ? 'Marked' : (dailyData.is_locked ? 'Locked' : 'Not Marked')
                         const dailyExpandKey = `daily-${sectionId}`
                         const isDailyExpanded = expandedRows.has(dailyExpandKey)
-                        
+
                         return (
                           <React.Fragment>
                           <tr className="hover:bg-blue-50 bg-blue-25">
@@ -2004,7 +2004,7 @@ const AttendanceAnalytics: React.FC = () => {
                         const sessionId = period.session_id || period.id
                         const sessionExpandKey = `session-${sessionId || pidx}`
                         const isSessionExpanded = expandedRows.has(sessionExpandKey)
-                        
+
                         return (
                           <React.Fragment key={`${period.id || pidx}`}>
                           <tr className="hover:bg-gray-50">
@@ -2125,7 +2125,7 @@ const AttendanceAnalytics: React.FC = () => {
           <p className="text-gray-600">You are not assigned as an advisor to any sections, or no attendance data is available.</p>
         </div>
       )}
-      
+
       {showRequestsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm">
           <div className="fixed inset-0 bg-black/50" onClick={() => { setShowRequestsModal(false); refreshNotifCount(); }} />
@@ -2139,8 +2139,8 @@ const AttendanceAnalytics: React.FC = () => {
                   {permissionLevel === 'department' ? 'HOD/AHOD Approval Dashboard' : 'Unlock Requests (Final Approval)'}
                 </h3>
               </div>
-              <button 
-                onClick={() => { setShowRequestsModal(false); refreshNotifCount(); }} 
+              <button
+                onClick={() => { setShowRequestsModal(false); refreshNotifCount(); }}
                 className="px-4 py-2 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors font-medium"
               >
                 <X className="w-5 h-5" />
@@ -2174,8 +2174,8 @@ const AttendanceAnalytics: React.FC = () => {
                     )}
                   </div>
                 </div>
-                <button 
-                  onClick={() => { setReportModalOpen(false); setReportData(null) }} 
+                <button
+                  onClick={() => { setReportModalOpen(false); setReportData(null) }}
                   className="px-3 py-2 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors"
                 >
                   <X className="w-5 h-5" />
@@ -2263,7 +2263,7 @@ const AttendanceAnalytics: React.FC = () => {
           </div>
         </div>
       )}
-      
+
       {overallReportModalOpen && overallReportData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm">
           <div className="fixed inset-0 bg-black/50" onClick={() => { setOverallReportModalOpen(false); setOverallReportData(null) }} />
@@ -2282,8 +2282,8 @@ const AttendanceAnalytics: React.FC = () => {
                     </span>
                   </div>
                 </div>
-                <button 
-                  onClick={() => { setOverallReportModalOpen(false); setOverallReportData(null) }} 
+                <button
+                  onClick={() => { setOverallReportModalOpen(false); setOverallReportData(null) }}
                   className="px-3 py-2 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors"
                 >
                   <X className="w-5 h-5" />
@@ -2304,7 +2304,7 @@ const AttendanceAnalytics: React.FC = () => {
                       <div className="text-sm text-gray-600">Total Strength</div>
                     </div>
                   </div>
-                  
+
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                     <div className="bg-gradient-to-br from-green-50 to-emerald-50 border border-green-200 rounded-lg p-4">
                       <div className="flex items-center gap-2 mb-2">
@@ -2314,7 +2314,7 @@ const AttendanceAnalytics: React.FC = () => {
                       <div className="text-2xl font-bold text-green-700">{overallReportData.total_present}</div>
                       <div className="text-xs text-green-600">{overallReportData.present_percentage}%</div>
                     </div>
-                    
+
                     <div className="bg-gradient-to-br from-red-50 to-rose-50 border border-red-200 rounded-lg p-4">
                       <div className="flex items-center gap-2 mb-2">
                         <XCircle className="w-4 h-4 text-red-600" />
@@ -2323,7 +2323,7 @@ const AttendanceAnalytics: React.FC = () => {
                       <div className="text-2xl font-bold text-red-700">{overallReportData.total_absent}</div>
                       <div className="text-xs text-red-600">{overallReportData.absent_percentage}%</div>
                     </div>
-                    
+
                     <div className="bg-gradient-to-br from-purple-50 to-violet-50 border border-purple-200 rounded-lg p-4">
                       <div className="flex items-center gap-2 mb-2">
                         <Calendar className="w-4 h-4 text-purple-600" />
@@ -2332,7 +2332,7 @@ const AttendanceAnalytics: React.FC = () => {
                       <div className="text-2xl font-bold text-purple-700">{overallReportData.total_leave}</div>
                       <div className="text-xs text-purple-600">{overallReportData.leave_percentage}%</div>
                     </div>
-                    
+
                     <div className="bg-gradient-to-br from-blue-50 to-cyan-50 border border-blue-200 rounded-lg p-4">
                       <div className="flex items-center gap-2 mb-2">
                         <FileText className="w-4 h-4 text-blue-600" />
@@ -2341,7 +2341,7 @@ const AttendanceAnalytics: React.FC = () => {
                       <div className="text-2xl font-bold text-blue-700">{overallReportData.total_od}</div>
                       <div className="text-xs text-blue-600">{overallReportData.od_percentage}%</div>
                     </div>
-                    
+
                     <div className="bg-gradient-to-br from-gray-50 to-slate-50 border border-gray-200 rounded-lg p-4">
                       <div className="flex items-center gap-2 mb-2">
                         <AlertTriangle className="w-4 h-4 text-gray-600" />
@@ -2357,7 +2357,7 @@ const AttendanceAnalytics: React.FC = () => {
           </div>
         </div>
       )}
-      
+
     </div>
   )
 }

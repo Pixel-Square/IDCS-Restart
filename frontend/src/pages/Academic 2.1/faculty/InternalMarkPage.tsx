@@ -164,8 +164,8 @@ export default function InternalMarkPage() {
     return result;
   }, [courseInfo]);
 
-  useEffect(() => { 
-    loadData(); 
+  useEffect(() => {
+    loadData();
     loadCOSummary();
   }, [courseId]);
 
@@ -798,14 +798,14 @@ function COSummaryTab({
 
   // Cell selection helpers
   const getCellKey = (rowIdx: number, colIdx: number): string => `${rowIdx}-${colIdx}`;
-  
+
   const updateSelection = (start: { row: number; col: number }, end: { row: number; col: number }) => {
     const newSelection = new Set<string>();
     const startRow = Math.min(start.row, end.row);
     const endRow = Math.max(start.row, end.row);
     const startCol = Math.min(start.col, end.col);
     const endCol = Math.max(start.col, end.col);
-    
+
     for (let r = startRow; r <= endRow; r++) {
       for (let c = startCol; c <= endCol; c++) {
         newSelection.add(getCellKey(r, c));
@@ -839,14 +839,14 @@ function COSummaryTab({
     const handleCopy = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'c' && selectedCellsRef.current.size > 0) {
         e.preventDefault();
-        
+
         const cellArray = Array.from(selectedCellsRef.current)
           .map(key => {
             const [row, col] = key.split('-').map(Number);
             return { row, col };
           })
           .sort((a, b) => a.row !== b.row ? a.row - b.row : a.col - b.col);
-        
+
         if (cellArray.length === 0) return;
 
         const minRow = cellArray[0].row;
@@ -877,7 +877,7 @@ function COSummaryTab({
 
     window.addEventListener('keydown', handleCopy);
     window.addEventListener('mouseup', handleMouseUp);
-    
+
     return () => {
       window.removeEventListener('keydown', handleCopy);
       window.removeEventListener('mouseup', handleMouseUp);
@@ -1206,7 +1206,7 @@ function COSummaryTab({
             Raw Marks
           </button>
         </div>
-        
+
         {/* Decimal Places Selector - Hidden for now, kept Fix 2 (2 decimal places) as default */}
         {/*
         <div className="flex border rounded-lg overflow-hidden text-sm">
@@ -1277,7 +1277,7 @@ function COSummaryTab({
         <button onClick={onRefresh} className="flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50">
           <RefreshCw className="w-3.5 h-3.5" /> Refresh
         </button>
-        
+
         {/* Copy & Selection Controls */}
         {selectedCells.size > 0 && (
           <div className="flex items-center gap-2 ml-2 pl-2 border-l">

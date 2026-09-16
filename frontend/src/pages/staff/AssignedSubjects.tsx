@@ -78,7 +78,7 @@ export default function AssignedSubjectsPage() {
       })
     }
   }, [pickerOpen])
- 
+
   useEffect(() => { load(); loadStaff(); loadCurrentUser() }, [])
 
   function getStudentProfileId(record: any): number | null {
@@ -150,7 +150,7 @@ export default function AssignedSubjectsPage() {
         console.log('Loaded departments:', depts)
       }
       setDepartments(depts)
-      
+
       // Load all staff
       const staff = await fetchDepartmentStaff()
       console.log('Loaded staff:', staff)
@@ -168,7 +168,7 @@ export default function AssignedSubjectsPage() {
     if (!selectedDept) {
       return staffList
     }
-    return staffList.filter(staff => 
+    return staffList.filter(staff =>
       staff.department && staff.department.id === selectedDept
     )
   }
@@ -286,7 +286,7 @@ export default function AssignedSubjectsPage() {
       alert('Failed to create batch: ' + (e?.message || e))
     }
   }
-  
+
   // Open the picker for a specific assignment (subject)
   async function openPickerForAssignment(item: any){
     console.log('openPickerForAssignment clicked', item)
@@ -317,13 +317,13 @@ export default function AssignedSubjectsPage() {
       } else {
         throw new Error('No student mapping available for this assignment')
       }
-      
+
       const raw = (sdata.results || sdata) || []
       console.log('=== Student API Response Debug ===')
       console.log('Full API response:', sdata)
       console.log('Raw students array length:', raw.length)
       console.log('Has pagination count?', sdata.count)
-      
+
       const studs = raw
         .map((s:any) => {
           const normalizedId = getStudentProfileId(s)
@@ -341,10 +341,10 @@ export default function AssignedSubjectsPage() {
           }
         })
         .filter((s: any) => s !== null)
-      
+
       console.log('Mapped students count:', studs.length)
       console.log('Student IDs:', studs.map(s => s.id))
-      
+
       // Exclude students already in existing batches for this curriculum_row / subject
       // For elective subjects (no curriculum_row), match batches that also have no curriculum_row
       const crId = item.curriculum_row_id || item.curriculum_row?.id
@@ -442,7 +442,7 @@ export default function AssignedSubjectsPage() {
           const numbers = customNumbers.split(',')
             .map(n => n.trim())
             .filter(n => n.length > 0)
-          
+
           // Match students by last digits of registration number
           selectedIds = visibleStudents
             .filter((s: any) => {
@@ -510,7 +510,7 @@ export default function AssignedSubjectsPage() {
           const numbers = editCustomNumbers.split(',')
             .map(n => n.trim())
             .filter(n => n.length > 0)
-          
+
           // Match students by last digits of registration number
           selectedIds = sortedStudents
             .filter(s => {
@@ -599,7 +599,7 @@ export default function AssignedSubjectsPage() {
     setEditRangeStart('')
     setEditRangeEnd('')
     setEditSearchQuery('')
-    
+
     // Load all available students for the batch's curriculum_row
     if (b.curriculum_row && b.curriculum_row.id) {
       try {
@@ -621,7 +621,7 @@ export default function AssignedSubjectsPage() {
               sdata = await sres.json()
             }
           }
-          
+
           if (sdata) {
             const raw = (sdata.results || sdata) || []
             const allStudents = raw
@@ -660,7 +660,7 @@ export default function AssignedSubjectsPage() {
   async function saveBatchEdit(){
     if(!editingBatchId) return
     try{
-      const payload: any = { 
+      const payload: any = {
         name: editingBatchName,
         student_ids: editingSelectedStudentIds
       }
@@ -692,7 +692,7 @@ export default function AssignedSubjectsPage() {
   }
 
   function toggleEditingStudentSelect(id: number){
-    setEditingSelectedStudentIds(prev => 
+    setEditingSelectedStudentIds(prev =>
       prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
     )
   }
@@ -757,8 +757,8 @@ export default function AssignedSubjectsPage() {
             <AlertCircle className="w-8 h-8 text-red-600" />
           </div>
           <p className="text-red-600 font-medium mb-4">{error}</p>
-          <button 
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-colors" 
+          <button
+            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-colors"
             onClick={load}
           >
             Try Again
@@ -808,9 +808,9 @@ export default function AssignedSubjectsPage() {
                         </div>
                         <div className="flex flex-wrap gap-2">
                           {item.id > 0 && (
-                            <button 
-                              type="button" 
-                              className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" 
+                            <button
+                              type="button"
+                              className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
                               onClick={() => openPickerForAssignment(item)}
                             >
                               Create Batch
@@ -836,7 +836,7 @@ export default function AssignedSubjectsPage() {
                         if (item.semester != null) parts.push(`Sem ${item.semester}`)
                         const sbNames = (item.subject_batches || []).map(b => (b?.name || '')).filter(Boolean)
                         if (sbNames.length > 0) parts.push(`Subject Batch: ${sbNames.join(', ')}`)
-                        
+
                         if (parts.length > 0) {
                           return (
                             <div className="inline-flex items-center gap-1.5 bg-gradient-to-r from-blue-50 to-purple-50 text-gray-800 px-3 py-1.5 rounded-full border border-blue-200">
@@ -869,7 +869,7 @@ export default function AssignedSubjectsPage() {
                     {item.subject_code && (
                       <div className="text-xs text-blue-600 font-medium mb-2">{item.subject_code}</div>
                     )}
-                    
+
                     {/* Class Details */}
                     {(() => {
                       const parts: string[] = []
@@ -881,7 +881,7 @@ export default function AssignedSubjectsPage() {
                       if (item.semester != null) parts.push(`Sem ${item.semester}`)
                       const sbNames = (item.subject_batches || []).map(b => (b?.name || '')).filter(Boolean)
                       if (sbNames.length > 0) parts.push(`Subject Batch: ${sbNames.join(', ')}`)
-                      
+
                       if (parts.length > 0) {
                         return (
                           <div className="inline-flex items-center gap-1.5 bg-gradient-to-r from-blue-50 to-purple-50 text-gray-800 px-2.5 py-1 rounded-full border border-blue-200 mb-3">
@@ -896,9 +896,9 @@ export default function AssignedSubjectsPage() {
                     {/* Actions */}
                     <div className="flex flex-wrap gap-2">
                       {item.id > 0 && (
-                        <button 
-                          type="button" 
-                          className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" 
+                        <button
+                          type="button"
+                          className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
                           onClick={() => openPickerForAssignment(item)}
                         >
                           Create Batch
@@ -925,7 +925,7 @@ export default function AssignedSubjectsPage() {
             <Users className="w-5 h-5 text-blue-600" />
             Student Subject Batches
           </h3>
-          
+
           {!currentUserStaffId ? (
             <div className="text-center py-8 text-gray-500">
               <p>Loading user information...</p>
@@ -940,8 +940,8 @@ export default function AssignedSubjectsPage() {
             </h4>
             {(() => {
               // Show batches created by current user, or batches without created_by that belong to current user (backward compatibility)
-              const createdBatches = batches.filter(b => 
-                b.created_by?.id === currentUserStaffId || 
+              const createdBatches = batches.filter(b =>
+                b.created_by?.id === currentUserStaffId ||
                 (!b.created_by && b.staff?.id === currentUserStaffId)
               )
               if (createdBatches.length === 0) {
@@ -952,7 +952,7 @@ export default function AssignedSubjectsPage() {
                   </div>
                 )
               }
-              
+
               // Group created batches by curriculum_row
               const groupedCreated: Record<string, any[]> = {}
               createdBatches.forEach(b => {
@@ -960,7 +960,7 @@ export default function AssignedSubjectsPage() {
                 if (!groupedCreated[crId]) groupedCreated[crId] = []
                 groupedCreated[crId].push(b)
               })
-              
+
               return (
                 <div className="space-y-4">
                   {(() => {
@@ -1000,20 +1000,20 @@ export default function AssignedSubjectsPage() {
                                     </div>
                                   </div>
                                   <div className="ml-4 flex gap-2">
-                                    <button 
-                                      className="bg-green-100 hover:bg-green-200 text-green-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
+                                    <button
+                                      className="bg-green-100 hover:bg-green-200 text-green-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
                                       onClick={()=>openViewBatch(b)}
                                     >
                                       View
                                     </button>
-                                    <button 
-                                      className="bg-blue-100 hover:bg-blue-200 text-blue-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
+                                    <button
+                                      className="bg-blue-100 hover:bg-blue-200 text-blue-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
                                       onClick={()=>startEditBatch(b)}
                                     >
                                       Edit
                                     </button>
-                                    <button 
-                                      className="bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
+                                    <button
+                                      className="bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
                                       onClick={()=>deleteBatch(b.id)}
                                     >
                                       Delete
@@ -1027,7 +1027,7 @@ export default function AssignedSubjectsPage() {
                       )
                     })
                   })()}
-                  
+
                   {/* Batches without curriculum_row (elective subjects) */}
                   {groupedCreated['no_subject'] && groupedCreated['no_subject'].length > 0 && (
                     <div className="border-b border-gray-100 pb-4">
@@ -1063,20 +1063,20 @@ export default function AssignedSubjectsPage() {
                                 </div>
                               </div>
                               <div className="ml-4 flex gap-2">
-                                <button 
-                                  className="bg-green-100 hover:bg-green-200 text-green-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
+                                <button
+                                  className="bg-green-100 hover:bg-green-200 text-green-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
                                   onClick={()=>openViewBatch(b)}
                                 >
                                   View
                                 </button>
-                                <button 
-                                  className="bg-blue-100 hover:bg-blue-200 text-blue-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
+                                <button
+                                  className="bg-blue-100 hover:bg-blue-200 text-blue-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
                                   onClick={()=>startEditBatch(b)}
                                 >
                                   Edit
                                 </button>
-                                <button 
-                                  className="bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
+                                <button
+                                  className="bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
                                   onClick={()=>deleteBatch(b.id)}
                                 >
                                   Delete
@@ -1101,12 +1101,12 @@ export default function AssignedSubjectsPage() {
             </h4>
             {(() => {
               // Assigned batches are where staff is current user but created_by is different (and not null)
-              const assignedBatches = batches.filter(b => 
-                b.staff?.id === currentUserStaffId && 
-                b.created_by?.id && 
+              const assignedBatches = batches.filter(b =>
+                b.staff?.id === currentUserStaffId &&
+                b.created_by?.id &&
                 b.created_by.id !== currentUserStaffId
               )
-              
+
               if (assignedBatches.length === 0) {
                 return (
                   <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-lg">
@@ -1115,7 +1115,7 @@ export default function AssignedSubjectsPage() {
                   </div>
                 )
               }
-              
+
               // Group assigned batches by curriculum_row
               const groupedAssigned: Record<string, any[]> = {}
               assignedBatches.forEach(b => {
@@ -1123,7 +1123,7 @@ export default function AssignedSubjectsPage() {
                 if (!groupedAssigned[crId]) groupedAssigned[crId] = []
                 groupedAssigned[crId].push(b)
               })
-              
+
               return (
                 <div className="space-y-4">
                   {(() => {
@@ -1162,8 +1162,8 @@ export default function AssignedSubjectsPage() {
                                     </div>
                                   </div>
                                   <div className="ml-4">
-                                    <button 
-                                      className="bg-green-600 hover:bg-green-700 text-white px-4 py-1.5 rounded-lg text-sm font-medium transition-colors" 
+                                    <button
+                                      className="bg-green-600 hover:bg-green-700 text-white px-4 py-1.5 rounded-lg text-sm font-medium transition-colors"
                                       onClick={()=>openViewBatch(b)}
                                     >
                                       View
@@ -1177,7 +1177,7 @@ export default function AssignedSubjectsPage() {
                       )
                     })
                   })()}
-                  
+
                   {/* Assigned batches without curriculum_row (elective subjects) */}
                   {groupedAssigned['no_subject'] && groupedAssigned['no_subject'].length > 0 && (
                     <div className="border-b border-gray-100 pb-4">
@@ -1212,8 +1212,8 @@ export default function AssignedSubjectsPage() {
                                 </div>
                               </div>
                               <div className="ml-4">
-                                <button 
-                                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-1.5 rounded-lg text-sm font-medium transition-colors" 
+                                <button
+                                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-1.5 rounded-lg text-sm font-medium transition-colors"
                                   onClick={()=>openViewBatch(b)}
                                 >
                                   View
@@ -1249,13 +1249,13 @@ export default function AssignedSubjectsPage() {
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <button 
-                    type="button" 
-                    className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg font-medium transition-colors" 
-                    onClick={() => { 
-                      setPickerOpen(false); 
+                  <button
+                    type="button"
+                    className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg font-medium transition-colors"
+                    onClick={() => {
+                      setPickerOpen(false);
                       setPickerAllStudents([]);
-                      setPickerStudents([]); 
+                      setPickerStudents([]);
                       setPickerItem(null);
                       setPickerSelectedIds([]);
                       setPickerStaffId(null);
@@ -1270,9 +1270,9 @@ export default function AssignedSubjectsPage() {
                   >
                     Cancel
                   </button>
-                  <button 
-                    type="button" 
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors" 
+                  <button
+                    type="button"
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
                     onClick={submitPicker}
                   >
                     Create Batch
@@ -1280,7 +1280,7 @@ export default function AssignedSubjectsPage() {
                 </div>
               </div>
             </div>
-            
+
             <div className="p-6 overflow-y-auto flex-1">
               {/* Department Filter */}
               <div className="mb-6">
@@ -1300,7 +1300,7 @@ export default function AssignedSubjectsPage() {
                   ))}
                 </select>
               </div>
-              
+
               {/* Staff Assignment */}
               <div className="mb-6">
                 <label className="block text-sm font-semibold text-gray-900 mb-2">
@@ -1322,7 +1322,7 @@ export default function AssignedSubjectsPage() {
                   Leave blank to assign to yourself
                 </p>
               </div>
-              
+
               <div className="mb-4">
                 <h4 className="font-semibold text-gray-900 mb-2">Students ({pickerStudents.length})</h4>
                 <p className="text-sm text-gray-600 mb-4">Select students to include in this batch - all {pickerStudents.length} students shown</p>
@@ -1350,7 +1350,7 @@ export default function AssignedSubjectsPage() {
                     Also list students already assigned in other batches
                   </label>
                 </div>
-                
+
                 {/* Search Field */}
                 <div className="mb-3">
                   <label className="block text-xs font-medium text-gray-700 mb-1">Search Students</label>
@@ -1375,11 +1375,11 @@ export default function AssignedSubjectsPage() {
                     )}
                   </div>
                 </div>
-                
+
                 {/* Selection Filters */}
                 <div className="bg-gray-50 rounded-lg p-3 mb-3">
                   <h5 className="font-medium text-gray-900 mb-2 text-sm">Selection Options</h5>
-                  
+
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                     <div>
                       <label className="flex items-center gap-2">
@@ -1394,7 +1394,7 @@ export default function AssignedSubjectsPage() {
                         <span className="text-sm font-medium">All Students</span>
                       </label>
                     </div>
-                    
+
                     <div>
                       <label className="flex items-center gap-2">
                         <input
@@ -1408,7 +1408,7 @@ export default function AssignedSubjectsPage() {
                         <span className="text-sm font-medium">First Half</span>
                       </label>
                     </div>
-                    
+
                     <div>
                       <label className="flex items-center gap-2">
                         <input
@@ -1423,7 +1423,7 @@ export default function AssignedSubjectsPage() {
                       </label>
                     </div>
                   </div>
-                  
+
                   <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
                       <label className="flex items-center gap-2 mb-1.5">
@@ -1446,7 +1446,7 @@ export default function AssignedSubjectsPage() {
                         className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                       />
                     </div>
-                    
+
                     <div>
                       <label className="flex items-center gap-2 mb-1.5">
                         <input
@@ -1484,11 +1484,11 @@ export default function AssignedSubjectsPage() {
                       </div>
                     </div>
                   </div>
-                  
+
 
                 </div>
               </div>
-              
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {(() => {
                   // Sort students alphabetically by name for display
@@ -1497,13 +1497,13 @@ export default function AssignedSubjectsPage() {
                       const nameB = (b.username || b.full_name || b.reg_no || '').toLowerCase()
                       return nameA.localeCompare(nameB)
                     })
-                    
+
                     console.log('=== Rendering Debug ===')
                     console.log('pickerStudents.length:', pickerStudents.length)
                     console.log('sortedStudents.length:', sortedStudents.length)
-                    
+
                     // Filter students based on search query
-                    const filteredStudents = searchQuery.trim() 
+                    const filteredStudents = searchQuery.trim()
                       ? sortedStudents.filter(s => {
                           const query = searchQuery.toLowerCase()
                           const name = (s.username || s.full_name || '').toLowerCase()
@@ -1511,12 +1511,12 @@ export default function AssignedSubjectsPage() {
                           return name.includes(query) || regNo.includes(query)
                         })
                       : sortedStudents
-                    
+
                     console.log('filteredStudents.length:', filteredStudents.length)
                     console.log('searchQuery:', searchQuery)
                     console.log('About to render', filteredStudents.length, 'student cards')
                     console.log('Container class: max-h-[70vh] overflow-y-auto for full scrolling')
-                    
+
                     // Show message if no students match search
                     if (filteredStudents.length === 0 && searchQuery.trim()) {
                       return (
@@ -1525,19 +1525,19 @@ export default function AssignedSubjectsPage() {
                         </div>
                       )
                     }
-                    
+
                     // All students will be rendered - no slice or limit
                     // Parent container should have max-h-[70vh] overflow-y-auto for scrolling
                     return filteredStudents.map((s,index) => (
-                      <label 
-                        key={s.id} 
+                      <label
+                        key={s.id}
                         className="flex items-center gap-2 p-2 border border-gray-200 rounded-md hover:bg-gray-50 cursor-pointer transition-colors"
                         style={{minHeight: '56px'}}
                       >
-                        <input 
-                          type="checkbox" 
-                          checked={pickerSelectedIds.includes(s.id)} 
-                          onChange={() => togglePickerSelect(s.id)} 
+                        <input
+                          type="checkbox"
+                          checked={pickerSelectedIds.includes(s.id)}
+                          onChange={() => togglePickerSelect(s.id)}
                           className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
                         />
                         <div className="flex items-center gap-1.5 min-w-0 flex-1">
@@ -1581,16 +1581,16 @@ export default function AssignedSubjectsPage() {
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <button 
-                    type="button" 
-                    className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
+                  <button
+                    type="button"
+                    className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
                     onClick={cancelBatchEdit}
                   >
                     Cancel
                   </button>
-                  <button 
-                    type="button" 
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors" 
+                  <button
+                    type="button"
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
                     onClick={saveBatchEdit}
                   >
                     Save Changes
@@ -1606,10 +1606,10 @@ export default function AssignedSubjectsPage() {
                 <label className="block text-xs text-gray-600 mb-0.5">
                   Batch Name
                 </label>
-                <input 
+                <input
                   type="text"
-                  value={editingBatchName} 
-                  onChange={e=>setEditingBatchName(e.target.value)} 
+                  value={editingBatchName}
+                  onChange={e=>setEditingBatchName(e.target.value)}
                   className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
                   placeholder="Enter batch name"
                 />
@@ -1657,7 +1657,7 @@ export default function AssignedSubjectsPage() {
               <div className="mb-4">
                 <h4 className="font-semibold text-gray-900 mb-2">Students ({editingBatchStudents.length})</h4>
                 <p className="text-sm text-gray-600 mb-4">Select students to include in this batch - all {editingBatchStudents.length} students shown</p>
-                
+
                 {/* Search Field */}
                 <div className="mb-3">
                   <label className="block text-xs font-medium text-gray-700 mb-1">Search Students</label>
@@ -1682,11 +1682,11 @@ export default function AssignedSubjectsPage() {
                     )}
                   </div>
                 </div>
-                
+
                 {/* Edit Selection Filters */}
                 <div className="bg-gray-50 rounded-lg p-3 mb-3">
                   <h5 className="font-medium text-gray-900 mb-2 text-sm">Selection Options</h5>
-                  
+
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                     <div>
                       <label className="flex items-center gap-2">
@@ -1701,7 +1701,7 @@ export default function AssignedSubjectsPage() {
                         <span className="text-sm font-medium">All Students</span>
                       </label>
                     </div>
-                    
+
                     <div>
                       <label className="flex items-center gap-2">
                         <input
@@ -1715,7 +1715,7 @@ export default function AssignedSubjectsPage() {
                         <span className="text-sm font-medium">First Half</span>
                       </label>
                     </div>
-                    
+
                     <div>
                       <label className="flex items-center gap-2">
                         <input
@@ -1730,7 +1730,7 @@ export default function AssignedSubjectsPage() {
                       </label>
                     </div>
                   </div>
-                  
+
                   <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
                       <label className="flex items-center gap-2 mb-1.5">
@@ -1753,7 +1753,7 @@ export default function AssignedSubjectsPage() {
                         className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                       />
                     </div>
-                    
+
                     <div>
                       <label className="flex items-center gap-2 mb-1.5">
                         <input
@@ -1791,11 +1791,11 @@ export default function AssignedSubjectsPage() {
                       </div>
                     </div>
                   </div>
-                  
+
 
                 </div>
               </div>
-              
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                   {(() => {
                     // Sort students alphabetically by name for display
@@ -1804,9 +1804,9 @@ export default function AssignedSubjectsPage() {
                       const nameB = (b.username || b.full_name || b.reg_no || '').toLowerCase()
                       return nameA.localeCompare(nameB)
                     })
-                    
+
                     // Filter students based on search query
-                    const filteredStudents = editSearchQuery.trim() 
+                    const filteredStudents = editSearchQuery.trim()
                       ? sortedStudents.filter(s => {
                           const query = editSearchQuery.toLowerCase()
                           const name = (s.username || s.full_name || '').toLowerCase()
@@ -1814,7 +1814,7 @@ export default function AssignedSubjectsPage() {
                           return name.includes(query) || regNo.includes(query)
                         })
                       : sortedStudents
-                    
+
                     // Show message if no students match search
                     if (filteredStudents.length === 0 && editSearchQuery.trim()) {
                       return (
@@ -1823,7 +1823,7 @@ export default function AssignedSubjectsPage() {
                         </div>
                       )
                     }
-                    
+
                     // Show message if no students available
                     if (editingBatchStudents.length === 0) {
                       return (
@@ -1833,17 +1833,17 @@ export default function AssignedSubjectsPage() {
                         </div>
                       )
                     }
-                    
+
                     return filteredStudents.map((s, index) => (
-                      <label 
-                        key={s.id} 
+                      <label
+                        key={s.id}
                         className="flex items-center gap-2 p-2 border border-gray-200 rounded-md hover:bg-gray-50 cursor-pointer transition-colors"
                         style={{minHeight: '56px'}}
                       >
-                        <input 
-                          type="checkbox" 
-                          checked={editingSelectedStudentIds.includes(s.id)} 
-                          onChange={() => toggleEditingStudentSelect(s.id)} 
+                        <input
+                          type="checkbox"
+                          checked={editingSelectedStudentIds.includes(s.id)}
+                          onChange={() => toggleEditingStudentSelect(s.id)}
                           className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
                         />
                         <div className="flex items-center gap-1.5 min-w-0 flex-1">
@@ -1880,21 +1880,21 @@ export default function AssignedSubjectsPage() {
                     View batch information and student list
                   </div>
                 </div>
-                <button 
-                  type="button" 
-                  className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg font-medium transition-colors" 
+                <button
+                  type="button"
+                  className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg font-medium transition-colors"
                   onClick={closeViewBatch}
                 >
                   Close
                 </button>
               </div>
             </div>
-            
+
             <div className="p-6 overflow-y-auto max-h-[calc(80vh-120px)]">
               {/* Batch Information */}
               <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg p-4 mb-6">
                 <h4 className="font-bold text-lg text-gray-900 mb-4">{viewBatch.name}</h4>
-                
+
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {/* Course Information — from curriculum_row or derived from elective assignment */}
                   {(() => {
@@ -1914,7 +1914,7 @@ export default function AssignedSubjectsPage() {
                       </div>
                     ) : null
                   })()}
-                  
+
                   {/* Show different information based on whether user created or was assigned */}
                   {viewBatch.created_by?.id === currentUserStaffId ? (
                     /* User created this batch - show assigned staff */
@@ -1961,7 +1961,7 @@ export default function AssignedSubjectsPage() {
                       </div>
                     )
                   )}
-                  
+
                   {/* Student Count */}
                   <div className="bg-white rounded-lg p-3">
                     <div className="text-xs font-semibold text-gray-500 uppercase mb-1">Total Students</div>
@@ -1972,7 +1972,7 @@ export default function AssignedSubjectsPage() {
                       </div>
                     </div>
                   </div>
-                  
+
                   {/* Created Date */}
                   {viewBatch.created_at && (
                     <div className="bg-white rounded-lg p-3">
@@ -1988,14 +1988,14 @@ export default function AssignedSubjectsPage() {
                   )}
                 </div>
               </div>
-              
+
               {/* Student List */}
               <div>
                 <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
                   <Users className="w-5 h-5 text-blue-600" />
                   Student List ({(viewBatch.students || []).length} students)
                 </h4>
-                
+
                 {viewBatch.students && viewBatch.students.length > 0 ? (
                   <div className="border border-gray-200 rounded-lg overflow-hidden">
                     <table className="w-full">

@@ -7,7 +7,7 @@ def create_late_entry_template(apps, schema_editor):
     """Create the Late Entry Permission template with approval steps."""
     RequestTemplate = apps.get_model('staff_requests', 'RequestTemplate')
     ApprovalStep = apps.get_model('staff_requests', 'ApprovalStep')
-    
+
     # Create or get the template
     template, created = RequestTemplate.objects.get_or_create(
         name='Late Entry Permission',
@@ -70,14 +70,14 @@ def create_late_entry_template(apps, schema_editor):
             }
         }
     )
-    
+
     # Create approval steps
     ApprovalStep.objects.get_or_create(
         template=template,
         step_order=1,
         defaults={'approver_role': 'HOD'}
     )
-    
+
     ApprovalStep.objects.get_or_create(
         template=template,
         step_order=2,

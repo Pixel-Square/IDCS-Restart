@@ -132,7 +132,7 @@ export default function NotificationsPage() {
 
   const handleInsertPlaceholder = (placeholder: string) => {
     if (!activeTemplate) return;
-    
+
     setTemplates((prev) =>
       prev.map((t) =>
         t.id === activeTemplate

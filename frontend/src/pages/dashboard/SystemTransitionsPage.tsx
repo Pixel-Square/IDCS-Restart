@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  RefreshCw, CheckCircle, AlertCircle, Calendar, ArrowRight, 
-  Loader2, ChevronLeft, History, User, Clock 
+import {
+  RefreshCw, CheckCircle, AlertCircle, Calendar, ArrowRight,
+  Loader2, ChevronLeft, History, User, Clock
 } from 'lucide-react';
-import { 
-  fetchAcademicYears, shiftSemester, fetchTransitionLogs, 
-  AcademicYearRow, TransitionLog 
+import {
+  fetchAcademicYears, shiftSemester, fetchTransitionLogs,
+  AcademicYearRow, TransitionLog
 } from '../../services/academics';
 
 export default function SystemTransitionsPage() {
@@ -63,7 +63,7 @@ export default function SystemTransitionsPage() {
     <div className="p-6 max-w-5xl mx-auto">
       {/* Navigation & Breadcrumbs */}
       <nav className="flex items-center gap-2 text-sm text-slate-500 mb-6">
-        <button 
+        <button
           onClick={() => navigate('/dashboard')}
           className="hover:text-indigo-600 transition-colors"
         >
@@ -137,7 +137,7 @@ export default function SystemTransitionsPage() {
                       </div>
                       <div>
                         <h3 className="font-bold text-slate-900 text-lg">
-                          {ay.name} 
+                          {ay.name}
                           {ay.is_active && (
                             <span className="ml-3 px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded-full uppercase tracking-wider">
                               Active
@@ -152,8 +152,8 @@ export default function SystemTransitionsPage() {
                       onClick={() => handleShift(ay.id, ay.name)}
                       disabled={processing || ay.is_active}
                       className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold transition-all ${
-                        ay.is_active 
-                          ? 'bg-slate-100 text-slate-400 cursor-default' 
+                        ay.is_active
+                          ? 'bg-slate-100 text-slate-400 cursor-default'
                           : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-md hover:shadow-lg active:scale-95'
                       }`}
                     >
@@ -172,9 +172,9 @@ export default function SystemTransitionsPage() {
               Important Note
             </h3>
             <p className="text-sm text-amber-700 leading-relaxed">
-              Shifting the semester will update all <b>Sections</b> to their new semester numbers 
-              calculated based on the selected Academic Year and the section's Batch start year. 
-              Student profiles will remain in their current departments, batches, and sections, 
+              Shifting the semester will update all <b>Sections</b> to their new semester numbers
+              calculated based on the selected Academic Year and the section's Batch start year.
+              Student profiles will remain in their current departments, batches, and sections,
               but their <b>academic level</b> will advance.
             </p>
           </div>
@@ -187,7 +187,7 @@ export default function SystemTransitionsPage() {
               <History className="w-5 h-5 text-slate-600" />
               <h2 className="font-bold text-slate-800">Transition History</h2>
             </div>
-            
+
             <div className="max-h-[600px] overflow-y-auto">
               {loading ? (
                 <div className="p-8 text-center text-slate-400">

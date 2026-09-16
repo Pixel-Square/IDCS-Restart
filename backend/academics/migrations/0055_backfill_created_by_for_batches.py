@@ -6,12 +6,12 @@ from django.db import migrations
 def backfill_created_by(apps, schema_editor):
     """Set created_by to staff for existing batches where created_by is null."""
     StudentSubjectBatch = apps.get_model('academics', 'StudentSubjectBatch')
-    
+
     # For backward compatibility, set created_by to staff for batches where it's null
     batches_to_update = StudentSubjectBatch.objects.filter(created_by__isnull=True)
     for batch in batches_to_update:
         batch.created_by = batch.staff
-    
+
     # Bulk update for efficiency
     StudentSubjectBatch.objects.bulk_update(batches_to_update, ['created_by'], batch_size=500)
 

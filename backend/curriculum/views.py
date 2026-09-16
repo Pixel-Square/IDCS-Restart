@@ -49,7 +49,7 @@ class CurriculumMasterViewSet(viewsets.ModelViewSet):
             import traceback
             logging.getLogger(__name__).error('Error creating CurriculumMaster: %s\n%s', e, traceback.format_exc())
             return Response(
-                {'detail': 'Failed to create master entry', 'error': str(e)}, 
+                {'detail': 'Failed to create master entry', 'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -60,7 +60,7 @@ class CurriculumMasterViewSet(viewsets.ModelViewSet):
             import traceback
             logging.getLogger(__name__).error('Error updating CurriculumMaster: %s\n%s', e, traceback.format_exc())
             return Response(
-                {'detail': 'Failed to update master entry', 'error': str(e)}, 
+                {'detail': 'Failed to update master entry', 'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -87,7 +87,7 @@ class CurriculumMasterViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logging.getLogger(__name__).exception('Error in propagate: %s', e)
             return Response(
-                {'detail': 'Failed to propagate', 'error': str(e)}, 
+                {'detail': 'Failed to propagate', 'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -351,7 +351,7 @@ class ElectiveSubjectViewSet(viewsets.ModelViewSet):
         dept_id = req.query_params.get('department_id')
         regulation = req.query_params.get('regulation')
         semester = req.query_params.get('semester')
-        
+
         if dept_id:
             try:
                 dept_id_int = int(dept_id)
@@ -360,18 +360,18 @@ class ElectiveSubjectViewSet(viewsets.ModelViewSet):
                     department_id=dept_id_int,
                     is_active=True
                 ).values_list('group_id', flat=True)
-                
+
                 # Filter electives that either:
                 # 1. Belong directly to this department, OR
                 # 2. Have a department_group that this department is mapped to
                 qs = qs.filter(
-                    Q(department_id=dept_id_int) | 
+                    Q(department_id=dept_id_int) |
                     Q(department_group_id__in=list(group_ids))
                 )
             except Exception as e:
                 logger.error('Error filtering electives by department_id: %s', e)
                 pass
-        
+
         if regulation:
             qs = qs.filter(regulation=regulation)
         if semester:
@@ -423,7 +423,7 @@ class ElectiveSubjectViewSet(viewsets.ModelViewSet):
 
 class CurriculumDepartmentsView(APIView):
     """Return departments filtered by curriculum permissions.
-    
+
     Uses same permission logic as CurriculumDepartmentViewSet:
     - Superusers, IQAC/HAA groups: see all departments
     - Users with curriculum_master_edit/publish: see all departments
@@ -435,13 +435,13 @@ class CurriculumDepartmentsView(APIView):
         user = request.user
         from academics.models import Department
         include_non_teaching = str(request.query_params.get('include_non_teaching', 'false')).strip().lower() in {'1', 'true', 'yes'}
-        
+
         # Users with global access see all departments
         if user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists():
             qs = Department.objects.all()
         else:
             perms = get_user_permissions(user)
-            wide_perms = {'curriculum_master_edit', 'curriculum_master_publish', 
+            wide_perms = {'curriculum_master_edit', 'curriculum_master_publish',
                          'CURRICULUM_MASTER_EDIT', 'CURRICULUM_MASTER_PUBLISH'}
             if perms & wide_perms:
                 # Users with wide curriculum permissions see all
@@ -459,10 +459,10 @@ class CurriculumDepartmentsView(APIView):
                                 dept_ids = [section.batch.course.department_id]
                         except Exception:
                             pass
-                
+
                 if not dept_ids:
                     return Response({'results': []})
-                
+
                 qs = Department.objects.filter(id__in=dept_ids)
 
         can_include_non_teaching = bool(
@@ -472,13 +472,13 @@ class CurriculumDepartmentsView(APIView):
         )
         if not (include_non_teaching and can_include_non_teaching):
             qs = qs.filter(is_teaching=True)
-        
+
         results = []
         for d in qs:
             results.append({
-                'id': d.id, 
-                'code': getattr(d, 'code', None), 
-                'name': getattr(d, 'name', None), 
+                'id': d.id,
+                'code': getattr(d, 'code', None),
+                'name': getattr(d, 'name', None),
                 'short_name': getattr(d, 'short_name', None)
             })
         return Response({'results': results})

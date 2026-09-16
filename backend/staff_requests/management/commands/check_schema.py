@@ -14,7 +14,7 @@ class Command(BaseCommand):
                 WHERE table_name='staff_requests_requesttemplate'
                 ORDER BY ordinal_position
             """)
-            
+
             self.stdout.write('\nRequestTemplate table schema:')
             self.stdout.write('-' * 80)
             for row in cursor.fetchall():

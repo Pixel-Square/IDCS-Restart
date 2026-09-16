@@ -85,7 +85,7 @@ export default function ProfilePage() {
           <div className="flex flex-col md:flex-row items-center gap-6">
             <div className="w-24 h-24 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center border border-white/30 shadow-inner group relative overflow-hidden">
                <User size={48} className="text-white" />
-               <button 
+               <button
                 onClick={handleManualRefresh}
                 className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-white"
                 title="Refresh assignments"

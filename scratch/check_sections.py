@@ -17,7 +17,7 @@ for ta_id in [477, 479, 476, 478, 328, 331, 25, 459, 389, 392]:
     sec = ta.section
     is_sh = is_shared(sec)
     print(f"TA {ta_id}: Staff: {ta.staff} | Sec: {sec} (Shared: {is_sh}) | Curric Row: {ta.curriculum_row_id}")
-    
+
     # Linked AcV2Section
     acv2_secs = AcV2Section.objects.filter(teaching_assignment=ta)
     print(f"  Linked AcV2Sections count: {acv2_secs.count()}")

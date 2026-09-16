@@ -13,7 +13,7 @@ urlpatterns = [
 ]
 
 # Available endpoints:
-# 
+#
 # REQUEST TEMPLATES (Admin/HR only):
 # GET    /api/staff-requests/templates/                      - List all templates
 # POST   /api/staff-requests/templates/                      - Create new template

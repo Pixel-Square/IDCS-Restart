@@ -71,7 +71,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
               else if (batchName.includes('2022')) yearNum = 4;
               else if (batchName.includes('2021')) yearNum = 4;
             }
-            
+
             return {
               id: r.section_id || r.id,
               name: r.section_name || r.name,
@@ -104,7 +104,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
 
   const years = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
 
-  
+
   const departments = [
     { name: 'IT' },
     { name: 'AI&DS' },
@@ -123,20 +123,20 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
     else if (yearLabel === '2nd Year') { yearNum = 2; }
     else if (yearLabel === '3rd Year') { yearNum = 3; }
     else if (yearLabel === '4th Year') { yearNum = 4; }
-    
+
     // Fallback to year filter since production API might not have semester yet
     const filtered = sectionsData.filter(s => Number(s.year) === yearNum);
-    
+
     let activeDepartments = departments;
     if (yearNum === 1) {
       activeDepartments = departments.filter(d => d.name === 'S&H');
     } else {
       activeDepartments = departments.filter(d => d.name !== 'S&H');
     }
-    
+
     return activeDepartments.map(dept => {
       const allowedNames = deptMapping[dept.name] || [dept.name.toLowerCase()];
-      
+
       let deptSections;
       if (yearNum === 1 && dept.name === 'S&H') {
         deptSections = filtered.filter(s => {
@@ -161,20 +161,20 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
         deptSections = filtered.filter(s => {
           const dName = (s.department_short_name || '').toLowerCase().trim();
           if (!dName) return false;
-          
+
           return allowedNames.some(allowed => {
             if (dName === allowed) return true;
-            
+
             if (allowed.length <= 3) {
               const parts = dName.split(/[-_\s]+/);
               return parts.includes(allowed);
             }
-            
+
             return dName.includes(allowed);
           });
         }).map(s => ({ id: s.id, name: s.name }));
       }
-      
+
       const uniqueMap = new Map();
       deptSections.forEach(s => {
         if (s && s.name && !uniqueMap.has(s.name)) {
@@ -182,7 +182,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
         }
       });
       const uniqueSections = Array.from(uniqueMap.values()).sort((a, b) => a.name.localeCompare(b.name));
-      
+
       return {
         name: dept.name,
         sections: uniqueSections
@@ -214,12 +214,12 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
       setExpandedSection(null);
     } else {
       setExpandedSection(sectionKey);
-      
+
       // Load curriculum if not already loaded
       if (!sectionCurriculum[sectionKey] && sectionId) {
         setSectionCurriculumLoading(prev => ({ ...prev, [sectionKey]: true }));
         setSectionCurriculumError(prev => ({ ...prev, [sectionKey]: '' }));
-        
+
         try {
           const res = await fetchWithAuth(`/api/timetable/curriculum-for-section/?section_id=${sectionId}`);
           if (res.ok) {
@@ -239,7 +239,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
           setSectionCurriculumLoading(prev => ({ ...prev, [sectionKey]: false }));
         }
       }
-      
+
       // Refresh assignments and advisors to show latest data
       try {
         const [assignRes, advisorRes, subjectStaffRes] = await Promise.all([
@@ -421,7 +421,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
         return codeMatch || nameMatch;
       }) || null;
     };
-    
+
     // Show loading state
     if (isLoading) {
       return (
@@ -431,7 +431,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
         </div>
       );
     }
-    
+
     // Show error state
     if (error) {
       return (
@@ -444,7 +444,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
         </div>
       );
     }
-    
+
     // Show empty state
     if (!isLoading && subjects.length === 0) {
       return (
@@ -455,7 +455,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
         </div>
       );
     }
-    
+
     const handleClassAdvisorChange = (value: string) => {
       setClassAdvisorSelection(prev => ({ ...prev, [sectionKey]: value }));
     };
@@ -482,7 +482,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
         let actualSubjectId = subjectId;
         if (isNewAssignment) actualSubjectId = subjectId.replace('new-', '');
         if (isAddAssignment) actualSubjectId = subjectId.replace(/add-([^-]+)-.*/, '$1');
-        
+
         // Get the subject object from curriculum to verify it exists
         const subjectObj = subjects.find(s => s.id == actualSubjectId);
         if (!subjectObj) {
@@ -497,11 +497,11 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
             const subCourseCode = (subjectObj.course_code || subjectObj.code || '').trim();
             const aCourseCode = (a.curriculum_row_details?.course_code || '').trim();
             const isCourseCodeMatch = subCourseCode && aCourseCode && subCourseCode === aCourseCode;
-            
+
             const subCourseName = (subjectObj.course_name || subjectObj.name || '').trim().toLowerCase();
             const aCourseName = (a.curriculum_row_details?.course_name || '').trim().toLowerCase();
             const isCourseNameMatch = subCourseName && aCourseName && subCourseName === aCourseName;
-            
+
             const extractId = (val: any) => (val && typeof val === 'object') ? Number(val.id || 0) : Number(val || 0);
             const aCurriculumRowId = extractId(a.curriculum_row) || Number(a.curriculum_row_details?.id || 0);
             const aSectionId = extractId(a.section) || Number(a.section_details?.id || 0);
@@ -549,7 +549,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
             staff_id: Number(value),
             is_active: true
           };
-          
+
           console.log('📤 Sending assignment payload:', {
             ...payload,
             subjectObj: subjectObj,
@@ -584,7 +584,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
             try {
               const errData = await assignmentRes.json();
               console.error('📋 Full Error Response:', errData);
-              
+
               // Try to extract meaningful error message
               if (typeof errData === 'object') {
                 if (errData.detail) errDetails = errData.detail;
@@ -681,7 +681,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
 
     const handleSave = async () => {
       console.log('🔵 SAVE CLICKED - Section:', sectionKey, 'Advisor:', classAdvisorSelection[sectionKey], 'Subjects:', subjectFacultySelection[sectionKey]);
-      
+
       setSavingState(prev => ({ ...prev, [sectionKey]: true }));
       setSaveMessage(prev => ({ ...prev, [sectionKey]: undefined }));
 
@@ -712,12 +712,12 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
         for (const [subjectIdRaw, newStaffId] of Object.entries(subjectSelections)) {
           // Detect if this is a new assignment or update
           const isNewAssignment = subjectIdRaw.startsWith('new-');
-          const subjectId = isNewAssignment 
-            ? subjectIdRaw.replace('new-', '') 
+          const subjectId = isNewAssignment
+            ? subjectIdRaw.replace('new-', '')
             : subjectIdRaw;
 
           // Find existing assignment if updating
-          const existingAssignment = !isNewAssignment 
+          const existingAssignment = !isNewAssignment
             ? assignments.find(a => {
                 const extractId = (val: any) => (val && typeof val === 'object') ? Number(val.id || 0) : Number(val || 0);
                 const aCurriculumRowId = extractId(a.curriculum_row) || Number(a.curriculum_row_details?.id || 0);
@@ -883,7 +883,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
               // Find saved advisor for this section
               const savedAdvisor = advisors.find(a => a.section_id === sectionId && a.is_active);
               const savedAdvisorId = savedAdvisor?.advisor_id || "";
-              
+
               return (
                 <SearchableDropdown
                   label=""
@@ -896,7 +896,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
             })()}
           </div>
         </div>
-        
+
         {/* Save Button and Message on Right */}
         <div className="flex flex-col items-end gap-2">
           <button
@@ -947,10 +947,10 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
               const sectionNameStr = sectionKey.split('-')[1];
               const currentDeptName = sectionKey.split('-')[0];
               const allowedDeptNames = deptMapping[currentDeptName] || [currentDeptName.toLowerCase()];
-              
+
               // Log current subject being processed
               console.log(`🔍 Processing subject ${idx}: ID=${sub.id}, Code=${sub.course_code}, Name=${sub.course_name}`);
-              
+
               const matchingAssignments = assignments.filter(a => {
                 // Only consider active assignments
                 if (a.is_active === false) {
@@ -962,41 +962,41 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
                   }
                   return false;
                 }
-                
+
                 // IMPROVED: Normalize all IDs to numbers for consistent comparison
                 const extractId = (val: any) => (val && typeof val === 'object') ? Number(val.id || 0) : Number(val || 0);
                 const aCurriculumRow = extractId(a.curriculum_row) || Number(a.curriculum_row_details?.id || 0);
                 const aSection = extractId(a.section) || Number(a.section_details?.id || 0);
                 const subIdNum = Number(sub.id || 0);
                 const sectionIdNum = Number(sectionId || 0);
-                
+
                 const sectionIdMatch = aSection === sectionIdNum;
                 const sectionNameMatch = a.section_name === sectionNameStr || (a.section_details && a.section_details.name === sectionNameStr);
-                
+
                 // IMPROVED: Match curriculum_row with multiple fallbacks including course_code and course_name
                 const subCourseCode = (sub.course_code || sub.code || '').trim();
                 const aCourseCode = (a.curriculum_row_details?.course_code || '').trim();
                 const courseCodeMatch = subCourseCode && aCourseCode && subCourseCode === aCourseCode;
-                
+
                 const subCourseName = (sub.course_name || sub.name || '').trim().toLowerCase();
                 const aCourseName = (a.curriculum_row_details?.course_name || '').trim().toLowerCase();
                 const courseNameMatch = subCourseName && aCourseName && subCourseName === aCourseName;
-                
-                const subjectMatch = aCurriculumRow === subIdNum || 
+
+                const subjectMatch = aCurriculumRow === subIdNum ||
                                      (a.curriculum_row_details && Number(a.curriculum_row_details.id) === subIdNum) ||
                                      courseCodeMatch ||
                                      courseNameMatch;
-                
+
                 const electiveMatch = a.elective_subject_details && Number(a.elective_subject_details.parent_id) == subIdNum;
-                
+
                 const isMatch = subjectMatch ? sectionIdMatch
                              : electiveMatch ? (allowedDeptNames.some(d => {
                                    const elDept = (a.elective_subject_details.department_display || '').toLowerCase();
                                    const elDeptId = String(a.elective_subject_details.department_id || '');
                                    return elDept.includes(d) || elDeptId === d;
-                                 }) ? true : sectionIdMatch) 
+                                 }) ? true : sectionIdMatch)
                              : false;
-                
+
                 // Enhanced logging with actual values
                 if (sub.course_code === 'GEA1122') {
                   console.log(`📋 DEBUG GEA1122 Subject ${sub.id} check against assignment ${a.id}:`, {
@@ -1020,14 +1020,14 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
                     subCourseCode
                   });
                 }
-                
+
                 if (isMatch && (subjectMatch || electiveMatch)) {
                   console.log(`✓ ✅ MATCHED assignment ${a.id} for subject ${sub.id}:`, a);
                 }
-                
+
                 return isMatch;
               });;
-              
+
               console.log(`📊 Subject ${sub.id} found ${matchingAssignments.length} matching assignments`);
 
               const rows = [];
@@ -1040,19 +1040,19 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
               const fallbackClass = sub.class_type || sub.class || sub.cat || aggregatedRow?.class_type || aggregatedRow?.class || aggregatedRow?.cat || '-';
               const fallbackName = sub.course_name || sub.name || aggregatedRow?.course_name || '-';
               const fallbackCredits = (sub.c !== undefined && sub.c !== null) ? sub.c : ((sub.credits !== undefined && sub.credits !== null) ? sub.credits : (aggregatedRow?.c ?? aggregatedRow?.credits ?? '-'));
-              
+
               // Detect if this subject is offered in mixed sections
               const homeDeptCodes = sub.home_dept_codes || [];
               const departments = sub.departments || [];
               const isMixedSection = homeDeptCodes.length > 1 || departments.length > 1;
-              
+
               // Get list of sections offering this subject
-              const sectionsList = isMixedSection 
-                ? (departments.length > 1 
+              const sectionsList = isMixedSection
+                ? (departments.length > 1
                     ? departments.map((d: any) => d.short_name || d.code || d.name).join(', ')
                     : homeDeptCodes.join(', '))
                 : null;
-              
+
               const effectiveAssignments = matchingAssignments.length > 0
                 ? matchingAssignments
                 : aggregatedAssignedStaff.map((staff: any, staffIndex: number) => ({
@@ -1073,13 +1073,13 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
                       }
                     }
                   }));
-              
+
               if (effectiveAssignments.length === 0) {
                 const isSavingThisSubject = subjectAutoSavingSet.has(`new-${sub.id}`);
                 const autoSaveMsg = subjectAutoMessages[`new-${sub.id}`];
                 const tempSelectedValue = temporarySelection[`new-${sub.id}`];
                 const tempSelectedFaculty = tempSelectedValue ? facultyOptions.find(opt => opt.value === tempSelectedValue)?.label : null;
-                
+
                 rows.push(
                   <tr key={idx} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-blue-50'}`}>
                     <td className="px-4 py-3 font-medium text-gray-900">{fallbackCode}</td>
@@ -1128,7 +1128,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
                   const isVirtual = Boolean(assignment.__virtual);
                   const assignedStaffId = assignment.staff_details?.staff_id || assignment.staff_id || assignment.staff || "";
                   const assignedStaffUserId = assignment.staff_details?.id || assignment.staff_details?.user?.id || assignment.staff || "";
-                  
+
                   let staffDisplayName = null;
                   if (assignment.staff_details?.user) {
                     const firstName = assignment.staff_details.user.first_name || '';
@@ -1136,15 +1136,15 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
                     const fullName = `${firstName} ${lastName}`.trim();
                     if (fullName) staffDisplayName = `${fullName} (${assignment.staff_details.staff_id || ''})`;
                   }
-                  
-                  const matchingOption = facultyOptions.find(opt => 
-                    String(opt.value) === String(assignedStaffUserId) || 
+
+                  const matchingOption = facultyOptions.find(opt =>
+                    String(opt.value) === String(assignedStaffUserId) ||
                     String(opt.value) === String(assignedStaffId) ||
                     String(opt.value) === String(assignment.staff) ||
                     String(opt.value) === String(assignment.staff_id)
                   );
                   const optionValue = matchingOption?.value || String(assignedStaffUserId || assignedStaffId || assignment.staff_id || assignment.staff || "");
-                  
+
                   const isElective = !!assignment.elective_subject_details;
                   const displayCode = isElective
                     ? assignment.elective_subject_details.course_code
@@ -1152,10 +1152,10 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
                   const displayName = isElective
                     ? assignment.elective_subject_details.course_name
                     : fallbackName;
-                  
+
                   const currentFacultyOption = facultyOptions.find(opt => String(opt.value) === String(optionValue));
                   const currentFacultyLabel = currentFacultyOption?.label || staffDisplayName || optionValue;
-                  
+
                   const isSavingThisSubject = subjectAutoSavingSet.has(String(sub.id));
                   const autoSaveMsg = subjectAutoMessages[String(sub.id)];
                   const tempSelectedValue = temporarySelection[String(sub.id)];
@@ -1230,7 +1230,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
             <span className="font-semibold text-gray-800 text-lg">{year}</span>
             {expandedYear === year ? <ChevronDown className="w-5 h-5 text-gray-500" /> : <ChevronRight className="w-5 h-5 text-gray-500" />}
           </button>
-          
+
           {expandedYear === year && (
             <div className="p-4 border-t border-gray-200">
               <div className="space-y-3">
@@ -1244,7 +1244,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
                       <span className="font-medium text-blue-700">{dept.name} Department</span>
                       {expandedDept === dept.name ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
                     </button>
-                    
+
                     {expandedDept === dept.name && (
                       <div className="p-3 bg-gray-50 border-t border-gray-200 space-y-2">
                         <h5 className="text-xs font-semibold text-gray-500 uppercase ml-1">Classes / Sections</h5>

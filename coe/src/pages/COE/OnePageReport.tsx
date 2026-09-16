@@ -258,7 +258,7 @@ export default function OnePageReport() {
           });
           const selection = selectionMap[courseKey];
           if (selection?.eseType !== 'ESE') continue;
-          
+
           const courseAbsentees = absentCourseMap.get(courseKey);
           const originalStudents = (course.students || []).filter((student: CoeCourseStudent) => {
             const regNo = String(student.reg_no || '').trim();

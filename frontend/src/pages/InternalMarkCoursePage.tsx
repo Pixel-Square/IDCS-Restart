@@ -755,7 +755,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         const all = await fetchMyTeachingAssignments();
         if (!mounted) return;
         let filtered = (all || []).filter((a) => String(a.subject_code) === String(courseId));
-        
+
         // If user doesn't have a TA for this subject, try to fetch from server
         if (filtered.length === 0) {
           try {
@@ -769,7 +769,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
             console.warn('Server TA list fetch failed:', err);
           }
         }
-        
+
         setTas(filtered);
         const stored = lsGet<number>(`internalMark_selectedTa_${courseId}`);
         const initial = (typeof stored === 'number' && filtered.some((f) => f.id === stored) ? stored : filtered[0]?.id) ?? null;
@@ -1241,9 +1241,9 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
               try { review2Res = await fetchPublishedReview2(courseId, taId); } catch { review2Res = null; }
             }
             if (!mounted) return;
-            setPublishedReview({ 
-              r1: { ...review1Res?.marks, co_splits: review1Res?.co_splits || {} }, 
-              r2: { ...review2Res?.marks, co_splits: review2Res?.co_splits || {} } 
+            setPublishedReview({
+              r1: { ...review1Res?.marks, co_splits: review1Res?.co_splits || {} },
+              r2: { ...review2Res?.marks, co_splits: review2Res?.co_splits || {} }
             });
           }
         }
@@ -2292,7 +2292,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         if (r1Splits?.co1 != null) return clamp(r1Splits.co1, 0, maxes.review1.co1);
         return review1Half == null ? null : clamp(review1Half, 0, maxes.review1.co1);
       };
-      
+
       const getR1Co2 = () => {
         if (r1Splits?.co2 != null) return clamp(r1Splits.co2, 0, maxes.review1.co2);
         return review1Half == null ? null : clamp(review1Half, 0, maxes.review1.co2);
@@ -2662,7 +2662,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
     return computedRows.map((r: any) => {
       const studentEntry: any = (entries as any)?.[r.id] || {};
-      
+
       let cqiAddedRaw = 0;
       let baseTotalRaw = 0;
       let hasBaseData = false;

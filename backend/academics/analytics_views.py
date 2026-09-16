@@ -13,10 +13,10 @@ from django.db.models import Count, Q, Avg, F
 from django.utils import timezone
 from datetime import date, timedelta
 from .models import (
-    PeriodAttendanceRecord, 
+    PeriodAttendanceRecord,
     PeriodAttendanceSession,
-    StudentProfile, 
-    Section, 
+    StudentProfile,
+    Section,
     Department,
     StaffProfile,
     DepartmentRole
@@ -37,22 +37,22 @@ class AttendanceAnalyticsView(APIView):
         user = request.user
         perms = get_user_permissions(user)
         staff_profile = getattr(user, 'staff_profile', None)
-        
+
         # Determine permission level
         can_view_all = 'analytics.view_all_analytics' in perms or user.is_superuser
         can_view_department = 'analytics.view_department_analytics' in perms or can_view_all
         can_view_class = 'analytics.view_class_analytics' in perms or can_view_department
-        
+
         if not (can_view_all or can_view_department or can_view_class):
             raise PermissionDenied('You do not have permission to view analytics')
-        
+
         # Get query parameters
         start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
         department_id = request.query_params.get('department_id')
         section_id = request.query_params.get('section_id')
         view_type = request.query_params.get('view_type', 'overview')  # overview, department, class, student
-        
+
         # Set default date range (last 30 days)
         if not end_date:
             end_date = date.today()
@@ -61,7 +61,7 @@ class AttendanceAnalyticsView(APIView):
                 end_date = date.fromisoformat(end_date)
             except:
                 end_date = date.today()
-        
+
         if not start_date:
             start_date = end_date - timedelta(days=30)
         else:
@@ -69,18 +69,18 @@ class AttendanceAnalyticsView(APIView):
                 start_date = date.fromisoformat(start_date)
             except:
                 start_date = end_date - timedelta(days=30)
-        
+
         # Build base queryset
         sessions_qs = PeriodAttendanceSession.objects.filter(
             date__gte=start_date,
             date__lte=end_date
         ).select_related('section', 'section__batch', 'section__batch__course', 'section__batch__course__department')
-        
+
         records_qs = PeriodAttendanceRecord.objects.filter(
             session__date__gte=start_date,
             session__date__lte=end_date
         ).select_related('student', 'session__section', 'session__section__batch', 'session__section__batch__course', 'session__section__batch__course__department')
-        
+
         # Apply permission-based filtering
         # Note: do not force only Period 1 here — allow analytics across periods
         # If a caller needs period-specific data they can pass a `period_index` query param
@@ -97,16 +97,16 @@ class AttendanceAnalyticsView(APIView):
                 # Filter by staff's department
                 dept_roles = DepartmentRole.objects.filter(staff=staff_profile, is_active=True)
                 dept_ids = [dr.department_id for dr in dept_roles if dr.department_id]
-                
+
                 # Also check if staff has teaching assignments in other departments
                 from .models import TeachingAssignment
                 teaching_depts = TeachingAssignment.objects.filter(
-                    staff=staff_profile, 
+                    staff=staff_profile,
                     is_active=True
                 ).values_list('section__batch__course__department_id', flat=True).distinct()
                 dept_ids.extend(list(teaching_depts))
                 dept_ids = list(set(filter(None, dept_ids)))
-                
+
                 if dept_ids:
                     sessions_qs = sessions_qs.filter(section__batch__course__department_id__in=dept_ids)
                     records_qs = records_qs.filter(session__section__batch__course__department_id__in=dept_ids)
@@ -114,7 +114,7 @@ class AttendanceAnalyticsView(APIView):
                     # No department access
                     sessions_qs = sessions_qs.none()
                     records_qs = records_qs.none()
-            
+
             elif can_view_class and staff_profile:
                 # Filter by advisor's sections only
                 from .models import SectionAdvisor
@@ -122,23 +122,23 @@ class AttendanceAnalyticsView(APIView):
                     advisor=staff_profile,
                     is_active=True
                 ).values_list('section_id', flat=True)
-                
+
                 if advisor_sections:
                     sessions_qs = sessions_qs.filter(section_id__in=advisor_sections)
                     records_qs = records_qs.filter(session__section_id__in=advisor_sections)
                 else:
                     sessions_qs = sessions_qs.none()
                     records_qs = records_qs.none()
-        
+
         # Apply user-selected filters (if permitted)
         if department_id and can_view_all:
             sessions_qs = sessions_qs.filter(section__batch__course__department_id=department_id)
             records_qs = records_qs.filter(session__section__batch__course__department_id=department_id)
-        
+
         if section_id and (can_view_all or can_view_department):
             sessions_qs = sessions_qs.filter(section_id=section_id)
             records_qs = records_qs.filter(session__section_id=section_id)
-        
+
         # Calculate statistics based on view_type
         if view_type == 'overview':
             data = self._get_overview_stats(records_qs, sessions_qs, start_date, end_date)
@@ -150,35 +150,35 @@ class AttendanceAnalyticsView(APIView):
             data = self._get_student_stats(records_qs, section_id)
         else:
             data = self._get_overview_stats(records_qs, sessions_qs, start_date, end_date)
-        
+
         return Response({
             'permission_level': 'all' if can_view_all else ('department' if can_view_department else 'class'),
             'date_range': {'start': start_date.isoformat(), 'end': end_date.isoformat()},
             'data': data
         })
-    
+
     def _get_overview_stats(self, records_qs, sessions_qs, start_date, end_date):
         """Overall statistics summary"""
         total_sessions = sessions_qs.count()
         total_records = records_qs.count()
-        
+
         status_breakdown = records_qs.values('status').annotate(
             count=Count('id')
         ).order_by('-count')
-        
+
         # Treat 'P', 'OD' and 'LATE' as present for attendance percentage
         present_count = records_qs.filter(status__in=['P', 'OD', 'LATE']).count()
         absent_count = records_qs.filter(status='A').count()
-        
+
         attendance_rate = (present_count / total_records * 100) if total_records > 0 else 0
-        
+
         # Trend over time (daily) - use simple date grouping
         daily_stats = records_qs.values('session__date').annotate(
             total=Count('id'),
             present=Count('id', filter=Q(status__in=['P', 'OD', 'LATE'])),
             absent=Count('id', filter=Q(status='A'))
         ).order_by('session__date')
-        
+
         # Format dates as strings for JSON serialization
         daily_trend = []
         for stat in daily_stats:
@@ -188,7 +188,7 @@ class AttendanceAnalyticsView(APIView):
                 'present': stat['present'],
                 'absent': stat['absent']
             })
-        
+
         return {
             'summary': {
                 'total_sessions': total_sessions,
@@ -200,7 +200,7 @@ class AttendanceAnalyticsView(APIView):
             'status_breakdown': list(status_breakdown),
             'daily_trend': daily_trend
         }
-    
+
     def _get_department_stats(self, records_qs, can_filter=True):
         """Department-wise statistics"""
         dept_stats = records_qs.values(
@@ -214,7 +214,7 @@ class AttendanceAnalyticsView(APIView):
             leave_count=Count('id', filter=Q(status='LEAVE')),
             od_count=Count('id', filter=Q(status='OD'))
         ).order_by('-total_records')
-        
+
         # Calculate attendance rate for each department
         result = []
         for dept in dept_stats:
@@ -230,9 +230,9 @@ class AttendanceAnalyticsView(APIView):
                 'on_duty': dept['od_count'],
                 'attendance_rate': round(rate, 2)
             })
-        
+
         return {'departments': result}
-    
+
     def _get_class_stats(self, records_qs, can_filter=True):
         """Class/Section-wise statistics"""
         class_stats = records_qs.values(
@@ -248,7 +248,7 @@ class AttendanceAnalyticsView(APIView):
             od_count=Count('id', filter=Q(status='OD')),
             late_count=Count('id', filter=Q(status='LATE'))
         ).order_by('-total_records')
-        
+
         result = []
         for cls in class_stats:
             rate = (cls['present_count'] / cls['total_records'] * 100) if cls['total_records'] > 0 else 0
@@ -264,9 +264,9 @@ class AttendanceAnalyticsView(APIView):
                 'on_duty': cls['od_count'],
                 'attendance_rate': round(rate, 2)
             })
-        
+
         return {'classes': result}
-    
+
     def _get_student_stats(self, records_qs, section_id=None):
         """Student-wise statistics"""
         student_stats = records_qs.values(
@@ -282,7 +282,7 @@ class AttendanceAnalyticsView(APIView):
             od_count=Count('id', filter=Q(status='OD')),
             late_count=Count('id', filter=Q(status='LATE'))
         ).order_by('-total_records')
-        
+
         result = []
         for student in student_stats:
             rate = (student['present_count'] / student['total_records'] * 100) if student['total_records'] > 0 else 0
@@ -299,7 +299,7 @@ class AttendanceAnalyticsView(APIView):
                 'late': student['late_count'],
                 'attendance_rate': round(rate, 2)
             })
-        
+
         return {'students': result}
 
 
@@ -308,16 +308,16 @@ class AnalyticsFiltersView(APIView):
     Get available filters based on user's permission level
     """
     permission_classes = (IsAuthenticated,)
-    
+
     def get(self, request):
         user = request.user
         perms = get_user_permissions(user)
         staff_profile = getattr(user, 'staff_profile', None)
-        
+
         # Determine permission level
         can_view_all = 'analytics.view_all_analytics' in perms or user.is_superuser
         can_view_department = 'analytics.view_department_analytics' in perms or can_view_all
-        
+
         # ALSO check if user is an HOD via DepartmentRole - they should have department-level access
         is_hod = False
         if staff_profile and not can_view_department:
@@ -328,40 +328,40 @@ class AnalyticsFiltersView(APIView):
             ).exists()
             if is_hod:
                 can_view_department = True
-        
+
         can_view_class = 'analytics.view_class_analytics' in perms or can_view_department
-        
+
         if not (can_view_all or can_view_department or can_view_class):
             raise PermissionDenied('You do not have permission to view analytics')
-        
+
         departments = []
         sections = []
-        
+
         if can_view_all:
             # Get all departments
             departments = list(Department.objects.all().values('id', 'name', 'short_name').order_by('name'))
             # Get all sections
             sections = list(Section.objects.select_related('batch', 'batch__course', 'batch__course__department').values(
-                'id', 'name', 
+                'id', 'name',
                 'batch__course__name',
                 'batch__course__department__id',
                 'batch__course__department__short_name'
             ).order_by('batch__course__department__short_name', 'name'))
-            
+
         elif can_view_department and staff_profile:
             # Get only staff's departments
             dept_roles = DepartmentRole.objects.filter(staff=staff_profile, is_active=True)
             dept_ids = [dr.department_id for dr in dept_roles if dr.department_id]
-            
+
             # Also check teaching assignments
             from .models import TeachingAssignment
             teaching_depts = TeachingAssignment.objects.filter(
-                staff=staff_profile, 
+                staff=staff_profile,
                 is_active=True
             ).values_list('section__batch__course__department_id', flat=True).distinct()
             dept_ids.extend(list(teaching_depts))
             dept_ids = list(set(filter(None, dept_ids)))
-            
+
             if dept_ids:
                 departments = list(Department.objects.filter(id__in=dept_ids).values('id', 'name', 'short_name').order_by('name'))
                 sections = list(Section.objects.filter(
@@ -372,7 +372,7 @@ class AnalyticsFiltersView(APIView):
                     'batch__course__department__id',
                     'batch__course__department__short_name'
                 ).order_by('batch__course__department__short_name', 'name'))
-        
+
         elif can_view_class and staff_profile:
             # Get only advisor's sections
             from .models import SectionAdvisor
@@ -380,9 +380,9 @@ class AnalyticsFiltersView(APIView):
                 advisor=staff_profile,
                 is_active=True
             ).select_related('section', 'section__batch', 'section__batch__course', 'section__batch__course__department')
-            
+
             section_ids = [sa.section_id for sa in advisor_sections_qs]
-            
+
             if section_ids:
                 sections = list(Section.objects.filter(
                     id__in=section_ids
@@ -392,11 +392,11 @@ class AnalyticsFiltersView(APIView):
                     'batch__course__department__id',
                     'batch__course__department__short_name'
                 ).order_by('batch__course__department__short_name', 'name'))
-                
+
                 # Get departments of these sections
                 dept_ids = list(set([s['batch__course__department__id'] for s in sections]))
                 departments = list(Department.objects.filter(id__in=dept_ids).values('id', 'name', 'short_name').order_by('name'))
-        
+
         return Response({
             'permission_level': 'all' if can_view_all else ('department' if can_view_department else 'class'),
             'departments': departments,
@@ -648,7 +648,7 @@ class ClassAttendanceReportView(APIView):
                 leave_count = records.filter(status='LEAVE').count()
                 od_count = records.filter(status='OD').count()
                 late_count = records.filter(status='LATE').count()
-                
+
                 attendance_pct = (present_count / total_records * 100) if total_records > 0 else 0
 
                 # `total_strength` was computed above for aggregated keys
@@ -678,7 +678,7 @@ class ClassAttendanceReportView(APIView):
                             pass
                 except Exception:
                     subject_name = ''
-                
+
                 try:
                     # determine aggregated sections for this card (if any)
                     aggregated_sections = None
@@ -715,10 +715,10 @@ class ClassAttendanceReportView(APIView):
                     import logging
                     logging.error(f"Failed to add period stat for session {session.id}: {e}")
                     continue
-            
+
             # Sort by period index
             period_stats.sort(key=lambda x: x['period_index'])
-            
+
             return Response({
                 'date': target_date.isoformat(),
                 'periods': period_stats,
@@ -1034,7 +1034,7 @@ class OverallSectionView(APIView):
 
         # apply permission scoping and build section map
         section_map = {}
-        
+
         if not can_view_all:
             if can_view_department and staff_profile:
                 # For department view, show ALL sections in the department (not just assigned ones)
@@ -1043,13 +1043,13 @@ class OverallSectionView(APIView):
                 dept_ids = [dr.department_id for dr in dept_roles if dr.department_id]
                 # Only use DepartmentRole, not teaching assignments, to avoid showing only assigned sections
                 dept_ids = list(set(filter(None, dept_ids)))
-                
+
                 if dept_ids:
                     # Get all sections in these departments
                     all_dept_sections = Section.objects.filter(
                         batch__course__department_id__in=dept_ids
                     ).select_related('batch', 'batch__course', 'batch__course__department')
-                    
+
                     # Pre-populate section_map with all department sections
                     for section in all_dept_sections:
                         section_map[section.id] = {
@@ -1070,7 +1070,7 @@ class OverallSectionView(APIView):
                             'attendance_session_id': None,
                             'session_id': None,
                         }
-                    
+
                     # Filter sessions to these departments
                     sessions_q = sessions_q.filter(section__batch__course__department_id__in=dept_ids)
                 else:
@@ -1087,7 +1087,7 @@ class OverallSectionView(APIView):
         for session in sessions_q:
             sec_id = session.section_id
             sec_name = getattr(session.section, 'name', '') if session.section else ''
-            
+
             # Only create new entry if not already in map (for non-department views)
             if sec_id not in section_map:
                 section_map[sec_id] = {
@@ -1108,7 +1108,7 @@ class OverallSectionView(APIView):
                     'attendance_session_id': None,
                     'session_id': None,
                 }
-            
+
             try:
                 recs = DailyAttendanceRecord.objects.filter(session=session)
                 total_strength = StudentProfile.objects.filter(section_id=session.section_id).exclude(status__in=['INACTIVE', 'DEBAR']).count() if session.section_id else 0
@@ -1162,29 +1162,29 @@ class MyClassStudentsView(APIView):
     """
     Get students from advisor's assigned sections for daily attendance marking.
     Also includes sections where daily attendance has been assigned to this staff (via swap).
-    
+
     Access is granted to:
     - Section advisors for their assigned sections
     - Staff members with sections assigned to them via daily attendance swap
     - Users with appropriate analytics permissions
     """
     permission_classes = (IsAuthenticated,)
-    
+
     def get(self, request):
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             raise PermissionDenied('Staff profile required')
-        
+
         from .models import SectionAdvisor, StudentProfile, DailyAttendanceSession, DailyAttendanceRecord
         from datetime import date as date_class
-        
+
         # Get advisor's assigned sections
         advisor_section_ids = set(SectionAdvisor.objects.filter(
             advisor=staff_profile,
             is_active=True
         ).values_list('section_id', flat=True))
-        
+
         # Get sections with daily attendance assigned to this staff (via swap)
         # Only include future or today's sessions
         today = date_class.today()
@@ -1192,26 +1192,26 @@ class MyClassStudentsView(APIView):
             assigned_to=staff_profile,
             date__gte=today
         ).values_list('section_id', flat=True).distinct())
-        
+
         # Keep all advisor sections visible (even if assigned to others)
         # Original advisors should always see their sections but in read-only mode
-        
+
         # Combine both sets
         all_section_ids = advisor_section_ids | assigned_section_ids
-        
+
         if not all_section_ids:
             return Response({'sections': [], 'message': 'No assigned sections found'})
-        
+
         # Get all students from these sections (exclude inactive/debarred)
         students = StudentProfile.objects.filter(
             section_id__in=all_section_ids
         ).exclude(status__in=['INACTIVE', 'DEBAR']).select_related(
-            'user', 
-            'section', 
-            'section__batch', 
+            'user',
+            'section',
+            'section__batch',
             'section__batch__course__department'
         ).order_by('section__name', 'reg_no')
-        
+
         # Get session status for the requested date (defaults to today)
         date_str = request.query_params.get('date')
         try:
@@ -1223,7 +1223,7 @@ class MyClassStudentsView(APIView):
             section_id__in=all_section_ids,
             date=target_date
         ).select_related('assigned_to', 'assigned_to__user')
-        
+
         session_id_to_section: dict = {}
         for session in daily_sessions:
             # Check if session has any attendance records (marked)
@@ -1258,7 +1258,7 @@ class MyClassStudentsView(APIView):
                 if sec_id and sec_id in sessions_status:
                     sessions_status[sec_id]['unlock_request_status'] = row['status']
                     sessions_status[sec_id]['unlock_request_hod_status'] = row['hod_status']
-        
+
         # Group by section
         sections_data = {}
         for student in students:
@@ -1267,7 +1267,7 @@ class MyClassStudentsView(APIView):
                 # Check if this is an advisor section or assigned section
                 is_advisor = section_id in advisor_section_ids
                 is_assigned = section_id in assigned_section_ids
-                
+
                 # Extract department information
                 department_name = ''
                 department_short_name = ''
@@ -1275,10 +1275,10 @@ class MyClassStudentsView(APIView):
                     dept = student.section.batch.course.department
                     department_name = dept.name
                     department_short_name = dept.short_name or dept.code or dept.name
-                
+
                 # Get session status
                 session_status = sessions_status.get(section_id, {})
-                
+
                 sections_data[section_id] = {
                     'section_id': section_id,
                     'section_name': student.section.name if student.section else '',
@@ -1290,7 +1290,7 @@ class MyClassStudentsView(APIView):
                     'session_status': session_status,
                     'students': []
                 }
-            
+
             sections_data[section_id]['students'].append({
                 'id': student.id,
                 'reg_no': student.reg_no,
@@ -1298,7 +1298,7 @@ class MyClassStudentsView(APIView):
                 'username': student.user.username if student.user else '',
                 'section_id': section_id,
             })
-        
+
         return Response({
             'sections': list(sections_data.values()),
             'total_sections': len(sections_data),
@@ -2036,27 +2036,27 @@ class MyClassAttendanceAnalyticsView(APIView):
     Requires 'analytics.view_class_analytics' permission or advisor role.
     """
     permission_classes = (IsAuthenticated,)
-    
+
     def get(self, request):
         try:
             user = request.user
             staff_profile = getattr(user, 'staff_profile', None)
             if not staff_profile:
                 return Response({'error': 'Staff profile required', 'sections': []}, status=400)
-            
+
             from .models import SectionAdvisor
             from datetime import date as date_class
-            
+
             # Get query parameters
             date_str = request.query_params.get('date')
             date_from_str = request.query_params.get('date_from')
             date_to_str = request.query_params.get('date_to')
             complete = request.query_params.get('complete', '').lower() in ('true', '1')
             view_mode = request.query_params.get('view_mode', 'class')
-            
+
             if view_mode != 'class':
                 return Response({'error': 'This endpoint only supports view_mode=class'}, status=400)
-            
+
             # Parse date range
             try:
                 if date_from_str and date_to_str:
@@ -2070,16 +2070,16 @@ class MyClassAttendanceAnalyticsView(APIView):
                 date_from = date_to = date_class.today()
             target_date = date_from  # for backward compat in response
             is_range = complete or (date_from != date_to)
-            
+
             # Get advisor's assigned sections
             advisor_sections = SectionAdvisor.objects.filter(
                 advisor=staff_profile,
                 is_active=True
             ).values_list('section_id', flat=True)
-            
+
             if not advisor_sections:
                 return Response({
-                    'sections': [], 
+                    'sections': [],
                     'message': 'No assigned sections found',
                     'debug': {
                         'staff_profile_id': staff_profile.id if staff_profile else None,
@@ -2087,7 +2087,7 @@ class MyClassAttendanceAnalyticsView(APIView):
                         'active_advisors': SectionAdvisor.objects.filter(is_active=True).count()
                     }
                 })
-            
+
             # Get period attendance sessions for these sections on date range (or all if complete)
             _period_base = PeriodAttendanceSession.objects.filter(section_id__in=list(advisor_sections))
             sessions = (_period_base if complete else _period_base.filter(date__range=(date_from, date_to))).select_related(
@@ -2095,12 +2095,12 @@ class MyClassAttendanceAnalyticsView(APIView):
                 'teaching_assignment', 'teaching_assignment__subject',
                 'teaching_assignment__curriculum_row', 'teaching_assignment__elective_subject'
             )
-            
+
             # Also get daily attendance sessions for these sections on date range (or all if complete)
             from .models import DailyAttendanceSession, DailyAttendanceRecord
             _daily_base = DailyAttendanceSession.objects.filter(section_id__in=list(advisor_sections))
             daily_sessions = (_daily_base if complete else _daily_base.filter(date__range=(date_from, date_to))).select_related('section', 'section__batch')
-            
+
             # Build a map of daily attendance data by section_id (aggregated across date range)
             daily_attendance_map = {}
             for daily_session in daily_sessions:
@@ -2110,13 +2110,13 @@ class MyClassAttendanceAnalyticsView(APIView):
                 absent_count = records.filter(status='A').count()
                 leave_count_daily = records.filter(status='LEAVE').count()
                 od_count_daily = records.filter(status='OD').count()
-                
+
                 # Get section details
                 section = daily_session.section
                 section_name = section.name if section else 'Unknown'
                 department_name = 'Unknown'
                 batch_name = 'Unknown'
-                
+
                 if section and section.batch:
                     batch_name = section.batch.name or 'Unknown'
                     if section.batch.course and section.batch.course.department:
@@ -2150,7 +2150,7 @@ class MyClassAttendanceAnalyticsView(APIView):
                 entry['is_locked'] = entry['is_locked'] or getattr(daily_session, 'is_locked', False)
                 entry['attendance_marked'] = entry['attendance_marked'] or ((present_count + absent_count) > 0)
                 entry['days_count'] += 1
-            
+
             sections_data = []
             session_errors = []
 
@@ -2189,7 +2189,7 @@ class MyClassAttendanceAnalyticsView(APIView):
                     absent_count = sum(1 for r in records if r.status == 'A')
                     leave_count = sum(1 for r in records if r.status == 'LEAVE')
                     od_count = sum(1 for r in records if r.status == 'OD')
-                    
+
                     section = session.section
                     department_name = 'Unknown'
                     batch_name = 'Unknown'
@@ -2197,7 +2197,7 @@ class MyClassAttendanceAnalyticsView(APIView):
                         batch_name = section.batch.name or 'Unknown'
                         if section.batch.course and section.batch.course.department:
                             department_name = section.batch.course.department.name or 'Unknown'
-                    
+
                     subject_name = 'N/A'
                     subject_code = 'N/A'
                     if session.teaching_assignment:
@@ -2214,7 +2214,7 @@ class MyClassAttendanceAnalyticsView(APIView):
                         elif ta.custom_subject:
                             subject_name = ta.custom_subject
                             subject_code = ta.custom_subject
-                    
+
                     period_num = get_actual_period_number(session.period)
                     agg_key = (session.section_id, subject_code, period_num)
 
@@ -2264,7 +2264,7 @@ class MyClassAttendanceAnalyticsView(APIView):
                 agg['attendance_percentage'] = round((agg['present_count'] / tc) * 100, 1) if tc > 0 else 0
                 agg['date'] = date_from.isoformat()
                 sections_data.append(agg)
-            
+
             return Response({
                 'sections': sections_data,
                 'daily_attendance': daily_attendance_map,
@@ -2282,7 +2282,7 @@ class MyClassAttendanceAnalyticsView(APIView):
                     'session_errors': session_errors if session_errors else []
                 }
             })
-        
+
         except Exception as e:
             logger.exception('AttendanceAnalyticsView unhandled error for user=%s', getattr(request.user, 'id', None))
             return Response({
@@ -2297,33 +2297,33 @@ class DailyAttendanceView(APIView):
     POST: Save/update daily attendance for students
     """
     permission_classes = (IsAuthenticated,)
-    
+
     def get(self, request):
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             raise PermissionDenied('Staff profile required')
-        
+
         from .models import SectionAdvisor, DailyAttendanceSession, DailyAttendanceRecord, StudentProfile
         from datetime import date as date_class
-        
+
         section_id = request.query_params.get('section_id')
         date_str = request.query_params.get('date')
-        
+
         if not section_id:
             return Response({'error': 'section_id required'}, status=400)
-        
+
         try:
             target_date = date_class.fromisoformat(date_str) if date_str else date_class.today()
         except Exception:
             target_date = date_class.today()
-        
+
         # Check if a session exists for this section and date
         existing_session = DailyAttendanceSession.objects.filter(
             section_id=section_id,
             date=target_date
         ).select_related('assigned_to', 'created_by').first()
-        
+
         # Allow access if any of:
         #   1. Session is assigned to this staff member (after swap)
         #   2. Section advisor for this section
@@ -2366,7 +2366,7 @@ class DailyAttendanceView(APIView):
 
         if not (is_assigned or is_advisor or has_teaching or has_elective_for_section or can_view_department):
             raise PermissionDenied('You are not assigned to this section')
-        
+
         # Only advisors (or admins or assigned staff) may auto-create the session.
         # Period-only teachers just read whatever session already exists.
         if is_advisor or can_view_department or is_assigned:
@@ -2403,7 +2403,7 @@ class DailyAttendanceView(APIView):
                     ],
                     'total_students': students.count(),
                 })
-        
+
         # ══════════════════════════════════════════════════════════════════════
         # ACCESS CONTROL FOR SWAPPED SESSIONS
         # If session has been assigned to another staff:
@@ -2412,20 +2412,20 @@ class DailyAttendanceView(APIView):
         #   - Admin/superuser can do everything
         # ══════════════════════════════════════════════════════════════════════
         is_original_advisor = is_advisor and session.assigned_to and session.assigned_to != staff_profile
-        
+
         if session.assigned_to:
             # Session has been swapped/assigned to another staff member
             # Allow original advisor to VIEW but they can't EDIT (checked in POST)
             if not (session.assigned_to == staff_profile or is_advisor or can_view_all):
                 raise PermissionDenied('This attendance has been assigned to another staff member')
-        
+
         # Get existing records
         records = DailyAttendanceRecord.objects.filter(session=session).select_related('student', 'student__user')
         records_map = {rec.student_id: rec for rec in records}
-        
+
         # Get all students in section
         students = StudentProfile.objects.filter(section_id=section_id).exclude(status__in=['INACTIVE', 'DEBAR']).select_related('user').order_by('reg_no')
-        
+
         students_data = []
         for student in students:
             record = records_map.get(student.id)
@@ -2443,19 +2443,19 @@ class DailyAttendanceView(APIView):
                     'staff_id': record.marked_by.staff_id
                 } if record and record.marked_by else None,
             })
-        
+
         # Get swap history for this session
         from .models import DailyAttendanceSwapRecord
         swap_records = DailyAttendanceSwapRecord.objects.filter(
             session=session
         ).select_related('assigned_by', 'assigned_by__user', 'assigned_to', 'assigned_to__user').order_by('-assigned_at')
-        
+
         swap_history = []
         for swap in swap_records:
             # Better name resolution with fallbacks
             assigned_by_name = ''
             assigned_to_name = ''
-            
+
             if swap.assigned_by:
                 if swap.assigned_by.user and swap.assigned_by.user.get_full_name().strip():
                     assigned_by_name = swap.assigned_by.user.get_full_name()
@@ -2463,7 +2463,7 @@ class DailyAttendanceView(APIView):
                     assigned_by_name = f"{swap.assigned_by.user.first_name} {swap.assigned_by.user.last_name}".strip()
                 else:
                     assigned_by_name = swap.assigned_by.staff_id or f'Staff ID {swap.assigned_by.id}'
-            
+
             if swap.assigned_to:
                 if swap.assigned_to.user and swap.assigned_to.user.get_full_name().strip():
                     assigned_to_name = swap.assigned_to.user.get_full_name()
@@ -2471,7 +2471,7 @@ class DailyAttendanceView(APIView):
                     assigned_to_name = f"{swap.assigned_to.user.first_name} {swap.assigned_to.user.last_name}".strip()
                 else:
                     assigned_to_name = swap.assigned_to.staff_id or f'Staff ID {swap.assigned_to.id}'
-            
+
             swap_history.append({
                 'id': swap.id,
                 'assigned_by': {
@@ -2487,13 +2487,13 @@ class DailyAttendanceView(APIView):
                 'assigned_at': swap.assigned_at.isoformat() if swap.assigned_at else None,
                 'reason': swap.reason or ''
             })
-        
+
         # Check for any unlock request for this session (include all statuses so REJECTED is also returned)
         from .models import DailyAttendanceUnlockRequest
         unlock_request = DailyAttendanceUnlockRequest.objects.filter(
             session=session
         ).order_by('-requested_at').first()
-        
+
         return Response({
             'session_id': session.id,
             'section_id': section_id,
@@ -2517,54 +2517,54 @@ class DailyAttendanceView(APIView):
             'students': students_data,
             'total_students': len(students_data),
         })
-    
+
     def post(self, request):
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             raise PermissionDenied('Staff profile required')
-        
+
         from .models import SectionAdvisor, DailyAttendanceSession, DailyAttendanceRecord, StaffProfile, DailyAttendanceSwapRecord
         from datetime import date as date_class
         from django.db import transaction
-        
+
         section_id = request.data.get('section_id')
         date_str = request.data.get('date')
         attendance_data = request.data.get('attendance', [])  # List of {student_id, status, remarks}
         taken_by_staff_id = request.data.get('taken_by_staff_id')  # Optional: staff who actually took attendance
-        
+
         if not section_id:
             return Response({'error': 'section_id required'}, status=400)
-        
+
         try:
             target_date = date_class.fromisoformat(date_str) if date_str else date_class.today()
         except Exception:
             target_date = date_class.today()
-        
+
         # Get or create session first to check assignment status
         session, created = DailyAttendanceSession.objects.select_related('assigned_to', 'created_by').get_or_create(
             section_id=section_id,
             date=target_date,
             defaults={'created_by': staff_profile}
         )
-        
+
         # Check if session is locked
         if session.is_locked:
             return Response({'error': 'Attendance is locked for this date'}, status=403)
-        
+
         # ══════════════════════════════════════════════════════════════════════
         # ACCESS CONTROL: Determine who can save based on assignment status
         # ══════════════════════════════════════════════════════════════════════
         perms = get_user_permissions(user)
         can_edit_all = 'analytics.edit_all_analytics' in perms or user.is_superuser
-        
+
         # Check if user is advisor of this section
         is_advisor = SectionAdvisor.objects.filter(
             advisor=staff_profile,
             section_id=section_id,
             is_active=True
         ).exists()
-        
+
         if session.assigned_to:
             # Session has been assigned to another staff
             if session.assigned_to == staff_profile:
@@ -2588,11 +2588,11 @@ class DailyAttendanceView(APIView):
             # No assignment yet - verify user is advisor of this section
             if not (is_advisor or can_edit_all):
                 raise PermissionDenied('You are not assigned to this section')
-            
+
             if not (is_advisor or can_edit_all):
                 raise PermissionDenied('You are not an advisor of this section')
             can_save = True
-        
+
         # Handle staff swap: if taken_by_staff_id is provided, verify it's valid and set assignment
         marking_staff = staff_profile  # Default to current user
         swap_record_created = False
@@ -2609,10 +2609,10 @@ class DailyAttendanceView(APIView):
                     old_assigned_to = session.assigned_to
                     session.assigned_to = swap_staff
                     session.save(update_fields=['assigned_to'])
-                    
+
                     # Refresh session from database to ensure we have the latest data
                     session.refresh_from_db()
-                    
+
                     # Create swap record for audit trail (only if this is a new assignment or reassignment)
                     if old_assigned_to != swap_staff:
                         DailyAttendanceSwapRecord.objects.create(
@@ -2628,7 +2628,7 @@ class DailyAttendanceView(APIView):
                 return Response({'error': 'Invalid staff selected for swap'}, status=400)
             except Exception as e:
                 return Response({'error': f'Failed to assign staff: {str(e)}'}, status=500)
-        
+
         try:
             with transaction.atomic():
                 # Update or create records
@@ -2637,7 +2637,7 @@ class DailyAttendanceView(APIView):
                     student_id = item.get('student_id')
                     status = item.get('status', 'P')
                     remarks = item.get('remarks', '')
-                    
+
                     if student_id:
                         DailyAttendanceRecord.objects.update_or_create(
                             session=session,
@@ -2649,28 +2649,28 @@ class DailyAttendanceView(APIView):
                             }
                         )
                         updated_students.append({'student_id': student_id, 'status': status})
-                
+
                 # ── Update existing period attendance records ──────────────────────────
                 # After saving daily attendance, update all existing period attendance records
                 # for the same students on the same date to reflect daily attendance overrides:
                 #   A (Absent) → force 'A' (Absent) in all period records and lock them
                 #   OD/LEAVE   → force same status in all period records
-                #   LATE       → force Present ('P') in all period records  
+                #   LATE       → force Present ('P') in all period records
                 #   P (Present)→ no override needed for period records
                 from .models import PeriodAttendanceSession, PeriodAttendanceRecord
-                
+
                 period_sessions = PeriodAttendanceSession.objects.filter(
                     section_id=section_id,
                     date=target_date
                 )
-                
+
                 period_records_updated = 0
                 period_sessions_to_lock = set()  # Track sessions that have absent students
-                
+
                 for student_info in updated_students:
                     student_id = student_info['student_id']
                     daily_status = student_info['status']
-                    
+
                     # Determine what the period status should be
                     period_status = None
                     if daily_status == 'A':
@@ -2686,7 +2686,7 @@ class DailyAttendanceView(APIView):
                         # Force Present in all period records
                         period_status = 'P'
                     # For 'P' (Present) daily status, don't override period records
-                    
+
                     if period_status:
                         # Update all period records for this student on this date
                         updated = PeriodAttendanceRecord.objects.filter(
@@ -2695,7 +2695,7 @@ class DailyAttendanceView(APIView):
                         ).update(status=period_status)
                         period_records_updated += updated
                 # ───────────────────────────────────────────────────────────────────────
-                
+
                 # Determine appropriate success message
                 if taken_by_staff_id and len(attendance_data) == 0:
                     # This was an assignment-only operation
@@ -2716,7 +2716,7 @@ class DailyAttendanceView(APIView):
                 else:
                     # Normal attendance save
                     message = 'Attendance saved successfully'
-                
+
                 return Response({
                     'success': True,
                     'message': message,
@@ -2732,7 +2732,7 @@ class DailyAttendanceView(APIView):
                     } if session.assigned_to else None,
                     'is_read_only': False,  # Assigned staff has full access
                 })
-        
+
         except Exception as e:
             return Response({'error': str(e)}, status=500)
 
@@ -2743,36 +2743,36 @@ class DailyAttendanceLockView(APIView):
     Lock a daily attendance session
     """
     permission_classes = (IsAuthenticated,)
-    
+
     def post(self, request, session_id):
         from .models import DailyAttendanceSession, SectionAdvisor
-        
+
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             raise PermissionDenied('Staff profile required')
-        
+
         try:
             session = DailyAttendanceSession.objects.select_related('section', 'assigned_to').get(id=session_id)
         except DailyAttendanceSession.DoesNotExist:
             return Response({'error': 'Session not found'}, status=404)
-        
+
         # Check if user is advisor for this section
         is_advisor = SectionAdvisor.objects.filter(
             advisor=staff_profile,
             section=session.section,
             is_active=True
         ).exists()
-        
+
         # Check if user is the assigned staff member for this session
         is_assigned = session.assigned_to == staff_profile if session.assigned_to else False
-        
+
         if not (is_advisor or is_assigned or session.created_by == staff_profile or user.is_superuser):
             raise PermissionDenied('You do not have permission to lock this session')
-        
+
         session.is_locked = True
         session.save(update_fields=['is_locked'])
-        
+
         return Response({
             'success': True,
             'message': 'Daily attendance session locked successfully',
@@ -2787,27 +2787,27 @@ class DailyAttendanceUnlockView(APIView):
     Unlock a daily attendance session (admin only)
     """
     permission_classes = (IsAuthenticated,)
-    
+
     def post(self, request, session_id):
         from .models import DailyAttendanceSession
-        
+
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             raise PermissionDenied('Staff profile required')
-        
+
         # Only admins can directly unlock
         if not user.is_superuser:
             raise PermissionDenied('Only administrators can unlock daily attendance sessions')
-        
+
         try:
             session = DailyAttendanceSession.objects.get(id=session_id)
         except DailyAttendanceSession.DoesNotExist:
             return Response({'error': 'Session not found'}, status=404)
-        
+
         session.is_locked = False
         session.save(update_fields=['is_locked'])
-        
+
         return Response({
             'success': True,
             'message': 'Daily attendance session unlocked successfully',
@@ -2822,57 +2822,57 @@ class DailyAttendanceUnlockRequestView(APIView):
     Create an unlock request for daily attendance
     """
     permission_classes = (IsAuthenticated,)
-    
+
     def post(self, request):
         from .models import DailyAttendanceSession, DailyAttendanceUnlockRequest, SectionAdvisor
-        
+
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             raise PermissionDenied('Staff profile required')
-        
+
         session_id = request.data.get('session')
         note = request.data.get('note', '')
-        
+
         if not session_id:
             return Response({'error': 'session_id required'}, status=400)
-        
+
         try:
             session = DailyAttendanceSession.objects.select_related('section', 'assigned_to').get(id=session_id)
         except DailyAttendanceSession.DoesNotExist:
             return Response({'error': 'Session not found'}, status=404)
-        
+
         # Check if user is advisor for this section
         is_advisor = SectionAdvisor.objects.filter(
             advisor=staff_profile,
             section=session.section,
             is_active=True
         ).exists()
-        
+
         # Check if user is the assigned staff member for this session
         is_assigned = session.assigned_to == staff_profile if session.assigned_to else False
-        
+
         if not (is_advisor or is_assigned or session.created_by == staff_profile):
             raise PermissionDenied('You do not have permission to request unlock for this session')
-        
+
         # Check if there's already a pending request
         existing = DailyAttendanceUnlockRequest.objects.filter(
             session=session,
             status__in=['PENDING', 'HOD_APPROVED']
         ).first()
-        
+
         if existing:
             return Response({
                 'error': f'An unlock request for this session is already {existing.status.lower().replace("_", " ")}'
             }, status=400)
-        
+
         # Create the unlock request
         unlock_request = DailyAttendanceUnlockRequest.objects.create(
             session=session,
             requested_by=staff_profile,
             note=note
         )
-        
+
         return Response({
             'success': True,
             'message': 'Unlock request submitted successfully. It will first be reviewed by your HOD.',
@@ -2973,50 +2973,50 @@ class PeriodAttendanceUnlockRequestView(APIView):
     Create an unlock request for period attendance
     """
     permission_classes = (IsAuthenticated,)
-    
+
     def post(self, request):
         from .models import PeriodAttendanceSession, AttendanceUnlockRequest, TeachingAssignment
-        
+
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             raise PermissionDenied('Staff profile required')
-        
+
         session_id = request.data.get('session')
         note = request.data.get('note', '')
-        
+
         if not session_id:
             return Response({'error': 'session_id required'}, status=400)
-        
+
         try:
             session = PeriodAttendanceSession.objects.select_related('section', 'teaching_assignment').get(id=session_id)
         except PeriodAttendanceSession.DoesNotExist:
             return Response({'error': 'Session not found'}, status=404)
-        
+
         # Check if user has permission for this session
         is_teacher = session.teaching_assignment and session.teaching_assignment.staff == staff_profile
-        
+
         if not (is_teacher or session.created_by == staff_profile):
             raise PermissionDenied('You do not have permission to request unlock for this session')
-        
+
         # Check if there's already a pending request
         existing = AttendanceUnlockRequest.objects.filter(
             session=session,
             status__in=['PENDING', 'HOD_APPROVED']
         ).first()
-        
+
         if existing:
             return Response({
                 'error': f'An unlock request for this session is already {existing.status.lower().replace("_", " ")}'
             }, status=400)
-        
+
         # Create the unlock request
         unlock_request = AttendanceUnlockRequest.objects.create(
             session=session,
             requested_by=staff_profile,
             note=note
         )
-        
+
         return Response({
             'success': True,
             'message': 'Unlock request submitted successfully. It will first be reviewed by your HOD.',
@@ -3033,30 +3033,30 @@ class HODUnlockRequestsView(APIView):
     POST: Approve or reject as HOD
     """
     permission_classes = (IsAuthenticated,)
-    
+
     def get(self, request):
         from .models import AttendanceUnlockRequest, DailyAttendanceUnlockRequest, Department, DepartmentRole
         from academics.serializers import AttendanceUnlockRequestSerializer
-        
+
         try:
             user = request.user
             staff_profile = getattr(user, 'staff_profile', None)
-            
+
             if not staff_profile:
                 return Response({'error': 'Staff profile required'}, status=403)
-            
+
             # Get departments where user is HOD through DepartmentRole
             hod_roles = DepartmentRole.objects.filter(
                 staff=staff_profile,
                 role='HOD',
                 is_active=True
             ).values_list('department_id', flat=True)
-            
+
             hod_departments = list(hod_roles)
-            
+
             if not hod_departments:
                 return Response({'error': 'You are not an HOD of any department'}, status=403)
-            
+
             # Get period attendance unlock requests
             period_requests = AttendanceUnlockRequest.objects.select_related(
                 'session__section__batch__course__department', 'requested_by', 'requested_by__user', 'hod_reviewed_by'
@@ -3065,7 +3065,7 @@ class HODUnlockRequestsView(APIView):
                 hod_status='PENDING'
             ).order_by('-requested_at')
             period_requests_list = list(period_requests)
-            
+
             # Get daily attendance unlock requests
             daily_requests = DailyAttendanceUnlockRequest.objects.select_related(
                 'session__section__batch__course__department', 'requested_by', 'requested_by__user', 'hod_reviewed_by'
@@ -3074,19 +3074,19 @@ class HODUnlockRequestsView(APIView):
                 hod_status='PENDING'
             ).order_by('-requested_at')
             daily_requests_list = list(daily_requests)
-            
+
             # Combine both lists
             all_requests = period_requests_list + daily_requests_list
-            
+
             # Sort by requested_at
             all_requests.sort(key=lambda x: x.requested_at, reverse=True)
-            
+
             # Format results manually
             results = []
             for req in all_requests:
                 # Determine request type
                 is_daily = isinstance(req, DailyAttendanceUnlockRequest)
-                
+
                 data = {
                     'id': req.id,
                     'request_type': 'daily' if is_daily else 'period',
@@ -3105,13 +3105,13 @@ class HODUnlockRequestsView(APIView):
                         'date': req.session.date.strftime('%Y-%m-%d'),
                     }
                 }
-                
-                # Add period field only for period attendance  
+
+                # Add period field only for period attendance
                 if not is_daily:
                     data['session']['period'] = str(req.session.period) if req.session.period else None
-                    
+
                 results.append(data)
-            
+
             return Response({
                 'results': results,
                 'count': len(results)
@@ -3123,53 +3123,53 @@ class HODUnlockRequestsView(APIView):
             logger.error(f"Error in HODUnlockRequestsView.get: {str(e)}")
             logger.error(traceback.format_exc())
             return Response({'error': f'Internal server error: {str(e)}'}, status=500)
-    
+
     def post(self, request):
         from .models import AttendanceUnlockRequest, DailyAttendanceUnlockRequest, DepartmentRole
-        
+
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
-        
+
         if not staff_profile:
             return Response({'error': 'Staff profile required'}, status=403)
-        
+
         request_id = request.data.get('id')
         request_type = request.data.get('request_type')  # 'period' or 'daily'
         action = request.data.get('action')  # 'approve' or 'reject'
         hod_note = request.data.get('note', '')
-        
+
         if not all([request_id, request_type, action]):
             return Response({'error': 'Missing required fields'}, status=400)
-        
+
         if action not in ['approve', 'reject']:
             return Response({'error': 'Invalid action'}, status=400)
-        
+
         # Get departments where user is HOD through DepartmentRole
         hod_roles = DepartmentRole.objects.filter(
             staff=staff_profile,
             role='HOD',
             is_active=True
         ).values_list('department_id', flat=True)
-        
+
         hod_departments = list(hod_roles)
-        
+
         if not hod_departments:
             return Response({'error': 'You are not an HOD of any department'}, status=403)
-        
+
         try:
             if request_type == 'period':
                 unlock_req = AttendanceUnlockRequest.objects.select_related('session__section__batch__course__department').get(id=request_id)
             else:
                 unlock_req = DailyAttendanceUnlockRequest.objects.select_related('session__section__batch__course__department').get(id=request_id)
-            
+
             # Verify this request is for user's department
             req_dept_id = unlock_req.session.section.batch.course.department_id if unlock_req.session and unlock_req.session.section and unlock_req.session.section.batch and unlock_req.session.section.batch.course else None
             if req_dept_id not in hod_departments:
                 return Response({'error': 'This request is not for your department'}, status=403)
-            
+
             if unlock_req.hod_status != 'PENDING':
                 return Response({'error': 'This request has already been reviewed by HOD'}, status=400)
-            
+
             if action == 'approve':
                 unlock_req.hod_status = 'HOD_APPROVED'
                 unlock_req.status = 'HOD_APPROVED'  # Update overall status too
@@ -3177,7 +3177,7 @@ class HODUnlockRequestsView(APIView):
                 unlock_req.hod_reviewed_at = timezone.now()
                 unlock_req.hod_note = hod_note
                 unlock_req.save()
-                
+
                 message = f'{request_type.title()} attendance unlock request approved by HOD. Forwarded to final approval.'
             else:
                 unlock_req.hod_status = 'REJECTED'
@@ -3186,14 +3186,14 @@ class HODUnlockRequestsView(APIView):
                 unlock_req.hod_reviewed_at = timezone.now()
                 unlock_req.hod_note = hod_note
                 unlock_req.save()
-                
+
                 message = f'{request_type.title()} attendance unlock request rejected by HOD.'
-            
+
             return Response({
                 'success': True,
                 'message': message
             })
-            
+
         except (AttendanceUnlockRequest.DoesNotExist, DailyAttendanceUnlockRequest.DoesNotExist):
             return Response({'error': 'Request not found'}, status=404)
 
@@ -3204,20 +3204,20 @@ class DailyAttendanceSessionDetailView(APIView):
     Similar to period-attendance detail endpoint
     """
     permission_classes = (IsAuthenticated,)
-    
+
     def get(self, request, session_id):
         try:
             from .models import DailyAttendanceSession, DailyAttendanceRecord
-            
+
             session = DailyAttendanceSession.objects.select_related(
                 'section', 'section__batch', 'created_by'
             ).get(id=session_id)
-            
+
             # Get all records for this session
             records = DailyAttendanceRecord.objects.filter(
                 session=session
             ).select_related('student', 'student__user').order_by('student__reg_no')
-            
+
             records_data = []
             for record in records:
                 student = record.student
@@ -3243,7 +3243,7 @@ class DailyAttendanceSessionDetailView(APIView):
                     'remarks': record.remarks or '',
                     'marked_at': record.marked_at.isoformat() if record.marked_at else None,
                 })
-            
+
             return Response({
                 'session_id': session.id,
                 'id': session.id,
@@ -3449,46 +3449,46 @@ class DailyAttendanceRevertAssignmentView(APIView):
     Revert assignment back to original advisor (only if assigned staff hasn't marked attendance)
     """
     permission_classes = (IsAuthenticated,)
-    
+
     def post(self, request, session_id):
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             raise PermissionDenied('Staff profile required')
-        
+
         from .models import DailyAttendanceSession, DailyAttendanceRecord, SectionAdvisor, DailyAttendanceSwapRecord
         from django.db import transaction
-        
+
         try:
             session = DailyAttendanceSession.objects.select_related(
                 'assigned_to', 'assigned_to__user', 'created_by', 'section'
             ).get(id=session_id)
         except DailyAttendanceSession.DoesNotExist:
             return Response({'error': 'Session not found'}, status=404)
-        
+
         # Check if user is the original advisor for this section
         is_advisor = SectionAdvisor.objects.filter(
             advisor=staff_profile,
             section=session.section,
             is_active=True
         ).exists()
-        
+
         if not (is_advisor or user.is_superuser):
             raise PermissionDenied('Only the original advisor can revert assignments')
-        
+
         # Check if session is actually assigned to someone else
         if not session.assigned_to:
             return Response({'error': 'This session is not assigned to anyone'}, status=400)
-        
+
         if session.assigned_to == staff_profile:
             return Response({'error': 'This session is already assigned to you'}, status=400)
-        
+
         # Check if assigned staff has marked any attendance
         assigned_staff_records = DailyAttendanceRecord.objects.filter(
             session=session,
             marked_by=session.assigned_to
         ).exists()
-        
+
         if assigned_staff_records:
             return Response({
                 'error': f'Cannot revert assignment. {session.assigned_to.user.get_full_name() if session.assigned_to.user else session.assigned_to.staff_id} has already marked attendance.',
@@ -3497,17 +3497,17 @@ class DailyAttendanceRevertAssignmentView(APIView):
                     'staff_id': session.assigned_to.staff_id
                 }
             }, status=400)
-        
+
         try:
             with transaction.atomic():
                 # Store the assigned staff info for the response
                 previously_assigned_to = session.assigned_to
                 previously_assigned_name = previously_assigned_to.user.get_full_name() if previously_assigned_to.user else previously_assigned_to.staff_id
-                
+
                 # Revert the assignment
                 session.assigned_to = None
                 session.save(update_fields=['assigned_to'])
-                
+
                 # Create swap record for audit trail
                 DailyAttendanceSwapRecord.objects.create(
                     session=session,
@@ -3515,7 +3515,7 @@ class DailyAttendanceRevertAssignmentView(APIView):
                     assigned_to=None,  # Reverting to original (no assignment)
                     reason=f'Assignment reverted by {staff_profile.user.get_full_name() if staff_profile.user else staff_profile.staff_id}. Was assigned to {previously_assigned_name}'
                 )
-                
+
                 return Response({
                     'success': True,
                     'message': f'Assignment successfully reverted from {previously_assigned_name}. You can now mark attendance for this section.',
@@ -3525,7 +3525,7 @@ class DailyAttendanceRevertAssignmentView(APIView):
                         'staff_id': previously_assigned_to.staff_id
                     }
                 })
-                
+
         except Exception as e:
             return Response({'error': f'Failed to revert assignment: {str(e)}'}, status=500)
 
@@ -4002,44 +4002,44 @@ class OverallDailyAttendanceReportView(APIView):
     def get(self, request):
         from .models import DailyAttendanceRecord, StudentProfile
         from django.db.models import Count
-        
+
         user = request.user
         perms = get_user_permissions(user)
-        
+
         # Check for overall permission
         if 'analytics.view_all_analytics' not in perms and not user.is_superuser:
             raise PermissionDenied('Overall analytics permission required')
-        
+
         # Get date parameter, default to today
         date_str = request.query_params.get('date')
         if not date_str:
             from django.utils import timezone
             date_str = timezone.now().date().isoformat()
-        
+
         try:
             from datetime import date
             report_date = date.fromisoformat(date_str)
         except ValueError:
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=400)
-        
+
         # Get all daily attendance records for the date
         records = DailyAttendanceRecord.objects.filter(
             session__date=report_date
         ).select_related('student')
-        
+
         # Calculate totals
         total_strength = StudentProfile.objects.all().count()
-        
+
         # Count by status
         status_counts = records.values('status').annotate(count=Count('status'))
         status_dict = {item['status']: item['count'] for item in status_counts}
-        
+
         present_count = status_dict.get('P', 0)
         absent_count = status_dict.get('A', 0)
         leave_count = status_dict.get('LEAVE', 0)
         od_count = status_dict.get('OD', 0)
         suspension_count = status_dict.get('SUSPENSION', 0)  # Not used in current model
-        
+
         # Calculate percentages
         marked_students = present_count + absent_count + leave_count + od_count + suspension_count
         if marked_students > 0:
@@ -4050,7 +4050,7 @@ class OverallDailyAttendanceReportView(APIView):
             suspension_pct = (suspension_count / marked_students) * 100
         else:
             present_pct = absent_pct = leave_pct = od_pct = suspension_pct = 0
-        
+
         return Response({
             'title': 'Daily Students Attendance for KRCT',
             'date': report_date.isoformat(),

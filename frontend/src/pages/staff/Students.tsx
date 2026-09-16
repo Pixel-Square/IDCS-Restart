@@ -7,15 +7,15 @@ import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronR
 const CACHE_KEY = 'students_page_cache'
 const CACHE_EXPIRY_MS = 1 * 60 * 1000
 
-type Student = { 
-  id: number; 
-  reg_no: string; 
+type Student = {
+  id: number;
+  reg_no: string;
   name?: string;
-  username: string; 
+  username: string;
   first_name?: string;
   last_name?: string;
   email?: string;
-  section_id?: number; 
+  section_id?: number;
   section_name?: string;
   department_code?: string;
   department_short_name?: string;
@@ -117,7 +117,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
       return (user?.permissions || []).map((p: string) => String(p).toLowerCase().trim().replace(/\.$/, ''))
     }
   }
-  
+
   const userPermissions = getPermissions()
   const hasPermission = (permission: string) => userPermissions.includes(permission.toLowerCase())
 
@@ -284,7 +284,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
         sessionStorage.removeItem('students_departments_refresh')
       }
     }
-    
+
     // Check on mount and when window gains focus
     checkRefreshSignal()
     window.addEventListener('focus', checkRefreshSignal)
@@ -298,7 +298,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     }
   }, [availableViews])
 
-  useEffect(() => { 
+  useEffect(() => {
     setSelectedSection(null)
     setLazyStudents([])
     setCurrentPage(1)
@@ -428,7 +428,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   async function fetchSectionsOrStudents(bypassCache: boolean = false) {
     // Don't call the API if the current view isn't available to this user
     if (availableViews.length === 0 || !availableViews.find(v => v.key === viewMode)) return
-    
+
     // Check cache first (unless bypass requested)
     if (!bypassCache) {
       const cached = getCachedData(viewMode)
@@ -452,7 +452,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
         return
       }
     }
-    
+
     setLoading(true)
     try {
       if (viewMode === 'my-students') {
@@ -1015,7 +1015,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                 onClick={() => setViewMode(view.key)}
                 className={`px-4 py-3 font-medium text-sm flex items-center gap-2 border-b-2 transition-colors whitespace-nowrap ${
                   viewMode === view.key
-                    ? 'border-indigo-600 text-indigo-600' 
+                    ? 'border-indigo-600 text-indigo-600'
                     : 'border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300'
                 }`}
               >
@@ -1284,8 +1284,8 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
               </thead>
               <tbody className="divide-y divide-slate-200">
                 {displayStudents.map((student, index) => (
-                  <tr 
-                    key={student.id} 
+                  <tr
+                    key={student.id}
                     className="hover:bg-blue-50 transition-colors"
                   >
                     <td className="py-3 px-4">
@@ -1334,7 +1334,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                     </td>
                     <td className="py-3 px-4">
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                        student.status === 'active' 
+                        student.status === 'active'
                           ? 'bg-green-100 text-green-800'
                           : student.status === 'resigned'
                           ? 'bg-red-100 text-red-800'
@@ -1346,7 +1346,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                       </span>
                     </td>
                     <td className="py-3 px-4">
-                      <button 
+                      <button
                         onClick={() => handleEdit(student)}
                         className="p-2 bg-blue-50 text-blue-700 border border-blue-300 rounded-lg hover:bg-blue-100 transition-colors"
                         title="Edit Student"

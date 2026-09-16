@@ -23,7 +23,7 @@ class IsIQACOrReadOnly(permissions.BasePermission):
             return False
         if user.is_superuser:
             return True
-        
+
         # group-based shortcuts with error handling
         try:
             if user.groups.filter(name__in=['IQAC', 'HAA']).exists():

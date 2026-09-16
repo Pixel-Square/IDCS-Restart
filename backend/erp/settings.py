@@ -59,11 +59,11 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    
+
     # Third party apps
     'rest_framework',
     'corsheaders',
-    
+
     # Local apps - order matters for dependencies
     'accounts',
     'college',
@@ -86,6 +86,7 @@ INSTALLED_APPS = [
     'lms.apps.LmsConfig',
     'coder.apps.CoderConfig',
     'discipline.apps.DisciplineConfig',
+    'audits.apps.AuditsConfig',
 ]
 # Staff requests dynamic forms & workflow engine
 INSTALLED_APPS.append('staff_requests')

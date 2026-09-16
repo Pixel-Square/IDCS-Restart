@@ -167,7 +167,7 @@ def validate_locked_regions(assessment_id: int, submitted_files: dict) -> tuple[
 
     for orig_file in locked_files:
         path = orig_file.get_path()
-        
+
         # Standardise lookup by stripping leading/trailing slashes
         student_content = None
         for key, val in submitted_files.items():

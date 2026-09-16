@@ -16,7 +16,7 @@ class StudentBarcodeLookupView(APIView):
         student = StudentProfile.objects.filter(reg_no__iexact=code).select_related('user', 'section', 'home_department', 'section__batch').first()
         matched_dummy = None
         matched_qp_type = 'QP1'
-        
+
         # 2. Try rfid_uid if applicable
         if not student:
              student = StudentProfile.objects.filter(rfid_uid__iexact=code).select_related('user', 'section', 'home_department', 'section__batch').first()
@@ -60,7 +60,7 @@ class StudentBarcodeLookupView(APIView):
         current_sem = "N/A"
         try:
              # Try to infer semester from batch/section if logic exists, otherwise just return batch
-             pass 
+             pass
         except:
              pass
 

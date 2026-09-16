@@ -85,10 +85,10 @@ class Command(BaseCommand):
 
         # Apply changes with transaction
         self.stdout.write(self.style.WARNING(f'Applying password resets to {len(all_candidates)} users...'))
-        
+
         changed = 0
         errors = 0
-        
+
         with transaction.atomic():
             for cand in all_candidates:
                 try:

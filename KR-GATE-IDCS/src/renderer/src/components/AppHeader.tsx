@@ -40,7 +40,7 @@ export default function AppHeader(): JSX.Element {
             </div>
           </div>
         </div>
-        
+
         <div className="flex items-center gap-3 sm:gap-4">
           <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-[10px] md:text-xs font-black uppercase tracking-widest border ${pillClass(isOnline)}`}>
             <span className={`w-2 h-2 rounded-full mr-2 ${isOnline ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />

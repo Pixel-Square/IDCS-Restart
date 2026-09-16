@@ -83,6 +83,7 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   coe_bar_scan_entry: ScanLine,
   coe_retrival: FileText,
   coe_one_page_report: FileText,
+  academic_audit: ClipboardList,
   // Academic 2.1
   academic_v2: BookOpen,
   academic_v2_admin: Layout,
@@ -331,13 +332,13 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
       </div>
     </aside>
   );
-  
+
   if (error) return (
     <aside className={`fixed top-16 left-0 h-[calc(100vh-4rem)] bg-white shadow-lg transition-all duration-300 z-30 ${collapsed ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'w-full lg:w-64'}`}>
       <div className="p-6 text-red-600 text-sm">Error loading sidebar</div>
     </aside>
   );
-  
+
   if (!data) return null;
 
   const entry = data.entry_points || {};
@@ -450,7 +451,7 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
 
   // Staffs page moved under Faculty Directory dropdown group.
 
-  // Students page: require explicit view permission  
+  // Students page: require explicit view permission
   if (permsLower.includes('students.view_students')) {
     items.push({ key: 'staff_students', label: 'Students', to: '/staff/students' });
   }
@@ -598,14 +599,19 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
     items.push({ key: 'system_transitions', label: 'System Transitions', to: '/iqac/system-transitions' });
   }
   // PBAS Manager intentionally hidden from sidebar for all users
-  
+
   if (isIqac && !items.some((item) => item.key === 'applications_admin')) {
     items.push({ key: 'applications_admin', label: 'Applications Admin', to: '/iqac/applications-admin' });
   }
+
+  if (isIqac && !items.some((item) => item.key === 'academic_audit')) {
+    items.push({ key: 'academic_audit', label: 'Academic Audit', to: '/iqac/audits' });
+  }
+
   // IDCSScan — available to SECURITY, IQAC, and ADMIN roles
   const isSecurity = rolesUpper.includes('SECURITY');
   const isLibrary = rolesUpper.includes('LIBRARY');
-  
+
   // LIBRARY role: only Profile and Assign Cards
   if (isLibrary) {
     // Remove all items except Profile that was added via unshift
@@ -681,7 +687,7 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
       items.push({ key: 'dc_admin', label: 'DC ADMIN', to: '/discipline/admin' });
     }
   }
-  
+
   if (canAccessDisciplineStaff && !items.some((item) => item.key === 'discipline_staff_portal')) {
     items.push({ key: 'discipline_staff_portal', label: 'Discipline', to: '/discipline/staff' });
   }
@@ -728,7 +734,7 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
   if (rolesUpper.includes('HR') && !items.some(item => item.key === 'hr_staff_salary')) {
     items.push({ key: 'hr_staff_salary', label: 'HR: Staff Salary', to: '/hr/staff-salary' });
   }
-  
+
   // Staff Requests system
   // Note: 'My Requests' moved into My Calendar; keep direct link removed to avoid duplication
   // Align with backend: approver roles can access pending approvals even without explicit permission.
@@ -736,7 +742,7 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
   const hasApproverRole = rolesUpper.some((r) => approverRoles.includes(r));
   const hasApprovePermission = permsLower.includes('staff_requests.approve_requests');
   const canAccessPendingApprovals = hasApprovePermission || hasApproverRole;
-  
+
   if (canAccessPendingApprovals && !items.some(item => item.key === 'staff_requests_approvals')) {
     items.push({ key: 'staff_requests_approvals', label: 'Pending Approvals', to: '/staff-requests/pending-approvals' });
   }

@@ -3,13 +3,13 @@ from django.db import migrations
 
 def create_coder_roles(apps, schema_editor):
     Role = apps.get_model('accounts', 'Role')
-    
+
     roles = [
         ('CODE_ADMIN', 'Coder Admin - full access to coding platform'),
         ('CODE_COURSE_INCHARGE', 'Coder Course Incharge - can create sessions and questions'),
         ('CODE_SECTION_INCHARGE', 'Coder Section Incharge - can view student analytics'),
     ]
-    
+
     for name, desc in roles:
         Role.objects.get_or_create(name=name, defaults={'description': desc})
 

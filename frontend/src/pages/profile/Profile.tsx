@@ -247,7 +247,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
 
   useEffect(() => {
     if (initialUser) return;
-    
+
     // Try to use cached user data first to prevent unnecessary API calls
     const cached = getCachedMe();
     if (cached) {
@@ -261,7 +261,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       setLoading(false);
       return;
     }
-    
+
     // If no cache, fetch from API
     let mounted = true;
     setLoading(true);
@@ -321,7 +321,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       </div>
     </DashboardLayout>
   );
-  
+
   if (error) return (
     <DashboardLayout>
       <div className="px-4 sm:px-6 lg:px-8 pb-6">
@@ -331,7 +331,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       </div>
     </DashboardLayout>
   );
-  
+
   if (!user) return (
     <DashboardLayout>
       <div className="px-4 sm:px-6 lg:px-8 pb-6">
@@ -1083,7 +1083,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                     {user.profile_type === 'STAFF' ? 'Staff ID' : user.profile_type === 'STUDENT' ? 'Student ID' : 'ID'}
                   </div>
                   <div className="text-gray-900 font-medium truncate">
-                    {user.profile_type === 'STAFF' ? (user.profile?.staff_id || '—') : 
+                    {user.profile_type === 'STAFF' ? (user.profile?.staff_id || '—') :
                      user.profile_type === 'STUDENT' ? (user.profile?.student_id || '—') : '—'}
                   </div>
                 </div>

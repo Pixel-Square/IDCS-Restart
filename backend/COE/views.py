@@ -711,14 +711,14 @@ class CoeStudentsCourseMapView(APIView):
         for sec in section_rows:
             if not getattr(sec, 'batch_id', None) or not getattr(sec, 'semester_id', None):
                 continue
-                
+
             try:
                 dept_obj = sec.batch.course.department
             except Exception:
                 dept_obj = None
             if not dept_obj:
                 continue
-                
+
             dept_name = _department_label_from_obj(dept_obj)
             if not dept_name:
                 continue
@@ -731,13 +731,13 @@ class CoeStudentsCourseMapView(APIView):
                 continue
 
             mandatory_courses = mandatory_courses_by_dept_sem.get((getattr(dept_obj, 'id', None), getattr(sec, 'semester_id', None)), [])
-            
+
             for mc in mandatory_courses:
                 course_code = str(getattr(mc, 'course_code', '') or '').strip()
                 course_name = str(getattr(mc, 'course_name', '') or '').strip()
                 if not course_code and not course_name:
                     continue
-                
+
                 # Skip dummy elective group placeholders incorrectly marked as mandatory
                 if not course_code and 'elective' in course_name.lower():
                     continue

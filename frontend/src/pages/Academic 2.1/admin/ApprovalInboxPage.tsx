@@ -139,12 +139,12 @@ export default function ApprovalInboxPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes: responseNote }),
       });
-      
+
       if (!response.ok) {
         const msg = await readErrorMessage(response);
         throw new Error(msg || 'Approve failed');
       }
-      
+
       setMessage({ type: 'success', text: 'Request approved' });
       setSelectedRequest(null);
       setResponseNote('');
@@ -172,12 +172,12 @@ export default function ApprovalInboxPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: responseNote }),
       });
-      
+
       if (!response.ok) {
         const msg = await readErrorMessage(response);
         throw new Error(msg || 'Reject failed');
       }
-      
+
       setMessage({ type: 'success', text: 'Request rejected' });
       setSelectedRequest(null);
       setResponseNote('');
@@ -398,7 +398,7 @@ export default function ApprovalInboxPage() {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
             <h2 className="text-lg font-semibold mb-4">Review Edit Request</h2>
-            
+
             <div className="space-y-4 mb-6">
               <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg flex items-center gap-3">
                 {selectedRequest.requested_by_profile_image ? (
@@ -450,7 +450,7 @@ export default function ApprovalInboxPage() {
                   </p>
                 </div>
               </div>
-              
+
               <div>
                 <span className="text-sm text-gray-500">Reason for Edit:</span>
                 <p className="mt-1 p-3 bg-gray-50 rounded-lg">{selectedRequest.reason}</p>

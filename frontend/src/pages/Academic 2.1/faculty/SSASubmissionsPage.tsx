@@ -70,7 +70,7 @@ export default function SSASubmissionsPage() {
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
         <h1 className="text-xl font-bold text-gray-900 mb-2">SSA Submissions — {assignment_info.exam_type}</h1>
         <p className="text-gray-500 text-sm">{assignment_info.course_code} • {assignment_info.course_name} • {assignment_info.section_name}</p>
-        
+
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
           <div className="bg-gray-50 rounded-lg p-4 flex items-center gap-4">
             <div className="bg-gray-200 p-2 rounded-full"><Users className="h-5 w-5 text-gray-600" /></div>

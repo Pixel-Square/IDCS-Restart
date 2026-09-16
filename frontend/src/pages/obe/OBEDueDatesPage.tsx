@@ -607,7 +607,7 @@ export default function OBEDueDatesPage(): JSX.Element {
 
   useEffect(() => {
     if (publishModeThisSemester !== 'ON') return;
-    
+
     // Check if timer is expired - if so, clear inputs for new timer
     const dueAt = commonSemesterTimer.due_at;
     if (dueAt) {
@@ -621,7 +621,7 @@ export default function OBEDueDatesPage(): JSX.Element {
         return;
       }
     }
-    
+
     const due = isoToLocalDateTime(commonSemesterTimer.due_at);
     if (due) {
       setDueDate(due.date);
@@ -657,7 +657,7 @@ export default function OBEDueDatesPage(): JSX.Element {
       semesterIds: allSemesterIds,
       assessments: ALL_ASSESSMENTS,
     });
-  }, [globalPublishControlsAll, allSemesterIds.join(',')]);  
+  }, [globalPublishControlsAll, allSemesterIds.join(',')]);
 
   const setPublishMode = useCallback(
     async (mode: Exclude<PublishMode, 'MIXED'>, scope: 'THIS' | 'ALL') => {

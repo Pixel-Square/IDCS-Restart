@@ -14,7 +14,7 @@ const css = `
     display: flex;
     align-items: center;
     justify-content: center;
-    font-family: 'Nunito', sans-serif;  
+    font-family: 'Nunito', sans-serif;
   }
 
   .uc-text-wrapper {

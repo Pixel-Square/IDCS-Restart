@@ -496,7 +496,7 @@ class StudentProfileAdmin(admin.ModelAdmin):
                         sec = None
                         section_search_attempted = False
                         section_not_found_reason = None
-                        
+
                         if section_name:
                             section_search_attempted = True
                             if '::' in section_name:
@@ -531,7 +531,7 @@ class StudentProfileAdmin(admin.ModelAdmin):
                                     sec = Section.objects.filter(name=section_name).select_related('batch', 'batch__course', 'batch__course__department').first()
                                     if not sec:
                                         section_not_found_reason = f"No section named '{section_name}' (no batch specified)"
-                        
+
                         if sec:
                             # Update section on student profile
                             sp.section = sec
@@ -628,7 +628,7 @@ class StudentProfileAdmin(admin.ModelAdmin):
             dept_short = b.course.department.short_name if b.course and b.course.department else ''
             # format: "DEPT_SHORT :: BATCH_NAME" (e.g., "CSE :: 2023")
             batches.append(f"{dept_short} :: {b.name}")
-        
+
         # build composite 'DEPT :: Batch :: Section' entries (department short_name)
         sections_qs = Section.objects.select_related('batch__course__department').order_by('batch__course__department__short_name', 'batch__name', 'name')
         sections = []
@@ -679,12 +679,12 @@ class StaffProfileAdmin(admin.ModelAdmin):
     list_display = ('staff_id', 'internal_id', 'rfid_uid', 'get_full_name', 'current_department_display', 'designation', 'status')
     search_fields = ('staff_id', 'internal_id', 'rfid_uid', 'user__username', 'user__email', 'user__first_name', 'user__last_name')
     list_filter = ('department', 'designation')
-    
+
     def get_queryset(self, request):
         """Optimize queryset with select_related for user and department."""
         qs = super().get_queryset(request)
         return qs.select_related('user', 'department').prefetch_related('department_assignments')
-    
+
     def get_full_name(self, obj):
         if obj.user:
             return f"{obj.user.first_name} {obj.user.last_name}".strip() or obj.user.username
@@ -840,26 +840,26 @@ class StaffProfileAdmin(admin.ModelAdmin):
                             rv = str(role_value).strip().upper() if role_value is not None else ''
                         except Exception:
                             rv = ''
-                        
+
                         if rv:
                             try:
                                 # Ensure the role exists in the system
                                 logical_role, _ = Role.objects.get_or_create(name=rv)
-                                
+
                                 # Add the logical role to user if not already assigned
                                 if logical_role not in user.roles.all():
                                     user.roles.add(logical_role)
-                                    
+
                                 # Handle department-specific roles (HOD, AHOD) - update DepartmentRole table
                                 if rv in ('HOD', 'AHOD'):
                                     # Re-resolve department if not already resolved
                                     if not dept and department_name:
                                         dept = Department.objects.filter(
-                                            models.Q(code__iexact=department_name) | 
-                                            models.Q(name__iexact=department_name) | 
+                                            models.Q(code__iexact=department_name) |
+                                            models.Q(name__iexact=department_name) |
                                             models.Q(short_name__iexact=department_name)
                                         ).first()
-                                    
+
                                     if dept:
                                         # Get active academic year
                                         ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
@@ -867,12 +867,12 @@ class StaffProfileAdmin(admin.ModelAdmin):
                                             # For HOD role, deactivate existing HOD for the department/year
                                             if rv == 'HOD':
                                                 DepartmentRole.objects.filter(
-                                                    department=dept, 
-                                                    academic_year=ay, 
-                                                    role='HOD', 
+                                                    department=dept,
+                                                    academic_year=ay,
+                                                    role='HOD',
                                                     is_active=True
                                                 ).update(is_active=False)
-                                            
+
                                             # Create or update the department role record
                                             dept_role, created = DepartmentRole.objects.get_or_create(
                                                 department=dept,
@@ -886,15 +886,15 @@ class StaffProfileAdmin(admin.ModelAdmin):
                                                 dept_role.save()
                                     else:
                                         errors.append(f'Row {i}: Department required for role {rv} but not found: {department_name}')
-                                            
+
                                 # Handle advisor role assignment
                                 elif rv == 'ADVISOR':
                                     # Advisors are handled through section assignments, not department roles
                                     pass
-                                    
+
                                 # Handle other institutional roles (IQAC, PRINCIPAL, etc.)
                                 # These don't need department role entries, just the role assignment
-                                
+
                             except ValidationError as ve:
                                 errors.append(f'Row {i}: failed to assign role {rv}: {ve}')
                             except Exception as e:
@@ -952,7 +952,7 @@ class StaffProfileAdmin(admin.ModelAdmin):
         roles = list(Role.objects.values_list('name', flat=True))
         if not roles:  # fallback if no roles exist
             roles = ['STAFF', 'HOD', 'AHOD', 'ADVISOR', 'IQAC', 'PRINCIPAL']
-            
+
         lists = wb.create_sheet(title='lists')
         for i, d in enumerate(depts, start=1):
             lists.cell(row=i, column=1, value=d)
@@ -1329,7 +1329,7 @@ class TeachingAssignmentAdmin(admin.ModelAdmin):
     def section_display(self, obj):
         if obj.section:
             return str(obj.section)
-        
+
         # If no section, check if it is an elective
         category = None
         if getattr(obj, 'elective_subject', None):
@@ -1339,7 +1339,7 @@ class TeachingAssignmentAdmin(admin.ModelAdmin):
         elif getattr(obj, 'curriculum_row', None) and getattr(obj.curriculum_row, 'is_elective', False):
             if getattr(obj.curriculum_row, 'category', None):
                 category = str(obj.curriculum_row.category).lower()
-                
+
         if category is not None:
             if 'open elective' in category or 'oe' in category.split():
                 return 'OE'
@@ -1348,10 +1348,10 @@ class TeachingAssignmentAdmin(admin.ModelAdmin):
             elif 'emerging' in category:
                 return 'EE'
             return str(category).title()
-            
+
         if getattr(obj, 'custom_subject', None):
             return obj.get_custom_subject_display()
-            
+
         return '-'
     section_display.short_description = 'Section'
 
@@ -1467,7 +1467,7 @@ class DailyAttendanceSwapRecordInline(admin.TabularInline):
     readonly_fields = ('assigned_at',)
     fields = ('assigned_by', 'assigned_to', 'assigned_at', 'reason')
     can_delete = False
-    
+
     def has_add_permission(self, request, obj=None):
         # Swap records are created automatically via the API
         return False
@@ -1502,7 +1502,7 @@ class DailyAttendanceSwapRecordAdmin(admin.ModelAdmin):
     raw_id_fields = ('session', 'assigned_by', 'assigned_to')
     readonly_fields = ('assigned_at',)
     date_hierarchy = 'assigned_at'
-    
+
     def has_add_permission(self, request):
         # Swap records are created automatically via the API, not manually
         return False

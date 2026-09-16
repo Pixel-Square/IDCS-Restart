@@ -56,7 +56,7 @@ export default function SwapRequestsPage() {
       const params = statusFilter !== 'ALL' ? `?status=${statusFilter}` : '';
       const resp = await fetchWithAuth(`/api/timetable/swap-requests/${params}`);
       const data = await resp.json();
-      
+
       if (data.success) {
         setReceivedRequests(data.received || []);
         setSentRequests(data.sent || []);
@@ -92,8 +92,8 @@ export default function SwapRequestsPage() {
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', { 
-      month: 'short', 
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
       day: 'numeric',
       year: 'numeric'
     });
@@ -207,8 +207,8 @@ export default function SwapRequestsPage() {
         ) : (
           <div className="space-y-4">
             {filteredRequests.map((request) => (
-              <div 
-                key={request.id} 
+              <div
+                key={request.id}
                 className={`border rounded-lg p-4 ${
                   request.status === 'PENDING' && activeTab === 'received'
                     ? 'border-blue-200 bg-blue-50'
@@ -226,7 +226,7 @@ export default function SwapRequestsPage() {
                         {request.status}
                       </span>
                     </div>
-                    
+
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                       <div className="bg-gray-50 rounded p-3">
                         <div className="font-medium text-gray-700 mb-1">
@@ -278,7 +278,7 @@ export default function SwapRequestsPage() {
                     )}
 
                     <div className="text-xs text-gray-500 mt-2">
-                      Section: {request.section_name} • 
+                      Section: {request.section_name} •
                       Requested {formatDateTime(request.created_at)}
                       {request.responded_at && ` • Responded ${formatDateTime(request.responded_at)}`}
                     </div>
@@ -298,7 +298,7 @@ export default function SwapRequestsPage() {
                           <Check className="w-4 h-4" />
                           {actionLoading === request.id ? 'Processing...' : 'Approve'}
                         </button>
-                        
+
                         <button
                           onClick={() => {
                             const msg = prompt('Optional: Enter a reason for rejection');

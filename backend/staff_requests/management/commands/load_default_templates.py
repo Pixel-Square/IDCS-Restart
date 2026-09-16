@@ -32,12 +32,12 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         force = options.get('force', False)
-        
+
         if force:
             self.stdout.write(self.style.WARNING('Force mode: Deleting existing templates...'))
             RequestTemplate.objects.all().delete()
             self.stdout.write(self.style.SUCCESS('Existing templates deleted'))
-        
+
         # Check if templates already exist
         existing_count = RequestTemplate.objects.count()
         if existing_count > 0 and not force:
@@ -47,28 +47,28 @@ class Command(BaseCommand):
                 )
             )
             return
-        
+
         self.stdout.write(self.style.SUCCESS('Loading default templates...'))
-        
+
         with transaction.atomic():
             # Define the 10 templates
             templates_data = self._get_templates_data()
-            
+
             for template_data in templates_data:
                 approval_steps = template_data.pop('approval_steps')
-                
+
                 # Create or update template
                 template, created = RequestTemplate.objects.update_or_create(
                     name=template_data['name'],
                     defaults=template_data
                 )
-                
+
                 action = 'Created' if created else 'Updated'
                 self.stdout.write(f'  {action}: {template.name}')
-                
+
                 # Delete existing approval steps and create new ones
                 ApprovalStep.objects.filter(template=template).delete()
-                
+
                 for step_order, approver_role in enumerate(approval_steps, start=1):
                     ApprovalStep.objects.create(
                         template=template,
@@ -76,12 +76,12 @@ class Command(BaseCommand):
                         approver_role=approver_role
                     )
                     self.stdout.write(f'    - Step {step_order}: {approver_role}')
-        
+
         # Summary
         total = RequestTemplate.objects.count()
         normal = RequestTemplate.objects.filter(is_active=True).exclude(name__endswith=' - SPL').count()
         spl = RequestTemplate.objects.filter(is_active=True, name__endswith=' - SPL').count()
-        
+
         self.stdout.write(self.style.SUCCESS(f'\n✓ Successfully loaded {total} templates'))
         self.stdout.write(f'  - Normal templates: {normal}')
         self.stdout.write(f'  - SPL templates: {spl}')
@@ -89,7 +89,7 @@ class Command(BaseCommand):
 
     def _get_templates_data(self):
         """Returns the configuration for all 10 default templates."""
-        
+
         # Common form schema for leave-type requests
         leave_form_schema = [
             {
@@ -129,7 +129,7 @@ class Command(BaseCommand):
                 "help_text": "Select FN or AN for end date (optional)"
             }
         ]
-        
+
         # Common late entry form schema
         late_entry_form_schema = [
             {
@@ -151,7 +151,7 @@ class Command(BaseCommand):
                 "required": True
             }
         ]
-        
+
         # Common OD form schema
         od_form_schema = [
             {
@@ -194,11 +194,11 @@ class Command(BaseCommand):
                 "required": False
             }
         ]
-        
+
         # Common roles
         COMMON_ROLES = ["STAFF", "FACULTY", "ASSISTANT", "CLERK"]
         SPL_ROLES = ["IQAC", "HR", "PS", "HOD", "CFSW", "EDC", "COE", "HAA"]
-        
+
         return [
             # 1. Casual Leave (Normal)
             {
@@ -232,7 +232,7 @@ class Command(BaseCommand):
                 },
                 "approval_steps": ["HOD", "HR"]
             },
-            
+
             # 2. Compensatory leave (Normal)
             {
                 "name": "Compensatory leave",
@@ -256,7 +256,7 @@ class Command(BaseCommand):
                 },
                 "approval_steps": ["HOD", "HR"]
             },
-            
+
             # 3. Late Entry Permission (Normal)
             {
                 "name": "Late Entry Permission",
@@ -271,7 +271,7 @@ class Command(BaseCommand):
                 "attendance_action": {},
                 "approval_steps": ["HOD", "HR"]
             },
-            
+
             # 4. ON duty (Normal)
             {
                 "name": "ON duty",
@@ -295,7 +295,7 @@ class Command(BaseCommand):
                 },
                 "approval_steps": ["HOD", "HR"]
             },
-            
+
             # 5. Others (Normal)
             {
                 "name": "Others",
@@ -310,7 +310,7 @@ class Command(BaseCommand):
                 "attendance_action": {},
                 "approval_steps": ["HOD", "HR"]
             },
-            
+
             # 6. Casual Leave - SPL
             {
                 "name": "Casual Leave - SPL",
@@ -343,7 +343,7 @@ class Command(BaseCommand):
                 },
                 "approval_steps": ["PRINCIPAL"]
             },
-            
+
             # 7. Compensatory leave - SPL
             {
                 "name": "Compensatory leave - SPL",
@@ -367,7 +367,7 @@ class Command(BaseCommand):
                 },
                 "approval_steps": ["PRINCIPAL"]
             },
-            
+
             # 8. Late Entry Permission - SPL
             {
                 "name": "Late Entry Permission - SPL",
@@ -382,7 +382,7 @@ class Command(BaseCommand):
                 "attendance_action": {},
                 "approval_steps": ["PRINCIPAL"]
             },
-            
+
             # 9. ON duty - SPL
             {
                 "name": "ON duty - SPL",
@@ -406,7 +406,7 @@ class Command(BaseCommand):
                 },
                 "approval_steps": ["PRINCIPAL"]
             },
-            
+
             # 10. Others - SPL
             {
                 "name": "Others - SPL",

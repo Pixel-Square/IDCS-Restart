@@ -621,24 +621,24 @@ def _sync_section_assignment_on_profile_save(sender, instance: StudentProfile, c
         # Skip if no section is set
         if instance.section is None:
             return
-        
+
         # Check if there's already an active PRIMARY assignment for this section
         active_assignment = StudentSectionAssignment.objects.filter(
             student=instance,
             end_date__isnull=True,
             section_type=StudentSectionAssignment.SECTION_TYPE_PRIMARY,
         ).select_related('section').first()
-        
+
         # If active assignment exists and matches the current section, no action needed
         if active_assignment and active_assignment.section_id == instance.section_id:
             return
-        
+
         # If active assignment exists but points to a different section, end it and create new one
         today = timezone.now().date()
         if active_assignment and active_assignment.section_id != instance.section_id:
             active_assignment.end_date = today
             active_assignment.save(update_fields=['end_date'])
-        
+
         # Create new assignment if no matching active assignment exists
         if not active_assignment or active_assignment.section_id != instance.section_id:
             StudentSectionAssignment.objects.create(
@@ -732,10 +732,10 @@ def _sync_student_section_on_assignment_save(sender, instance: StudentSectionAss
         student = instance.student
         if student is None or not student.pk:
             return
-        
+
         # Refresh student from DB to get current state
         student.refresh_from_db()
-        
+
         # If this is an active assignment (no end_date), update the student's section
         if instance.end_date is None:
             # Always update to ensure sync
@@ -747,7 +747,7 @@ def _sync_student_section_on_assignment_save(sender, instance: StudentSectionAss
                 end_date__isnull=True,
                 section_type=StudentSectionAssignment.SECTION_TYPE_PRIMARY,
             ).select_related('section').order_by('-start_date').first()
-            
+
             if active_assignment:
                 StudentProfile.objects.filter(pk=student.pk).update(section=active_assignment.section)
             # Don't clear section if no active assignment - it might be created in same transaction
@@ -766,14 +766,14 @@ def _sync_student_section_on_assignment_delete(sender, instance: StudentSectionA
         # If student is being deleted (CASCADE), skip sync
         if student is None or student._state.adding or not student.pk:
             return
-        
+
         # Find any remaining active PRIMARY assignment
         active_assignment = StudentSectionAssignment.objects.filter(
             student=student,
             end_date__isnull=True,
             section_type=StudentSectionAssignment.SECTION_TYPE_PRIMARY,
         ).select_related('section').first()
-        
+
         if active_assignment:
             if student.section_id != active_assignment.section_id:
                 StudentProfile.objects.filter(pk=student.pk).update(section=active_assignment.section)
@@ -786,7 +786,7 @@ def _sync_student_section_on_assignment_delete(sender, instance: StudentSectionA
 
 class StudentCourseEnrollment(models.Model):
     """Tracks student enrollment in courses.
-    
+
     Records which students are enrolled in which courses for academic records
     and announcement targeting purposes.
     """
@@ -1065,13 +1065,13 @@ def _sync_advisor_role_on_save(sender, instance: SectionAdvisor, created, **kwar
         sp = instance.advisor
         if sp is None or not sp.pk:
             return
-            
+
         user = getattr(sp, 'user', None)
         if not user or not user.pk:
             return
-            
+
         role_obj, _ = Role.objects.get_or_create(name='ADVISOR')
-        
+
         if instance.is_active:
             # Add ADVISOR role if not present
             if role_obj not in user.roles.all():
@@ -1102,15 +1102,15 @@ def _sync_advisor_role_on_delete(sender, instance: SectionAdvisor, **kwargs):
         # If StaffProfile is being deleted (CASCADE), skip role sync
         if sp is None or sp._state.adding or not sp.pk:
             return
-        
+
         user = getattr(sp, 'user', None)
         if not user or not user.pk:
             return
-            
+
         role_obj = Role.objects.filter(name='ADVISOR').first()
         if not role_obj:
             return
-            
+
         # Only remove role if no other active advisor assignments exist
         other_active = SectionAdvisor.objects.filter(advisor=sp, is_active=True).exists()
         if not other_active:
@@ -1489,13 +1489,13 @@ class AttendanceUnlockRequest(models.Model):
     requested_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='attendance_unlock_requests')
     requested_at = models.DateTimeField(auto_now_add=True)
     note = models.TextField(blank=True, help_text='Staff request reason')
-    
+
     # HOD approval stage
     hod_status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='PENDING')
     hod_reviewed_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='attendance_hod_reviews')
     hod_reviewed_at = models.DateTimeField(null=True, blank=True)
     hod_note = models.TextField(blank=True, help_text='HOD review comments')
-    
+
     # Final approval stage
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='PENDING')
     reviewed_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='attendance_final_reviews')
@@ -1524,13 +1524,13 @@ class DailyAttendanceUnlockRequest(models.Model):
     requested_at = models.DateTimeField(auto_now_add=True)
     note = models.TextField(blank=True, help_text='Staff request reason')
     bulk_group_id = models.UUIDField(null=True, blank=True, db_index=True, help_text='Groups multiple session requests submitted together as a single bulk request')
-    
+
     # HOD approval stage
     hod_status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='PENDING')
     hod_reviewed_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='daily_hod_reviews')
     hod_reviewed_at = models.DateTimeField(null=True, blank=True)
     hod_note = models.TextField(blank=True, help_text='HOD review comments')
-    
+
     # Final approval stage
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='PENDING')
     reviewed_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='daily_final_reviews')
@@ -1548,7 +1548,7 @@ class DailyAttendanceUnlockRequest(models.Model):
 
 class DailyAttendanceSession(models.Model):
     """Daily overall attendance for a section (not period-specific).
-    
+
     Used by class advisors to mark overall daily attendance for their section.
     Complements period-wise attendance with a simpler daily view.
     """
@@ -1579,7 +1579,7 @@ class DailyAttendanceRecord(models.Model):
         ('LATE', 'Late'),
         ('LEAVE', 'Leave'),
     )
-    
+
     session = models.ForeignKey(DailyAttendanceSession, on_delete=models.CASCADE, related_name='records')
     student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='daily_attendance_records')
     status = models.CharField(max_length=8, choices=DAILY_ATTENDANCE_STATUS_CHOICES, default='A')
@@ -1599,7 +1599,7 @@ class DailyAttendanceRecord(models.Model):
 
 class DailyAttendanceSwapRecord(models.Model):
     """Records when daily attendance sessions are swapped/assigned to different staff.
-    
+
     Similar to how period swaps are tracked via SpecialTimetableEntry,
     this maintains an audit trail of who assigned attendance to whom and when.
     """
@@ -1608,12 +1608,12 @@ class DailyAttendanceSwapRecord(models.Model):
     assigned_to = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='received_daily_swaps', help_text='Staff who received the attendance assignment')
     assigned_at = models.DateTimeField(auto_now_add=True)
     reason = models.CharField(max_length=500, blank=True, null=True, help_text='Optional reason for assignment')
-    
+
     class Meta:
         verbose_name = 'Daily Attendance Swap Record'
         verbose_name_plural = 'Daily Attendance Swap Records'
         ordering = ('-assigned_at',)
-    
+
     def __str__(self):
         return f"{self.session} assigned by {self.assigned_by} to {self.assigned_to} @ {self.assigned_at.strftime('%Y-%m-%d %H:%M')}"
 
@@ -1772,14 +1772,14 @@ class ExtStaffFormSettings(models.Model):
     )
     form_title = models.CharField(max_length=255, default='External Staff Registration', help_text='Form title displayed to users')
     form_description = models.TextField(blank=True, default='', help_text='Form description/instructions')
-    
+
     # Form status
     is_accepting_responses = models.BooleanField(default=False, help_text='Whether the form is currently accepting responses')
-    
+
     # Field configuration - JSON storing which fields are enabled and their order
     # Format: [{"field": "salutation", "enabled": true, "required": true, "label": "Salutation", "order": 1}, ...]
     field_config = models.JSONField(default=list, help_text='Configuration for form fields')
-    
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

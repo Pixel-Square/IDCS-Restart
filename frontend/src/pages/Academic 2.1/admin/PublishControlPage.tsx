@@ -1044,7 +1044,7 @@ export default function PublishControlPage() {
               <div className="border rounded-lg p-4 bg-gray-50 space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Upload Seal Image</label>
-                  
+
                   {sealImage ? (
                     <div className="border-2 border-green-300 rounded-lg p-6 bg-green-50 grid grid-cols-2 gap-6 items-center">
                       {/* Left side - Controls */}
@@ -1064,7 +1064,7 @@ export default function PublishControlPage() {
                             <p className="text-xs text-green-700 mt-1">Saved on server</p>
                           )}
                         </div>
-                        
+
                         <div className="space-y-2">
                           <button
                             type="button"
@@ -1093,20 +1093,20 @@ export default function PublishControlPage() {
                         </div>
                       </div>
 
-                      <input 
-                        type="file" 
-                        accept="image/*" 
-                        className="hidden" 
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
                         id="seal-upload"
                         onChange={handleSealImageUpload}
                       />
                     </div>
                   ) : (
                     <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors cursor-pointer bg-gray-50">
-                      <input 
-                        type="file" 
-                        accept="image/*" 
-                        className="hidden" 
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
                         id="seal-upload"
                         onChange={handleSealImageUpload}
                       />
@@ -1464,7 +1464,7 @@ export default function PublishControlPage() {
               <div>
                 <h2 className="font-bold text-gray-900 text-lg">Success!</h2>
                 <p className="text-sm text-gray-600 mt-1">
-                  {resetModal.type === 'requests' 
+                  {resetModal.type === 'requests'
                     ? `${resetResult?.reopened_count || 0} courses opened for edits.`
                     : `All marks have been reset for ${resetResult?.affected_count || 0} exam assignments.`}
                 </p>

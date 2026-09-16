@@ -8,12 +8,12 @@ from django.db import connection
 
 
 def get_simple_marks_data(
-    page: int = 1, 
+    page: int = 1,
     page_size: int = 500,
     filters: dict = None
 ) -> dict[str, Any]:
     """Query student marks from Academic 2.1 tables with real data.
-    
+
     Returns: {
         'columns': [col1, col2, ...],
         'rows': [row1, row2, ...],
@@ -22,7 +22,7 @@ def get_simple_marks_data(
     """
     filters = filters or {}
     offset = (page - 1) * page_size
-    
+
     # Build WHERE clauses from filters safely
     where_clauses = ["acvsm.student_id IS NOT NULL"]
     params: list[Any] = []
@@ -101,7 +101,7 @@ def get_simple_marks_data(
         count_sql = f"SELECT COUNT(DISTINCT sp.id) FROM acv2_student_mark acvsm LEFT JOIN academics_studentprofile sp ON acvsm.student_id = sp.id LEFT JOIN acv2_exam_assignment acvea ON acvsm.exam_assignment_id = acvea.id LEFT JOIN acv2_section acvs ON acvea.section_id = acvs.id LEFT JOIN acv2_course ac ON acvs.course_id = ac.id LEFT JOIN acv2_class_type ct ON ac.class_type_id = ct.id LEFT JOIN academics_semester sem ON ac.semester_id = sem.id WHERE {where_sql}"
         cursor.execute(count_sql, params)
         total = cursor.fetchone()[0]
-    
+
     return {
         'columns': columns,
         'rows': rows,

@@ -313,19 +313,19 @@ export default function MyCalendarPage() {
   const getLeaveStatusForDate = (date: number): string | null => {
     const dateStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(date).padStart(2, '0')}`;
     const dateObj = new Date(dateStr);
-    
+
     // Find approved requests that cover this date
     for (const request of myRequests) {
       if (request.status !== 'approved') continue;
-      
+
       const statusCode = request.template?.leave_policy?.attendance_status;
       if (!statusCode) continue;
-      
+
       // Get date range from form_data
       const formData = request.form_data;
       let startDate: Date | null = null;
       let endDate: Date | null = null;
-      
+
       // Try different field name patterns
       for (const startKey of ['start_date', 'from_date', 'startDate', 'fromDate', 'date']) {
         if (formData[startKey]) {
@@ -333,25 +333,25 @@ export default function MyCalendarPage() {
           break;
         }
       }
-      
+
       for (const endKey of ['end_date', 'to_date', 'endDate', 'toDate']) {
         if (formData[endKey]) {
           endDate = new Date(formData[endKey]);
           break;
         }
       }
-      
+
       // If only start date, assume single day
       if (startDate && !endDate) {
         endDate = startDate;
       }
-      
+
       // Check if date falls within range
       if (startDate && endDate && dateObj >= startDate && dateObj <= endDate) {
         return statusCode;
       }
     }
-    
+
     return null;
   };
 
@@ -459,8 +459,8 @@ export default function MyCalendarPage() {
               <div className="flex-1">
                 <h3 className="font-semibold text-yellow-900 mb-1">Request Permission or Apply Leave</h3>
                 <p className="text-sm text-yellow-800">
-                  You have absent sessions (FN or AN). 
-                  Click the yellow "Apply" button on dates with absent FN/AN to request Late Entry Permission, apply Leave, or On Duty. 
+                  You have absent sessions (FN or AN).
+                  Click the yellow "Apply" button on dates with absent FN/AN to request Late Entry Permission, apply Leave, or On Duty.
                   You can specify whether you're applying for Forenoon (FN) or Afternoon (AN) session.
                 </p>
               </div>
@@ -581,11 +581,11 @@ export default function MyCalendarPage() {
               {attendanceSettings && (
                 <div className="mt-3 pt-3 border-t border-gray-200 text-xs text-gray-600">
                   <span className="font-medium">Time Limits: </span>
-                  In-time after {attendanceSettings.attendance_in_time_limit} or 
+                  In-time after {attendanceSettings.attendance_in_time_limit} or
                   Out-time before {attendanceSettings.attendance_out_time_limit} highlighted in <span className="text-red-600 font-semibold">red</span>
                 </div>
               )}
-              
+
             </div>
 
             <div className="bg-white rounded-lg shadow-md p-3 sm:p-6 mb-6">
@@ -637,12 +637,12 @@ export default function MyCalendarPage() {
                 const earlyOut = attendance && isTimeOutEarly(attendance.evening_out);
                 const highlightClass = lateIn || earlyOut ? 'ring-2 ring-yellow-300' : '';
                 const leaveStatusFromRequest = getLeaveStatusForDate(day);
-                
+
                 // Determine which status to display:
                 // Priority: holiday > attendance record with FN/AN > request status (only if no attendance) > no data
                 // If attendance record exists, ALWAYS show FN/AN breakdown, never just the leave badge
                 const displayLeaveStatus = !hasAttendance ? leaveStatusFromRequest : null;
-                
+
                 // Check if this is a half-day leave (one session has leave status, other is present/absent)
                 const isHalfDayLeave = attendance && attendance.status === 'half_day' && (
                   !isCoreStatus(attendance.fn_status) ||
@@ -655,7 +655,7 @@ export default function MyCalendarPage() {
                     onClick={() => handleDateClick(day)}
                     className={`${hideOnMobile ? 'hidden sm:block ' : ''}min-h-[92px] sm:aspect-square border-2 rounded-lg p-1.5 sm:p-2 cursor-pointer transition-all hover:shadow-md overflow-hidden ${
                       holidayInfo
-                        ? holidayInfo.is_sunday 
+                        ? holidayInfo.is_sunday
                           ? 'bg-blue-50 border-blue-300'
                           : 'bg-orange-50 border-orange-300'
                         : displayLeaveStatus
@@ -670,10 +670,10 @@ export default function MyCalendarPage() {
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-gray-900 text-xl sm:text-2xl">{day}</span>
                         {holidayInfo ? (
-                          <span 
+                          <span
                             className={`text-[10px] sm:text-xs font-bold px-1 sm:px-1.5 py-0.5 rounded uppercase ${
-                              holidayInfo.is_sunday 
-                                ? 'text-blue-700 bg-blue-200' 
+                              holidayInfo.is_sunday
+                                ? 'text-blue-700 bg-blue-200'
                                 : 'text-orange-700 bg-orange-200'
                             }`}
                             title={holidayInfo.notes || holidayInfo.name}
@@ -785,7 +785,7 @@ export default function MyCalendarPage() {
                             // Backend stores: morning_in (entry time), evening_out (exit time)
                             const inTime = attendance.morning_in;
                             const outTime = attendance.evening_out;
-                            
+
                             return (
                               <>
                                 <div title={`In: ${inTime || 'No Data'} Out: ${outTime || 'No Data'}`} className={`${lateIn || earlyOut ? 'text-red-700 font-semibold' : ''}`}>

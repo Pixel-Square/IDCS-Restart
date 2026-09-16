@@ -16,7 +16,7 @@ if sh_dept:
     sections = Section.objects.filter(managing_department=sh_dept)
     for s in sections:
         print(f"Section ID: {s.id} | Name: {s.name} | Dept: {s.managing_department.code if s.managing_department else 'None'} | Regulation: {s.batch.regulation.code if s.batch and s.batch.regulation else 'None'}")
-        
+
         # Check teaching assignments for this section
         tas = TeachingAssignment.objects.filter(section=s, is_active=True).select_related('staff__user', 'curriculum_row')
         print(f"  Teaching Assignments count: {tas.count()}")

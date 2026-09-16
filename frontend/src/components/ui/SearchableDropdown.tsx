@@ -40,8 +40,8 @@ export function SearchableDropdown({ options, value, onChange, placeholder = "Se
   return (
     <div className="relative" ref={wrapperRef}>
       <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
-      
-      <div 
+
+      <div
         className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm bg-white cursor-pointer flex justify-between items-center focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
         tabIndex={0}
         onClick={() => setIsOpen(!isOpen)}
@@ -61,7 +61,7 @@ export function SearchableDropdown({ options, value, onChange, placeholder = "Se
         </span>
         <div className="flex items-center gap-1">
           {selectedOption && (
-            <div 
+            <div
               className="p-1 hover:bg-gray-200 rounded-full cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
               onClick={(e) => {
                 e.stopPropagation();
@@ -91,7 +91,7 @@ export function SearchableDropdown({ options, value, onChange, placeholder = "Se
               autoFocus
             />
           </div>
-          
+
           <div className="overflow-y-auto overflow-x-hidden flex-1 rounded-b-md">
             {filteredOptions.length === 0 ? (
               <div className="p-3 text-sm text-gray-500 text-center">No results found</div>

@@ -30,7 +30,7 @@ class CoeSaveExamDummies(APIView):
         # We can do bulk create or update.
         # Given "save" button on list, it sends current view.
         # Strategy: iterate and update_or_create.
-        
+
         # Pre-fetch students to minimize DB hits
         reg_nos = [r.get('reg_no') for r in records if r.get('reg_no')]
         students = {s.reg_no: s for s in StudentProfile.objects.filter(reg_no__in=reg_nos)}
@@ -51,7 +51,7 @@ class CoeSaveExamDummies(APIView):
 
                 if not (reg_no and dummy and semester):
                     continue
-                
+
                 student = students.get(reg_no)
                 if not student:
                     errors.append(f"Student {reg_no} not found")

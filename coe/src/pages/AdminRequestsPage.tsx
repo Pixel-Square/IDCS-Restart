@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  MessageSquare, 
+import {
+  MessageSquare,
   Search,
-  CheckCircle, 
-  Clock, 
-  Eye, 
-  AlertCircle, 
-  Loader2, 
+  CheckCircle,
+  Clock,
+  Eye,
+  AlertCircle,
+  Loader2,
   Filter,
   User,
   Shield,
@@ -42,9 +42,9 @@ export default function AdminRequestsPage() {
     setError('');
     try {
       // Fetching all queries from the shared service
-      const data = await fetchAllQueries(); 
+      const data = await fetchAllQueries();
       // Sort by latest first
-      const sorted = [...data.queries].sort((a, b) => 
+      const sorted = [...data.queries].sort((a, b) =>
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       );
       setQueries(sorted);
@@ -55,7 +55,7 @@ export default function AdminRequestsPage() {
     }
   }
 
-  const filteredQueries = queries.filter(q => 
+  const filteredQueries = queries.filter(q =>
     q.query_text.toLowerCase().includes(search.toLowerCase()) ||
     q.username.toLowerCase().includes(search.toLowerCase())
   );
@@ -63,7 +63,7 @@ export default function AdminRequestsPage() {
   const handleApproveReset = async (query: UserQuery) => {
     const facultyCodeMatch = query.query_text.match(/\(([^)]+)\)/);
     const facultyCode = facultyCodeMatch ? facultyCodeMatch[1] : '';
-    
+
     if (!facultyCode) {
       alert('Could not extract Faculty Code from request text.');
       return;
@@ -76,11 +76,11 @@ export default function AdminRequestsPage() {
     setSaving(true);
     try {
       // 1. Update status to FIXED (Approved)
-      await updateQuery(query.id, { 
-        status: 'FIXED', 
-        admin_notes: `[SYSTEM] Reset approved by Admin. Local data cleared for ${facultyCode}.` 
+      await updateQuery(query.id, {
+        status: 'FIXED',
+        admin_notes: `[SYSTEM] Reset approved by Admin. Local data cleared for ${facultyCode}.`
       });
-      
+
       // 2. Broadcast the reset signal (Cross-tab notification)
       if (typeof BroadcastChannel !== 'undefined') {
         const channel = new BroadcastChannel('idcs-marks-sync');
@@ -114,7 +114,7 @@ export default function AdminRequestsPage() {
           </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[#6f4a3f]/40" size={18} />
-            <input 
+            <input
               type="text"
               placeholder="Search faculty or request..."
               value={search}
@@ -157,11 +157,11 @@ export default function AdminRequestsPage() {
             const StatusIcon = statusCfg.icon;
 
             return (
-              <div 
-                key={query.id} 
+              <div
+                key={query.id}
                 className={`bg-white rounded-2xl border-2 p-5 transition-all hover:shadow-lg ${
-                  isResetRequest && query.status !== 'FIXED' 
-                    ? 'border-rose-200 shadow-md shadow-rose-50' 
+                  isResetRequest && query.status !== 'FIXED'
+                    ? 'border-rose-200 shadow-md shadow-rose-50'
                     : 'border-[#ead7d0]'
                 }`}
               >
@@ -180,8 +180,8 @@ export default function AdminRequestsPage() {
                     </div>
 
                     <div className={`p-4 rounded-xl text-sm leading-relaxed ${
-                      isResetRequest 
-                        ? 'bg-rose-50 text-rose-900 border border-rose-100' 
+                      isResetRequest
+                        ? 'bg-rose-50 text-rose-900 border border-rose-100'
                         : 'bg-[#faf4f0] text-[#6f4a3f] border border-[#ead7d0]'
                     }`}>
                       {isResetRequest && query.status !== 'FIXED' && (

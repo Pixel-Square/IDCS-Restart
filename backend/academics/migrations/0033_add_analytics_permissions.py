@@ -6,7 +6,7 @@ from django.db import migrations
 def create_analytics_permissions(apps, schema_editor):
     """Create analytics permissions"""
     Permission = apps.get_model('accounts', 'Permission')
-    
+
     permissions = [
         {
             'code': 'analytics.view_all_analytics',
@@ -21,7 +21,7 @@ def create_analytics_permissions(apps, schema_editor):
             'description': 'Can view attendance analytics for own class students'
         },
     ]
-    
+
     for perm_data in permissions:
         Permission.objects.get_or_create(
             code=perm_data['code'],

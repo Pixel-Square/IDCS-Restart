@@ -7,17 +7,17 @@ def import_obe_data():
     try:
         with connection.cursor() as cur:
             cur.execute("SET session_replication_role = 'replica';")
-            
+
             with open('/home/iqac2/Desktop/idcs-mt/obe_data.json', 'r') as f:
                 data = json.load(f)
-                
+
             for table_name, rows in data.items():
                 if not rows: continue
-                    
+
                 print(f"Importing {len(rows)} rows into {table_name}...")
                 row_list = list(rows.values()) if isinstance(rows, dict) else rows
                 if not row_list: continue
-                    
+
                 # Clean up unique constraints
                 if table_name == 'OBE_assessmentdraft':
                     for r in row_list:
@@ -33,7 +33,7 @@ def import_obe_data():
                         cur.execute('''DELETE FROM public."OBE_obemarktablelock" WHERE teaching_assignment_id = %s AND assessment = %s AND id != %s''', (r.get('teaching_assignment_id'), r.get('assessment'), r.get('id')))
                 elif table_name in [
                     'OBE_cia1mark', 'OBE_cia2mark', 'OBE_formative1mark', 'OBE_formative2mark',
-                    'OBE_modelexammark', 'OBE_projectmark', 'OBE_review1mark', 'OBE_review2mark', 
+                    'OBE_modelexammark', 'OBE_projectmark', 'OBE_review1mark', 'OBE_review2mark',
                     'OBE_ssa1mark', 'OBE_ssa2mark', 'OBE_labexammark', 'OBE_finalinternalmark'
                 ]:
                     for r in row_list:
@@ -41,7 +41,7 @@ def import_obe_data():
                             cur.execute(f'''DELETE FROM public."{table_name}" WHERE teaching_assignment_id = %s AND student_id = %s AND assessment = %s AND id != %s''', (r.get('teaching_assignment_id'), r.get('student_id'), r.get('assessment'), r.get('id')))
                         else:
                             cur.execute(f'''DELETE FROM public."{table_name}" WHERE teaching_assignment_id = %s AND student_id = %s AND id != %s''', (r.get('teaching_assignment_id'), r.get('student_id'), r.get('id')))
-                            
+
                 columns = list(row_list[0].keys())
                 values_list = []
                 for row in row_list:
@@ -51,10 +51,10 @@ def import_obe_data():
                         if isinstance(val, (dict, list)): val = json.dumps(val)
                         row_values.append(val)
                     values_list.append(tuple(row_values))
-                    
+
                 col_names = ', '.join([f'"{c}"' for c in columns])
                 set_clauses = ', '.join([f'"{c}" = EXCLUDED."{c}"' for c in columns if c != 'id'])
-                
+
                 query = f"""
                     INSERT INTO public."{table_name}" ({col_names})
                     VALUES %s
@@ -64,13 +64,13 @@ def import_obe_data():
                     VALUES %s
                     ON CONFLICT (id) DO NOTHING;
                 """
-                    
+
                 from psycopg2.extras import execute_values
                 execute_values(cur, query, values_list, page_size=1000)
-                
+
             cur.execute("SET session_replication_role = 'origin';")
             print("Import completed successfully.")
-            
+
     except Exception as e:
         print(f"Error during import: {e}")
 

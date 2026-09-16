@@ -1142,18 +1142,44 @@ export default function GoogleSheetsPage() {
   );
 
   /** Question columns to show: from mark_manager questions (admin_defined) or pattern titles */
-  const configQuestionFields = useMemo(() => {
+  const configQuestionFields = useMemo((): Array<{ key: string; title: string; id?: string }> => {
     const mm = configActiveExam?.markManager;
     if (mm?.enabled && mm.mode === 'admin_defined' && mm.questions.length) {
-      return mm.questions.map((q) => q.title);
+      return mm.questions.map((q, idx) => ({
+        key: q.id || `q_${idx}`,
+        title: q.title || `Q${idx + 1}`,
+        id: q.id || `q_${idx}`,
+      }));
     }
     // Specific pattern for this active exam assignment
-    if (configActiveExamPatternTitles.length) return configActiveExamPatternTitles;
-    // Fallback to selectedPatternQuestionTitles or configured mapping
-    if (selectedPatternQuestionTitles.length) return selectedPatternQuestionTitles;
+    if (configActiveExamPatternTitles.length) {
+      return configActiveExamPatternTitles.map((t, idx) => ({
+        key: `q_${idx}`,
+        title: t,
+        id: `q${idx}`,
+      }));
+    }
+    // Fallback to selectedPatternQuestionTitles
+    if (selectedPatternQuestionTitles.length) {
+      return selectedPatternQuestionTitles.map((t, idx) => ({
+        key: `q_${idx}`,
+        title: t,
+        id: `q${idx}`,
+      }));
+    }
     const fromMapping = Object.keys(configActiveMapping.questionColumns || {});
-    if (fromMapping.length) return fromMapping;
-    return DEFAULT_QUESTION_COLUMNS;
+    if (fromMapping.length) {
+      return fromMapping.map((k, idx) => ({
+        key: k,
+        title: k,
+        id: `q${idx}`,
+      }));
+    }
+    return DEFAULT_QUESTION_COLUMNS.map((q, idx) => ({
+      key: `q_${idx}`,
+      title: q,
+      id: `q${idx}`,
+    }));
   }, [configActiveExam, configActiveExamPatternTitles, configActiveMapping, selectedPatternQuestionTitles]);
 
   const saveConfigMapping = () => {
@@ -1425,17 +1451,39 @@ export default function GoogleSheetsPage() {
                   <div>
                     <p className="text-xs font-semibold text-slate-600 mb-3">Question Column Mapping</p>
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                      {configQuestionFields.map((question) => (
-                        <label key={question} className="space-y-1 text-sm text-slate-700">
-                          <span className="text-xs font-medium text-slate-600">{question}</span>
-                          <input
-                            value={configActiveMapping.questionColumns[question] || ''}
-                            onChange={(e) => updateQuestionColumn(configActiveExam.id, question, e.target.value, configActiveMapping)}
-                            placeholder="C"
-                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-                          />
-                        </label>
-                      ))}
+                      {configQuestionFields.map((item, idx) => {
+                        const colVal =
+                          configActiveMapping.questionColumns[item.key] ??
+                          (item.id ? configActiveMapping.questionColumns[item.id] : undefined) ??
+                          configActiveMapping.questionColumns[`q_${idx}`] ??
+                          configActiveMapping.questionColumns[`q${idx}`] ??
+                          '';
+                        return (
+                          <label key={item.key || `q_${idx}`} className="space-y-1 text-sm text-slate-700">
+                            <span className="text-xs font-medium text-slate-600">{item.title}</span>
+                            <input
+                              value={colVal}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setColumnMapping((current) => {
+                                  const base = current[configActiveExam.id] || configActiveMapping || createInitialMapping(configActiveExam.id, selectedPatternQuestionTitles);
+                                  const nextCols = { ...base.questionColumns, [item.key]: val, [`q_${idx}`]: val, [`q${idx}`]: val };
+                                  if (item.id) nextCols[item.id] = val;
+                                  return {
+                                    ...current,
+                                    [configActiveExam.id]: {
+                                      ...base,
+                                      questionColumns: nextCols,
+                                    },
+                                  };
+                                });
+                              }}
+                              placeholder="C"
+                              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                            />
+                          </label>
+                        );
+                      })}
                     </div>
                   </div>
                 )}

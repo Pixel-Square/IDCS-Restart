@@ -231,7 +231,7 @@ function StudentCard({ student, uid, onClose }: { student: ScannedStudent; uid: 
     profileImageUrl = `${getApiBase()}${profileImageUrl.startsWith('/') ? '' : '/'}${profileImageUrl}`
   }
   const initials = student.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
-  
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
       <div className="relative bg-white rounded-3xl shadow-2xl border-4 border-indigo-400 w-full max-w-2xl overflow-hidden">
@@ -315,7 +315,7 @@ function StaffCard({ staff, uid, onClose }: { staff: ScannedStaff; uid: string; 
     profileImageUrl = `${getApiBase()}${profileImageUrl.startsWith('/') ? '' : '/'}${profileImageUrl}`
   }
   const initials = staff.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
-  
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
       <div className="relative bg-white rounded-3xl shadow-2xl border-4 border-emerald-400 w-full max-w-2xl overflow-hidden">
@@ -628,7 +628,7 @@ export default function RFReaderAssignCardsPage() {
       else await assignStaffUID(assignSelected.id, uid)
 
       setAssignSuccess(true)
-      
+
       // Auto-close after 1.5 seconds
       setTimeout(() => {
         setAssignSuccess(false)

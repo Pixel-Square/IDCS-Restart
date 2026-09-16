@@ -20,7 +20,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         self.stdout.write('Creating/updating Late Entry Permission template...')
-        
+
         # Create or update the template
         template, created = RequestTemplate.objects.update_or_create(
             name='Late Entry Permission',
@@ -85,12 +85,12 @@ class Command(BaseCommand):
                 }
             }
         )
-        
+
         if created:
             self.stdout.write(self.style.SUCCESS('✓ Created Late Entry Permission template'))
         else:
             self.stdout.write(self.style.SUCCESS('✓ Updated Late Entry Permission template'))
-        
+
         # Create approval steps
         # Step 1: HOD approval
         step1, created1 = ApprovalStep.objects.update_or_create(
@@ -100,12 +100,12 @@ class Command(BaseCommand):
                 'approver_role': 'HOD'
             }
         )
-        
+
         if created1:
             self.stdout.write(self.style.SUCCESS('  ✓ Created Step 1: HOD approval'))
         else:
             self.stdout.write(self.style.SUCCESS('  ✓ Updated Step 1: HOD approval'))
-        
+
         self.stdout.write(self.style.SUCCESS('\n✓ Late Entry Permission template is ready!'))
         self.stdout.write('\nTemplate Details:')
         self.stdout.write(f'  - Name: {template.name}')

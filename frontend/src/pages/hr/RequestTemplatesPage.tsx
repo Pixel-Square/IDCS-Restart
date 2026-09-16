@@ -68,7 +68,7 @@ export default function TemplateManagementPage() {
 
   const handleDelete = async (id: number) => {
     if (!window.confirm('Are you sure you want to delete this template?')) return;
-    
+
     try {
       await deleteTemplate(id);
       setTemplates(templates.filter(t => t.id !== id));

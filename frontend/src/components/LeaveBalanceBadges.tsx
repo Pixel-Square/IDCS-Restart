@@ -30,38 +30,38 @@ export default function LeaveBalanceBadges({ month }: LeaveBalanceBadgesProps) {
       setLateStats(lateData);
       const actualBalances = data.balances || [];
       setTemplates(tmpl || []);
-      
+
       // Create a map of actual balances by leave type
       const balanceMap = new Map<string, LeaveBalance>();
       actualBalances.forEach(bal => {
         balanceMap.set(bal.leave_type.toLowerCase(), bal);
       });
-      
+
       // Get user's role hierarchy for allotment lookup
       const roleHierarchy = ['HOD', 'AHOD', 'FACULTY', 'STAFF'];
-      
+
       // Build combined balance list: start with actual balances
       const combinedBalances: LeaveBalance[] = [...actualBalances];
       const overdraftNames = new Set<string>();
-      
+
       // Add template entries that don't exist in actual balances
       tmpl.forEach(template => {
         // Check if template has leave_policy configured (has action OR allotment_per_role)
         const hasLeavePolicy = template.leave_policy &&
           (template.leave_policy.action || template.leave_policy.allotment_per_role);
-        
+
         if (hasLeavePolicy) {
           const leaveType = template.name;
           const leaveTypeLower = leaveType.toLowerCase();
-          
+
           // Get action, default to 'deduct' if not specified but allotment exists
           const action = template.leave_policy.action || 'deduct';
-          
+
           // Collect overdraft names (LOP)
           if (template.leave_policy.overdraft_name) {
             overdraftNames.add(template.leave_policy.overdraft_name);
           }
-          
+
           // Only add if not already in actual balances
           if (!balanceMap.has(leaveTypeLower)) {
             // Find allotment for this template
@@ -74,7 +74,7 @@ export default function LeaveBalanceBadges({ month }: LeaveBalanceBadgesProps) {
                 }
               }
             }
-            
+
             // Show initial balance: allotment for deduct, 0 for earn/neutral
             const initialBalance = {
               leave_type: leaveType,
@@ -85,7 +85,7 @@ export default function LeaveBalanceBadges({ month }: LeaveBalanceBadgesProps) {
           }
         }
       });
-      
+
       // Add overdraft entries (LOP) if not already present
       overdraftNames.forEach(overdraftName => {
         const overdraftLower = overdraftName.toLowerCase();
@@ -97,7 +97,7 @@ export default function LeaveBalanceBadges({ month }: LeaveBalanceBadgesProps) {
           });
         }
       });
-      
+
       setBalances(combinedBalances);
     } catch (err: any) {
       console.error('Failed to fetch leave balances:', err);
@@ -109,17 +109,17 @@ export default function LeaveBalanceBadges({ month }: LeaveBalanceBadgesProps) {
 
   const getBadgeColor = (leaveType: string): string => {
     const type = leaveType.toUpperCase();
-    
+
     // Red for LOP/Overdraft
     if (type.includes('LOP') || type.includes('OVERDRAFT')) {
       return 'bg-red-100 text-red-800 border-red-300';
     }
-    
+
     // Purple/Yellow for Earn/Neutral types (OD, COL, etc.)
     if (type.includes('OD') || type.includes('COL') || type.includes('COMP')) {
       return 'bg-purple-100 text-purple-800 border-purple-300';
     }
-    
+
     // Blue/Green for standard deduct leave types (CL, SL, EL, etc.)
     return 'bg-blue-100 text-blue-800 border-blue-300';
   };

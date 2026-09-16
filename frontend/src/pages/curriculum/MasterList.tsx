@@ -107,12 +107,12 @@ export default function MasterList() {
       fd.append('csv_file', file, file.name);
       // Use fetchWithAuth for automatic token refresh handling
       const res = await fetchWithAuth(`/api/curriculum/master/import/`, { method: 'POST', body: fd });
-      
+
       if (res.status === 401) {
         alert('Your session has expired. Please refresh the page and try again.');
         return;
       }
-      
+
       if (!res.ok) {
         let txt = '';
         try{ txt = await res.text() }catch(_){ txt = res.statusText }
@@ -258,7 +258,7 @@ export default function MasterList() {
             </label>
           </div>
         </div>
-        
+
         {/* Filters */}
         {uniqueRegs.length > 0 && (
           <div className="flex flex-wrap items-center gap-4 mb-6 bg-white rounded-lg shadow-sm p-4">
@@ -309,14 +309,14 @@ export default function MasterList() {
             )}
           </div>
         )}
-        
+
         {/* Flash Message */}
         {flash && (
           <div className="mb-4 inline-block bg-green-100 text-green-800 px-4 py-2 rounded-lg font-semibold">
             {flash}
           </div>
         )}
-        
+
         {/* Scrollable Table View */}
         <div className="w-full overflow-x-auto bg-white rounded-lg shadow-md">
           <table className="w-full divide-y divide-gray-200">
@@ -372,9 +372,9 @@ export default function MasterList() {
                       <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.external_mark ?? '-'}</td>
                       <td className="px-3 py-3 text-sm text-center text-gray-900 font-semibold whitespace-nowrap">{m.total_mark ?? '-'}</td>
                       <td className="px-3 py-3 text-sm text-gray-700 whitespace-nowrap">
-                        {m.for_all_departments ? 'ALL' : 
+                        {m.for_all_departments ? 'ALL' :
                           (m.departments_display && m.departments_display.length > 0) ?
-                            m.departments_display.map((d:any) => 
+                            m.departments_display.map((d:any) =>
                               d.short_name || d.shortname || d.code || d.name
                             ).join(', ') :
                             'No Depts'

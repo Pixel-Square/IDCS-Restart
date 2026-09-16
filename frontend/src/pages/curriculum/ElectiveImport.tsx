@@ -373,7 +373,7 @@ export default function ElectiveImport() {
   const importElectiveSubjectOptions = useMemo(() => {
     // Show subject options only if both parent and department are selected
     if (!importFilters.parent || !importFilters.departmentId) return [];
-    
+
     return electives.filter((elective) => {
       if (elective.parent_name !== importFilters.parent) return false;
       if (elective.department?.id !== importFilters.departmentId) return false;

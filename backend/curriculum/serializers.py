@@ -21,9 +21,9 @@ class CurriculumMasterSerializer(serializers.ModelSerializer):
     # expose semester number for frontend convenience and accept semester_id on writes
     semester = serializers.IntegerField(source='semester.number', read_only=True)
     semester_id = serializers.PrimaryKeyRelatedField(
-        queryset=Semester.objects.all(), 
-        source='semester', 
-        write_only=True, 
+        queryset=Semester.objects.all(),
+        source='semester',
+        write_only=True,
         required=False,
         allow_null=True
     )
@@ -44,7 +44,7 @@ class CurriculumMasterSerializer(serializers.ModelSerializer):
             'for_all_departments', 'departments', 'departments_display', 'editable', 'created_by', 'created_at', 'updated_at'
         ]
         read_only_fields = ('created_by', 'created_at', 'updated_at')
-    
+
     def validate(self, attrs):
         # For create operations, semester is required - try to get it from semester_id or infer from semester number
         if not self.instance and 'semester' not in attrs:
@@ -59,7 +59,7 @@ class CurriculumMasterSerializer(serializers.ModelSerializer):
                         attrs['semester'] = sem_obj
                     except (ValueError, TypeError):
                         pass
-            
+
             # If still no semester, raise validation error
             if 'semester' not in attrs:
                 raise serializers.ValidationError({
@@ -78,7 +78,7 @@ class CurriculumMasterSerializer(serializers.ModelSerializer):
                     validated_data['created_by'] = user
             except Exception:
                 pass
-        
+
         master = CurriculumMaster.objects.create(**validated_data)
         if deps:
             master.departments.set(deps)
@@ -138,12 +138,12 @@ class DepartmentGroupSmallSerializer(serializers.ModelSerializer):
 class DepartmentGroupSerializer(serializers.ModelSerializer):
     """Full serializer for DepartmentGroup with mapping info."""
     department_count = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = DepartmentGroup
         fields = ('id', 'code', 'name', 'description', 'is_active', 'department_count', 'created_at', 'updated_at')
         read_only_fields = ('created_at', 'updated_at')
-    
+
     def get_department_count(self, obj):
         return obj.department_mappings.filter(is_active=True).count()
 
@@ -184,32 +184,32 @@ class ElectiveSubjectSerializer(serializers.ModelSerializer):
             'created_by', 'created_at', 'updated_at'
         ]
         read_only_fields = ('created_by', 'created_at', 'updated_at', 'student_count', 'is_cross_department', 'owner_department_name', 'parent_name', 'parent_is_dept_core', 'parent_department_id')
-    
+
     def get_is_cross_department(self, obj):
         """Check if this elective is being shown in a different department's view via group mapping."""
         request = self.context.get('request')
         if not request:
             return False
-        
+
         # Get the department_id from query params
         queried_dept_id = request.query_params.get('department_id')
         if not queried_dept_id:
             return False
-        
+
         try:
             queried_dept_id = int(queried_dept_id)
             # If the elective's department is different from the queried department, it's cross-department
             return obj.department_id != queried_dept_id
         except (ValueError, TypeError):
             return False
-    
+
     def get_owner_department_name(self, obj):
         """Return the owner department's name for cross-department electives."""
         if self.get_is_cross_department(obj):
             dept = obj.department
             return f"{dept.code} - {dept.short_name or dept.name}" if dept else None
         return None
-    
+
     def get_parent_name(self, obj):
         """Return the parent curriculum row's course name."""
         if obj.parent:

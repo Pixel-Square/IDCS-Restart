@@ -108,8 +108,8 @@ function readStoredMarkQpType(dummyNumber: string): QpType | null {
   return upper === 'QP1' || upper === 'QP2' || upper === 'TCPR' || upper === 'TCPL' || upper === 'OE' ? (upper as QpType) : null;
 }
 
-export default function BarScanMarkEntry({ 
-  embeddedCode, 
+export default function BarScanMarkEntry({
+  embeddedCode,
   embeddedRegNo,
   embeddedName,
   embeddedQpType,
@@ -117,8 +117,8 @@ export default function BarScanMarkEntry({
   embeddedDept,
   embeddedSem,
   embeddedDummy,
-  onClose, 
-  onNextScan 
+  onClose,
+  onNextScan
 }: BarScanMarkEntryProps = {}) {
   const [searchParams] = useSearchParams();
   const code = embeddedCode || String(searchParams.get('code') || '').trim();
@@ -143,7 +143,7 @@ export default function BarScanMarkEntry({
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [validatingPassword, setValidatingPassword] = useState(false);
-  
+
   // References for explicit tab focusing
   const saveButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -164,10 +164,10 @@ export default function BarScanMarkEntry({
         return;
       }
       if (showPasswordModal) return;
-      
+
       entryScannerRef.current?.focus();
     };
-    
+
     focusScanner();
     window.addEventListener('click', focusScanner);
     return () => window.removeEventListener('click', focusScanner);
@@ -191,7 +191,7 @@ export default function BarScanMarkEntry({
       setIsLocked(true);
       setSaved(true);
     }
-    
+
     return finalQp;
   };
 
@@ -254,7 +254,7 @@ export default function BarScanMarkEntry({
           return;
         }
         const data = await res.json();
-        
+
         // URL qp_type is the source of truth for mark-entry layout when provided.
         const dbQpType = String(data.qp_type || 'QP1').toUpperCase();
         const urlQpType = queryQpType ? String(queryQpType).toUpperCase() : null;
@@ -324,29 +324,29 @@ export default function BarScanMarkEntry({
     try {
       // In a real implementation, we would send this to the backend endpoint.
       // E.g., await fetchWithAuth('/api/coe/marks/save', { method: 'POST', body: JSON.stringify(...) });
-      
+
       // Simulating network delay for save
       await new Promise(resolve => setTimeout(resolve, 800));
-      
+
       saveMarksForDummy(student.dummy_number || student.reg_no, marks, student.qp_type);
-      
+
       // Interconnectivity: Dispatch event for both portals
       window.dispatchEvent(new CustomEvent('esv-marks-updated'));
       window.dispatchEvent(new CustomEvent('coe-marks-updated'));
-      
+
       // Broadcast to other tabs
       const bc = new BroadcastChannel('idcs-marks-sync');
-      bc.postMessage({ 
-        type: 'UPDATE', 
-        dummy: student.dummy_number || student.reg_no, 
-        marks, 
-        qpType: student.qp_type 
+      bc.postMessage({
+        type: 'UPDATE',
+        dummy: student.dummy_number || student.reg_no,
+        marks,
+        qpType: student.qp_type
       });
       bc.close();
 
       setSaved(true);
       setIsLocked(true);
-      
+
       // Automatically focus back to the hidden barcode listener so they can instantly scan the next paper
       setTimeout(() => {
          entryScannerRef.current?.focus();
@@ -368,21 +368,21 @@ export default function BarScanMarkEntry({
     try {
       const me = getCachedMe();
       const identifier = me?.email || me?.username || me?.staff_profile?.staff_id;
-      
+
       if (!identifier) {
         throw new Error('User identifier not found. Please log in again.');
       }
-      
+
       const res = await fetchWithAuth('/api/accounts/token/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identifier, password: passwordInput })
       });
-      
+
       if (!res.ok) {
         throw new Error('Invalid password');
       }
-      
+
       setIsLocked(false);
       setSaved(false); // Enable editing again
       setShowPasswordModal(false);
@@ -448,7 +448,7 @@ export default function BarScanMarkEntry({
           </div>
         </div>
       )}
-      
+
       <div className="w-full max-w-[100%] mx-auto py-4 space-y-4">
         <div className="flex items-center justify-between rounded-xl border border-blue-100 bg-white p-4 sm:p-6 shadow-sm">
           <div>
@@ -573,7 +573,7 @@ export default function BarScanMarkEntry({
                         }}
                         onChange={(e) => {
                           const val = e.target.value;
-                          
+
                           if (val !== '') {
                             const num = Number(val);
                             if (num < 0) return;
@@ -587,8 +587,8 @@ export default function BarScanMarkEntry({
                           setMarks((prev) => ({ ...prev, [q.key]: val }));
                         }}
                         className={`w-full min-w-[2rem] rounded border px-1 py-1 text-center focus:outline-none focus:border-blue-500 ${
-                          isLocked 
-                            ? 'bg-gray-100 text-gray-500 cursor-not-allowed border-gray-200' 
+                          isLocked
+                            ? 'bg-gray-100 text-gray-500 cursor-not-allowed border-gray-200'
                             : 'border-gray-300'
                         }`}
                       />
@@ -601,7 +601,7 @@ export default function BarScanMarkEntry({
                         const reviewMarks = Number(marks['review']) || 0;
                         return Math.round((writtenMarks / 80) * 70) + reviewMarks;
                       }
-                      
+
                       return questions.reduce((sum, q) => {
                         const n = Number(marks[q.key]);
                         return Number.isFinite(n) ? sum + n : sum;

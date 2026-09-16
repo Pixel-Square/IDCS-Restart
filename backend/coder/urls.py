@@ -91,7 +91,7 @@ urlpatterns = [
     path('admin/section-incharges/', AdminSectionInchargeView.as_view(), name='coder-admin-section-incharges'),
     path('admin/enrollments/sync/', AdminEnrollmentView.as_view(), name='coder-admin-enrollment-sync'),
     path('admin/analytics/', AdminAnalyticsView.as_view(), name='coder-admin-analytics'),
-    
+
     path('admin/users/search/', AdminUserSearchView.as_view(), name='coder-admin-user-search'),
     path('admin/sections/', AdminSectionListView.as_view(), name='coder-admin-sections'),
 

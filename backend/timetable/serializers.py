@@ -34,12 +34,12 @@ class TimetableTemplateSerializer(serializers.ModelSerializer):
 def get_teaching_assignments_for_section_and_curriculum(section, curriculum_row):
     if not section or not curriculum_row:
         return []
-    
+
     from academics.models import TeachingAssignment
-    
+
     # 1. Start with the direct section teaching assignments
     section_ids = [section.id]
-    
+
     # 2. If it's a shared/S&H section (i.e. batch has no course, or department is S&H)
     is_shared = False
     try:
@@ -49,7 +49,7 @@ def get_teaching_assignments_for_section_and_curriculum(section, curriculum_row)
             is_shared = (code == 'S&H' or section.department_id is None)
     except Exception:
         pass
-        
+
     if is_shared:
         # Resolve secondary sections of students enrolled in this section
         try:
@@ -73,13 +73,13 @@ def get_teaching_assignments_for_section_and_curriculum(section, curriculum_row)
                     section_ids.extend(secondary_section_ids)
         except Exception:
             pass
-            
+
         # Also include core-dept sections for the same batch year/regulation + semester
         try:
             batch_year_id = getattr(section.batch, 'batch_year_id', None)
             regulation_id = getattr(section.batch, 'regulation_id', None)
             sem_num = getattr(section.semester, 'number', None)
-            
+
             # home departments of students
             home_dept_ids = list(
                 StudentSectionAssignment.objects.filter(
@@ -107,31 +107,31 @@ def get_teaching_assignments_for_section_and_curriculum(section, curriculum_row)
                     section_ids.extend(core_dept_section_ids)
         except Exception:
             pass
-            
+
     # Deduplicate section IDs
     section_ids = list(set(section_ids))
-    
+
     # 3. Query all active teaching assignments in these sections for the active academic year
     from academics.models import AcademicYear
     active_ay = AcademicYear.objects.filter(is_active=True).order_by('-id').first()
-    
+
     tas = TeachingAssignment.objects.filter(
         section_id__in=section_ids,
         is_active=True
     )
     if active_ay:
         tas = tas.filter(academic_year=active_ay)
-        
+
     tas = tas.select_related('staff__user', 'curriculum_row', 'elective_subject', 'elective_subject__parent')
-    
+
     # 4. Filter the teaching assignments to match the curriculum_row.
     # We match by curriculum_row directly OR by course_code/course_name (for program core/shared curriculum rows)
     matched_staff_profiles = []
     seen_staff_ids = set()
-    
+
     target_code = getattr(curriculum_row, 'course_code', None)
     target_name = (getattr(curriculum_row, 'course_name', None) or '').strip().lower()
-    
+
     # Equivalent course codes mapping for shared sections (e.g. S&H 1st Year)
     # If the target course is in one of these groups, we match teaching assignments
     # from any course in the same group.
@@ -141,7 +141,7 @@ def get_teaching_assignments_for_section_and_curriculum(section, curriculum_row)
         {"CGA1101-CSE", "CGA1101-IT"},
         {"CGA1111-CSE", "CGA1111-IT"},
     ]
-    
+
     target_codes = {str(target_code).strip().upper()} if target_code else set()
     if target_code:
         tc_upper = str(target_code).strip().upper()
@@ -149,16 +149,16 @@ def get_teaching_assignments_for_section_and_curriculum(section, curriculum_row)
             if tc_upper in group:
                 target_codes = group
                 break
-    
+
     for ta in tas:
         if not ta.staff:
             continue
-        
+
         # Check direct curriculum row match
         cr = ta.curriculum_row
         es = ta.elective_subject
         parent = getattr(es, 'parent', None) if es else None
-        
+
         matches = False
         if cr and cr.id == curriculum_row.id:
             matches = True
@@ -182,12 +182,12 @@ def get_teaching_assignments_for_section_and_curriculum(section, curriculum_row)
                     matches = True
                 elif target_name and es_name and target_name == es_name:
                     matches = True
-                    
+
         if matches:
             if ta.staff.id not in seen_staff_ids:
                 seen_staff_ids.add(ta.staff.id)
                 matched_staff_profiles.append(ta.staff)
-                
+
     return matched_staff_profiles
 
 
@@ -213,10 +213,10 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
         model = TimetableAssignment
         fields = ('id', 'period', 'period_id', 'day', 'section', 'section_id', 'staff', 'effective_staff', 'staff_id', 'curriculum_row', 'subject_batch', 'subject_batch_id', 'subject_text')
         read_only_fields = ('period', 'section')
-    
+
     def get_staff(self, obj):
         """Return the actual staff who teaches the subject.
-        
+
         Priority:
         1. Subject batch staff
         2. Timetable assignment staff (explicitly chosen by advisor/creator)
@@ -236,7 +236,7 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
                     'username': u.username if u else '',
                     'user': getattr(sp, 'user_id', None)
                 }
-            
+
             # 2. Timetable assignment staff (explicitly chosen)
             if obj.staff:
                 sp = obj.staff
@@ -250,7 +250,7 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
                     'username': u.username if u else '',
                     'user': getattr(sp, 'user_id', None)
                 }
-            
+
             # 3. Subject teaching assignment staff (fallback from curriculum_row)
             if obj.curriculum_row and obj.section:
                 sps = get_teaching_assignments_for_section_and_curriculum(obj.section, obj.curriculum_row)
@@ -279,11 +279,11 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
                                 names.append(full_name)
                             usernames.append(u.username if u else '')
                             staff_ids.append(getattr(sp, 'staff_id', ''))
-                        
+
                         combined_name = ", ".join(sorted(names))
                         combined_username = ", ".join(sorted(filter(None, usernames)))
                         combined_staff_id = ", ".join(sorted(filter(None, staff_ids)))
-                        
+
                         return {
                             'id': None,  # None indicates multi-faculty fallback
                             'staff_id': combined_staff_id,
@@ -296,10 +296,10 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
             return None
         except Exception:
             return None
-    
+
     def get_effective_staff(self, obj):
         """Return the actual staff who should mark attendance.
-        
+
         Priority:
         1. Subject batch staff (if batch-specific assignment)
         2. Timetable assignment staff (explicitly chosen)
@@ -309,17 +309,17 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
             # If there's a subject_batch with assigned staff, use that
             if obj.subject_batch and obj.subject_batch.staff:
                 return obj.subject_batch.staff.id
-            
+
             # Prioritize explicit timetable assignment staff
             if obj.staff:
                 return obj.staff.id
-            
+
             # If there's a curriculum_row, get the actual teaching staff from TeachingAssignment
             if obj.curriculum_row and obj.section:
                 sps = get_teaching_assignments_for_section_and_curriculum(obj.section, obj.curriculum_row)
                 if sps:
                     return sps[0].id
-            
+
             return None
         except Exception:
             return None
@@ -341,7 +341,7 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
                 attrs['section'] = section
             except Exception:
                 section = None
-        
+
         # resolve subject_batch if provided as id in initial_data (handling null/empty)
         if 'subject_batch_id' in self.initial_data:
             val = self.initial_data.get('subject_batch_id')
@@ -427,10 +427,10 @@ class SpecialTimetableEntrySerializer(serializers.ModelSerializer):
         model = SpecialTimetableEntry
         # expose only id-based writable fields to avoid duplicate source mapping
         fields = ('id', 'timetable_id', 'date', 'period_id', 'staff', 'effective_staff', 'staff_id', 'curriculum_row', 'subject_batch', 'subject_batch_id', 'subject_text', 'is_active')
-    
+
     def get_staff(self, obj):
         """Return the actual staff who teaches the subject.
-        
+
         Priority:
         1. Subject batch staff
         2. Special timetable entry staff (explicitly chosen by advisor/creator)
@@ -454,7 +454,7 @@ class SpecialTimetableEntrySerializer(serializers.ModelSerializer):
                         sp = ta.staff
                 except Exception:
                     pass
-                
+
             if sp:
                 u = getattr(sp, 'user', None)
                 return {
@@ -519,7 +519,7 @@ class SpecialTimetableEntrySerializer(serializers.ModelSerializer):
 
     def get_effective_staff(self, obj):
         """Return the actual staff who should mark attendance.
-        
+
         Priority:
         1. Subject batch staff (if batch-specific assignment)
         2. Special timetable entry staff (explicitly chosen)
@@ -529,11 +529,11 @@ class SpecialTimetableEntrySerializer(serializers.ModelSerializer):
             # If there's a subject_batch with assigned staff, use that
             if obj.subject_batch and obj.subject_batch.staff:
                 return obj.subject_batch.staff.id
-            
+
             # Prioritize explicit special timetable entry staff
             if obj.staff:
                 return obj.staff.id
-            
+
             # If there's a curriculum_row, get the actual teaching staff from TeachingAssignment
             if obj.curriculum_row and obj.timetable and obj.timetable.section:
                 try:
@@ -547,7 +547,7 @@ class SpecialTimetableEntrySerializer(serializers.ModelSerializer):
                         return ta.staff.id
                 except Exception:
                     pass
-            
+
             return None
         except Exception:
             return None
@@ -567,7 +567,7 @@ class PeriodSwapRequestSerializer(serializers.ModelSerializer):
     section_name = serializers.SerializerMethodField()
     from_period_label = serializers.SerializerMethodField()
     to_period_label = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = PeriodSwapRequest
         fields = (
@@ -578,31 +578,31 @@ class PeriodSwapRequestSerializer(serializers.ModelSerializer):
             'response_message', 'created_at', 'updated_at', 'responded_at'
         )
         read_only_fields = ('created_at', 'updated_at', 'responded_at')
-    
+
     def get_requested_by_name(self, obj):
         try:
             return obj.requested_by.user.get_full_name() if obj.requested_by.user else obj.requested_by.staff_id
         except:
             return 'Unknown'
-    
+
     def get_requested_to_name(self, obj):
         try:
             return obj.requested_to.user.get_full_name() if obj.requested_to.user else obj.requested_to.staff_id
         except:
             return 'Unknown'
-    
+
     def get_section_name(self, obj):
         try:
             return obj.section.name
         except:
             return 'Unknown'
-    
+
     def get_from_period_label(self, obj):
         try:
             return obj.from_period.label or f"Period {obj.from_period.index}"
         except:
             return 'Unknown'
-    
+
     def get_to_period_label(self, obj):
         try:
             return obj.to_period.label or f"Period {obj.to_period.index}"

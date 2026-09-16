@@ -202,7 +202,7 @@ export default function DynamicFormRenderer({ fields, values, onChange, classNam
             />
             <p className="text-xs text-gray-500 mt-1">
               Max size: {maxSize}MB
-              {field.allowed_extensions && field.allowed_extensions.length > 0 && 
+              {field.allowed_extensions && field.allowed_extensions.length > 0 &&
                 ` • Allowed: ${field.allowed_extensions.join(', ')}`}
             </p>
             {fileInfo && (

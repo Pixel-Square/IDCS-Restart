@@ -418,11 +418,11 @@ export default function CourseList() {
       let krLogoDataUrl = '';
       try {
         krLogoDataUrl = await imageUrlToDataUrl(krLogoSrc);
-        
+
         const logoHeight = 12;
         const logoX = 210 - 14 - 20; // Position at top right
         const logoY = 8;
-        
+
         if (krLogoDataUrl) {
           const imgProps = doc.getImageProperties(krLogoDataUrl);
           const pdfWidth = (imgProps.width * logoHeight) / imgProps.height;
@@ -479,7 +479,7 @@ export default function CourseList() {
             doc.setFont('helvetica', 'bold');
             doc.text('Textbooks:', 14, currentY);
             doc.setFont('helvetica', 'normal');
-            
+
             const tbLines = doc.splitTextToSize(cdap.books.textbook || '', pageWidth - 28);
             currentY += 6;
             doc.text(tbLines, 14, currentY);
@@ -494,7 +494,7 @@ export default function CourseList() {
             doc.setFont('helvetica', 'bold');
             doc.text('References:', 14, currentY);
             doc.setFont('helvetica', 'normal');
-            
+
             const refLines = doc.splitTextToSize(cdap.books.reference || '', pageWidth - 28);
             currentY += 6;
             doc.text(refLines, 14, currentY);
@@ -536,11 +536,11 @@ export default function CourseList() {
       let krLogoDataUrl = '';
       try {
         krLogoDataUrl = await imageUrlToDataUrl(krLogoSrc);
-        
+
         const logoHeight = 12;
         const logoX = 210 - 14 - 20; // Position at top right
         const logoY = 8;
-        
+
         if (krLogoDataUrl) {
           const imgProps = doc.getImageProperties(krLogoDataUrl);
           const pdfWidth = (imgProps.width * logoHeight) / imgProps.height;
@@ -595,7 +595,7 @@ export default function CourseList() {
             doc.setFont('helvetica', 'bold');
             doc.text('Textbooks:', 14, currentY);
             doc.setFont('helvetica', 'normal');
-            
+
             const tbLines = doc.splitTextToSize(cdap.books.textbook || '', pageWidth - 28);
             currentY += 6;
             doc.text(tbLines, 14, currentY);
@@ -610,7 +610,7 @@ export default function CourseList() {
             doc.setFont('helvetica', 'bold');
             doc.text('References:', 14, currentY);
             doc.setFont('helvetica', 'normal');
-            
+
             const refLines = doc.splitTextToSize(cdap.books.reference || '', pageWidth - 28);
             currentY += 6;
             doc.text(refLines, 14, currentY);

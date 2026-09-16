@@ -16,7 +16,7 @@ for dup in duplicates:
     sec_id = dup['section_id']
     cr_id = dup['curriculum_row_id']
     count = dup['count']
-    
+
     tas = TeachingAssignment.objects.filter(section_id=sec_id, curriculum_row_id=cr_id)
     print(f"\nSection {sec_id}, Curriculum Row {cr_id} (Count: {count}):")
     for ta in tas:

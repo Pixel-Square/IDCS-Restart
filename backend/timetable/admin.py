@@ -75,7 +75,7 @@ class TeacherConstraintsAdmin(admin.ModelAdmin):
     list_filter = ('prefers_morning', 'prefers_afternoon', 'created_at')
     search_fields = ('staff__user__first_name', 'staff__user__last_name', 'staff__staff_id')
     readonly_fields = ('created_at', 'updated_at')
-    
+
     fieldsets = (
         ('Teacher', {
             'fields': ('staff',)
@@ -101,7 +101,7 @@ class SubjectRequirementsAdmin(admin.ModelAdmin):
     list_filter = ('requires_consecutive_slots', 'cannot_be_first_period', 'cannot_be_last_period', 'created_at')
     search_fields = ('curriculum_row__course_code', 'subject__code')
     readonly_fields = ('created_at', 'updated_at')
-    
+
     fieldsets = (
         ('Subject', {
             'fields': ('curriculum_row', 'subject')
@@ -125,10 +125,10 @@ class SubjectRequirementsAdmin(admin.ModelAdmin):
 class TeacherSubjectMappingAdmin(admin.ModelAdmin):
     list_display = ('staff', 'curriculum_row', 'effectiveness_score', 'ranking', 'is_primary', 'created_at')
     list_filter = ('is_primary', 'ranking', 'academic_year', 'can_teach_theory', 'can_teach_lab', 'can_teach_tutorial')
-    search_fields = ('staff__user__first_name', 'staff__user__last_name', 'staff__staff_id', 
+    search_fields = ('staff__user__first_name', 'staff__user__last_name', 'staff__staff_id',
                      'curriculum_row__course_code', 'subject__code')
     readonly_fields = ('created_at', 'updated_at')
-    
+
     fieldsets = (
         ('Teacher & Subject', {
             'fields': ('staff', 'curriculum_row', 'subject', 'section', 'academic_year')
@@ -152,7 +152,7 @@ class GeneratedTimetableAdmin(admin.ModelAdmin):
     search_fields = ('name', 'description')
     readonly_fields = ('created_at', 'generated_at', 'published_at', 'total_assignments', 'constraint_violations', 'error_message')
     filter_horizontal = ('departments', 'sections')
-    
+
     fieldsets = (
         ('Basic Information', {
             'fields': ('name', 'description', 'template', 'academic_year')
@@ -178,11 +178,11 @@ class GenerationLogAdmin(admin.ModelAdmin):
     list_filter = ('level', 'created_at', 'generated_timetable')
     search_fields = ('message', 'generated_timetable__name')
     readonly_fields = ('created_at',)
-    
+
     def has_add_permission(self, request):
         # Logs are created automatically, not manually
         return False
-    
+
     def has_delete_permission(self, request, obj=None):
         # Allow deletion of logs for cleanup
         return True

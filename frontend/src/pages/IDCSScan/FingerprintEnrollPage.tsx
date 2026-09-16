@@ -1822,7 +1822,7 @@ export default function FingerprintEnrollPage() {
                       },
                       body: JSON.stringify({ mode: 'ENROLL', target_slot: 1 }),
                     }).catch(() => {});
-                    
+
                     setScannerOnline(true);
                     setScannerDetectedType('esp32_bridge');
                     setScannerType('esp32_bridge');

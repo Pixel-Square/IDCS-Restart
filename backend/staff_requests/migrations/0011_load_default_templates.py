@@ -7,7 +7,7 @@ def load_default_templates(apps, schema_editor):
     """
     Load 10 default request templates (5 normal + 5 SPL) with all configurations.
     Clears old templates and recreates with fresh 10.
-    
+
     This includes:
     - Form schemas
     - Approval workflows
@@ -33,7 +33,7 @@ def load_default_templates(apps, schema_editor):
         {"name": "to_date", "type": "date", "label": "To Date", "required": False, "help_text": "End date (optional, leave empty for same day). Holidays and Sundays will be excluded."},
         {"name": "to_noon", "type": "select", "label": "To Noon", "options": ["Full day", "FN", "AN"], "required": False, "help_text": "Select FN or AN for end date (optional)"}
     ]
-    
+
     # Late entry now uses shift + late_duration instead of an explicit time field
     # Auto-approval logic: 10 mins FN is auto-approved if morning_in is within (dept_cutoff, dept_cutoff+10min]
     late_entry_form_schema = [
@@ -42,7 +42,7 @@ def load_default_templates(apps, schema_editor):
         {"name": "shift", "type": "select", "label": "Shift", "required": True, "options": ["FN", "AN"], "help_text": "FN (morning) or AN (afternoon) shift"},
         {"name": "late_duration", "type": "select", "label": "Late Duration", "required": True, "options": ["10 mins", "1 hr"], "help_text": "10 mins (auto-approved for FN only if in-time is within cutoff+10min window) or 1 hr (normal approval)"}
     ]
-    
+
     od_form_schema = [
         {"name": "type", "type": "select", "label": "OD Type", "options": ["ODB - Basic", "ODR - Research", "ODP - Professional", "ODO - Out Reach"], "required": True, "help_text": "Select the type of official duty"},
         {"name": "reason", "type": "text", "label": "Reason", "required": True, "help_text": "Provide details of official duty"},
@@ -51,11 +51,11 @@ def load_default_templates(apps, schema_editor):
         {"name": "to_date", "type": "date", "label": "To Date", "required": False, "help_text": "End date (optional, leave empty for same day). Holidays and Sundays will be excluded."},
         {"name": "to_noon", "type": "select", "label": "To Noon", "options": ["Full Day ", "FN ", "AN"], "required": False, "help_text": "Select FN or AN for end date (optional)"}
     ]
-    
+
     # Role definitions
     COMMON_ROLES = ["STAFF", "FACULTY", "ASSISTANT", "CLERK"]
     SPL_ROLES = ["IQAC", "HR", "PS", "HOD", "CFSW", "EDC", "COE", "HAA"]
-    
+
     # Template configurations
     templates_config = [
         # Normal Templates (5)
@@ -159,7 +159,7 @@ def load_default_templates(apps, schema_editor):
             "attendance_action": {},
             "approval_steps": ["HOD", "HR"]
         },
-        
+
         # SPL Templates (5)
         {
             "name": "Casual Leave - SPL",
@@ -261,27 +261,27 @@ def load_default_templates(apps, schema_editor):
             "approval_steps": ["PRINCIPAL"]
         }
     ]
-    
+
     # Create templates and approval steps
     print('Creating/updating 10 default templates...')
     for config in templates_config:
         approval_steps = config.pop('approval_steps')
         template_name = config['name']
-        
+
         # Use update_or_create to update existing templates or create new ones
         template, created = RequestTemplate.objects.update_or_create(
             name=template_name,
             defaults=config
         )
-        
+
         if created:
             print(f'  ✓ Created: {template.name}')
         else:
             print(f'  ✓ Updated: {template.name}')
-        
+
         # Delete existing approval steps and create new ones
         ApprovalStep.objects.filter(template=template).delete()
-        
+
         # Create approval steps
         for step_order, approver_role in enumerate(approval_steps, start=1):
             ApprovalStep.objects.create(
@@ -289,7 +289,7 @@ def load_default_templates(apps, schema_editor):
                 step_order=step_order,
                 approver_role=approver_role
             )
-    
+
     print('✓ Successfully created/updated 10 default templates (5 normal + 5 SPL)')
 
 

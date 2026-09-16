@@ -345,7 +345,7 @@ class HallAttendancePdfView(APIView):
                     sno_counter += 1
 
                 student_table = Table(table_rows, colWidths=col_widths, repeatRows=1)
-                
+
                 # Compact table styling for max 2-page fit
                 table_style = [
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f1f5f9')),

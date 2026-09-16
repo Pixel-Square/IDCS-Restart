@@ -128,6 +128,9 @@ import CreditsPage from './pages/CreditsPage';
 import RetrivalPage from './pages/COE/RetrivalPage';
 import LmsPage from './pages/lms/LmsPage';
 import FilePreviewPage from './pages/lms/FilePreviewPage';
+import AuditManagementPage from './pages/audits/AuditManagementPage';
+import AuditEntryPage from './pages/audits/AuditEntryPage';
+import AuditATRPage from './pages/audits/AuditATRPage';
 import { LazyErrorBoundary } from './components/LazyErrorBoundary';
 import { safeLazy } from './utils/safeLazy';
 
@@ -335,6 +338,18 @@ export default function App() {
                 <Route
                   path="/iqac/applications-admin"
                   element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<ApplicationsAdminPage />} />}
+                />
+                <Route
+                  path="/iqac/audits"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AuditManagementPage />} />}
+                />
+                <Route
+                  path="/iqac/audits/:auditId/entry"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AuditEntryPage />} />}
+                />
+                <Route
+                  path="/iqac/audits/:auditId/atr"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AuditATRPage />} />}
                 />
                 <Route
                   path="/applications"
@@ -736,7 +751,7 @@ export default function App() {
                   path="/staff/salary"
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<SalaryPage />} />}
                 />
-                
+
                 {/* HR Routes */}
                 <Route
                   path="/hr/request-templates"
@@ -762,7 +777,7 @@ export default function App() {
                   path="/hr/staff-salary"
                   element={<ProtectedRoute user={user} requiredRoles={['HR']} requiredPermissions={['staff_requests.manage_templates']} element={<StaffSalaryPage />} />}
                 />
-                
+
                 <Route
                   path="/iqac/external-management"
                   element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<ExtStaffProfilesPage />} />}
@@ -777,7 +792,7 @@ export default function App() {
                   path="/staff-requests/pending-approvals"
                   element={<ProtectedRoute user={user} requiredRoles={['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL', 'ADMIN']} requiredPermissions={['staff_requests.approve_requests']} element={<PendingApprovalsPage />} />}
                 />
-                
+
                 <Route
                   path="/attendance-analytics/requests"
                   element={

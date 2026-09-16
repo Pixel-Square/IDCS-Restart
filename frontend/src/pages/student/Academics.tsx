@@ -166,7 +166,7 @@ export default function StudentAcademics() {
 
   const renderAssessmentWithCOs = (label: string, mainValue: any, biData: any, biPrefix: string, cqiPrefix: string | null) => {
     if (mainValue == null || mainValue === '') return null;
-    
+
     const coKeys = [1, 2, 3, 4, 5, 6];
     const coMarks: any[] = [];
     coKeys.forEach(coNum => {
@@ -189,7 +189,7 @@ export default function StudentAcademics() {
             <span className="font-bold text-gray-900 bg-white px-2 py-0.5 rounded shadow-sm border border-gray-100">{fmt(mainValue)}</span>
           </div>
         </div>
-        
+
         {coMarks.length > 0 && (
           <div className="p-3">
             <div className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold mb-2 ml-1">CO Breakdown</div>

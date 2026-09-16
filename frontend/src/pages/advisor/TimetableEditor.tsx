@@ -74,7 +74,7 @@ function CellPopup(props: any) {
   const [deptCurriculumError, setDeptCurriculumError] = useState<string | null>(null)
   const [specialSubjectType, setSpecialSubjectType] = useState<'curriculum' | 'custom' | 'otherdept' | 'event'>('curriculum')
   const [specialEventText, setSpecialEventText] = useState<string>('')
-  
+
   // Bulk mode states
   const [bulkMode, setBulkMode] = useState<boolean>(false)
   const [selectedPeriods, setSelectedPeriods] = useState<Set<number>>(new Set())
@@ -184,7 +184,7 @@ function CellPopup(props: any) {
               Day {day} • {periodObj.label || `${periodObj.start_time||''} - ${periodObj.end_time||''}`}
             </h3>
           </div>
-          <button 
+          <button
             onClick={()=>{ setShowCellPopup(false); setEditingCell(null) }}
             className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg p-1.5 transition-colors"
           >
@@ -207,17 +207,17 @@ function CellPopup(props: any) {
               ) : (
                 <div className="space-y-3">
                   {assigned.map((a:any)=> (
-                    <div 
-                      key={a.id} 
+                    <div
+                      key={a.id}
                       className={`rounded-lg p-4 border-2 ${
-                        a.is_special 
-                          ? 'bg-amber-50 border-amber-200' 
+                        a.is_special
+                          ? 'bg-amber-50 border-amber-200'
                           : 'bg-blue-50 border-blue-200'
                       }`}
                     >
                       <div className="font-bold text-gray-900 flex items-center gap-2">
                         <BookOpen className="h-4 w-4" />
-                        {a.is_special 
+                        {a.is_special
                           ? (a.timetable_name || 'Special')
                           : shortLabel(a.curriculum_row || a.subject_text)
                         }
@@ -251,11 +251,11 @@ function CellPopup(props: any) {
                         </div>
                       )}
                       <div className="mt-3 flex flex-wrap gap-2">
-                        <button 
+                        <button
                           onClick={async ()=>{
                             const existingBatchId = a.subject_batch?.id || null
                             const staffId = a.staff?.id || null
-                            
+
                             if (a.curriculum_row) {
                               setIsCustomAssignment(false)
                               setCustomAssignmentText('')
@@ -263,7 +263,7 @@ function CellPopup(props: any) {
                               setEditingCurriculumId(crid)
                               setEditingBatchId(existingBatchId)
                               setSelectedStaffId(staffId)
-                              
+
                               // Check if it is from another department
                               const isOther = a.curriculum_row.department_id && sectionDepartmentId && (Number(a.curriculum_row.department_id) !== Number(sectionDepartmentId))
                               setIsOtherDept(!!isOther)
@@ -292,7 +292,7 @@ function CellPopup(props: any) {
                                     setDeptCurriculum(filtered)
                                   }
                                 } catch(err) { console.error(err) }
-                                
+
                                 try {
                                   const sres = await fetchWithAuth(`/api/academics/advisor-staff/?department=${a.curriculum_row.department_id}&page_size=0`)
                                   if (sres.ok) {
@@ -303,7 +303,7 @@ function CellPopup(props: any) {
                               } else {
                                 setSelectedOtherDept(null)
                               }
-                              
+
                               // Load batches
                               const list = await loadBatchesForCurriculum(crid)
                               if(existingBatchId && !list.find((b:any)=> b.id === existingBatchId)){
@@ -333,14 +333,14 @@ function CellPopup(props: any) {
                           <Edit className="h-3.5 w-3.5" />
                           Edit
                         </button>
-                        <button 
+                        <button
                           onClick={()=> { if(a.is_special) { handleDeleteSpecialEntry(a.id) } else { handleDeleteAssignment(a.id) } }}
                           className="px-3 py-1.5 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 transition-colors flex items-center gap-1"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                           Delete
                         </button>
-                        <button 
+                        <button
                           onClick={async ()=>{
                             const payload:any = {}
                             if (isCustomAssignment) {
@@ -353,7 +353,7 @@ function CellPopup(props: any) {
                               payload.curriculum_row = editingCurriculumId
                               payload.subject_batch_id = editingBatchId
                               payload.subject_text = null
-                              
+
                               if (isOtherDept && selectedOtherDept) {
                                 payload.other_department_id = selectedOtherDept
                                 if (lastSelectedCurriculumRaw) payload.original_curriculum_raw = lastSelectedCurriculumRaw
@@ -381,7 +381,7 @@ function CellPopup(props: any) {
                 <Plus className="h-5 w-5 text-green-600" />
                 <h4 className="text-lg font-semibold text-gray-900">Assign / Edit</h4>
               </div>
-              
+
               <div className="space-y-4 bg-gray-50 rounded-lg p-4 border border-gray-200">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Assignment Type</label>
@@ -395,8 +395,8 @@ function CellPopup(props: any) {
                         setSelectedOtherDept(null)
                       }}
                       className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
-                        (!isCustomAssignment && !isOtherDept) 
-                          ? 'bg-indigo-600 text-white border-indigo-600' 
+                        (!isCustomAssignment && !isOtherDept)
+                          ? 'bg-indigo-600 text-white border-indigo-600'
                           : 'bg-white text-gray-700 border-gray-300 hover:border-indigo-300'
                       }`}
                     >
@@ -412,8 +412,8 @@ function CellPopup(props: any) {
                         setSelectedOtherDept(null)
                       }}
                       className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
-                        isCustomAssignment 
-                          ? 'bg-indigo-600 text-white border-indigo-600' 
+                        isCustomAssignment
+                          ? 'bg-indigo-600 text-white border-indigo-600'
                           : 'bg-white text-gray-700 border-gray-300 hover:border-indigo-300'
                       }`}
                     >
@@ -582,8 +582,8 @@ function CellPopup(props: any) {
                     {/* Show subject/batch using deptCurriculum if department selected */}
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject</label>
-                      <select 
-                        value={editingCurriculumId || ''} 
+                      <select
+                        value={editingCurriculumId || ''}
                         onChange={async (e) => {
                           const raw = e.target.value
                           const val = Number(raw) || null
@@ -628,8 +628,8 @@ function CellPopup(props: any) {
                     {/* Hidden debug output removed */}
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1.5">Batch (optional)</label>
-                      <select 
-                        value={editingBatchId || ''} 
+                      <select
+                        value={editingBatchId || ''}
                         onChange={e=> setEditingBatchId(Number(e.target.value) || null)}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                       >
@@ -670,8 +670,8 @@ function CellPopup(props: any) {
                   <>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1.5">Subject</label>
-                      <select 
-                        value={editingCurriculumId || ''} 
+                      <select
+                        value={editingCurriculumId || ''}
                         onChange={async (e) => {
                           const raw = e.target.value
                           const val = Number(raw) || null
@@ -721,11 +721,11 @@ function CellPopup(props: any) {
                           })}
                       </select>
                     </div>
-                    
+
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1.5">Batch (optional)</label>
-                      <select 
-                        value={editingBatchId || ''} 
+                      <select
+                        value={editingBatchId || ''}
                         onChange={e=> setEditingBatchId(Number(e.target.value) || null)}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                       >
@@ -777,7 +777,7 @@ function CellPopup(props: any) {
                         ))}
                       </select>
                     </div>
-                    
+
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1.5">Staff (optional)</label>
                       <select
@@ -800,8 +800,8 @@ function CellPopup(props: any) {
                     </div>
                   </>
                 )}
-                
-                <button 
+
+                <button
                   onClick={async ()=>{
                     if(isCustomAssignment) {
                       if(!customAssignmentText.trim()) return alert('Subject name is required')
@@ -845,7 +845,7 @@ function CellPopup(props: any) {
                   </button>
                 </div>
                 <p className="text-sm text-gray-600 mb-4">
-                  {bulkMode 
+                  {bulkMode
                     ? 'Select multiple periods and days to create special entries in bulk.'
                     : 'Create a date-specific override for this period.'
                   }
@@ -1228,15 +1228,15 @@ function CellPopup(props: any) {
                             method: 'POST',
                             body: JSON.stringify(bulkPayload)
                           })
-                          
+
                           console.log('📥 Bulk response status:', eRes.status)
-                          
-                          if (!eRes.ok) { 
+
+                          if (!eRes.ok) {
                             const txt = await eRes.text()
                             console.error('❌ Bulk create failed:', { status: eRes.status, error: txt })
-                            return alert('Failed to create bulk entries: ' + txt) 
+                            return alert('Failed to create bulk entries: ' + txt)
                           }
-                          
+
                           const eData = await eRes.json()
                           console.log('✅ Bulk create success:', eData)
                           alert(`Successfully created ${eData.entries_created} special period entries`)
@@ -1333,9 +1333,9 @@ export default function TimetableEditor(){
         if(!r.ok) return []
         return r.json()
       }).then(d=>{
-        const secs = (d.results || []).map((entry:any) => ({ 
-          id: entry.section_id, 
-          name: entry.section_name, 
+        const secs = (d.results || []).map((entry:any) => ({
+          id: entry.section_id,
+          name: entry.section_name,
           batch: entry.batch,
           batch_regulation: entry.batch_regulation,
           department_id: entry.department_id,
@@ -1384,14 +1384,14 @@ export default function TimetableEditor(){
       if(selectedSection) {
         setCurrentSectionRegulation(selectedSection.batch_regulation)
       }
-      
+
       // Check if this is a mixed section and use the appropriate endpoint
       const isMixed = Boolean(selectedSection?.is_mixed_section || selectedSection?.mixed_section_id)
       let curriculumUrl = `/api/timetable/curriculum-for-section/?section_id=${sectionId}`
       if (isMixed && selectedSection?.mixed_section_id) {
         curriculumUrl = `/api/timetable/curriculum-for-mixed-section/?mixed_section_id=${selectedSection.mixed_section_id}`
       }
-      
+
       fetchWithAuth(curriculumUrl)
         .then(r=>r.json()).then(d=>setCurriculum(d.results || []))
       loadTimetable()
@@ -1451,7 +1451,7 @@ export default function TimetableEditor(){
         if(!r.ok) return []
         return r.json()
       }).then(d=> setSpecialTimetables(d.results || []))
-      
+
       // fetch staff list for custom assignments - filtered by section's department
       if(sectionDepartmentId) {
         fetchWithAuth(`/api/academics/advisor-staff/?department=${sectionDepartmentId}`).then(r=>{
@@ -1515,13 +1515,13 @@ export default function TimetableEditor(){
 
   async function handleAssign(day:number, periodId:number, curriculumId?:number){
     if(!sectionId) return alert('Section is required')
-    
-    const payload: any = { 
-      period_id: periodId, 
-      day, 
-      section_id: sectionId 
+
+    const payload: any = {
+      period_id: periodId,
+      day,
+      section_id: sectionId
     }
-    
+
     if(isCustomAssignment) {
       // Custom assignment
       if(!customAssignmentText.trim()) return alert('Subject name is required')
@@ -1553,7 +1553,7 @@ export default function TimetableEditor(){
 
     const res = await fetchWithAuth('/api/timetable/assignments/', { method: 'POST', body: JSON.stringify(payload) })
     if(!res.ok){ const txt = await res.text(); return alert('Failed: '+txt) }
-    
+
     // reset editor state
     setEditingCurriculumId(null)
     setSelectedElectiveSubjectId(null)
@@ -1595,18 +1595,18 @@ export default function TimetableEditor(){
         {assigned && assigned.length ? (
           <div className="space-y-2">
             {assigned.map((asg:any, idx:number)=> (
-              <div 
-                key={idx} 
+              <div
+                key={idx}
                 className={`rounded-lg p-2.5 cursor-pointer transition-all hover:shadow-md ${
-                  asg.is_special 
-                    ? 'bg-amber-50 border border-amber-200 hover:border-amber-300' 
+                  asg.is_special
+                    ? 'bg-amber-50 border border-amber-200 hover:border-amber-300'
                     : 'bg-blue-50 border border-blue-200 hover:border-blue-300'
                 }`}
                 onClick={()=> { setEditingCell({ day: dayIndex, periodId: p.id }); setSpecialDate(dateForDayIndex(dayIndex)); setShowCellPopup(true) }}
               >
                 <div className="font-semibold text-gray-900 text-xs leading-tight flex items-center gap-1">
                   <BookOpen className="h-3 w-3" />
-                  {asg.is_special 
+                  {asg.is_special
                     ? (asg.timetable_name || 'Special')
                     : shortLabel(asg.curriculum_row || asg.subject_text)
                   }
@@ -1643,7 +1643,7 @@ export default function TimetableEditor(){
             ))}
           </div>
         ) : (
-          <div 
+          <div
             className="py-4 text-gray-400 text-sm cursor-pointer hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all flex items-center justify-center gap-1"
             onClick={()=> { setEditingCell({ day: dayIndex, periodId: p.id }); setSpecialDate(dateForDayIndex(dayIndex)); setShowCellPopup(true) }}
           >
@@ -1713,13 +1713,13 @@ export default function TimetableEditor(){
       if (code) staffMap.set(`code:${code}`, subject.staff)
       if (name) staffMap.set(`name:${name}`, subject.staff)
     })
-    
+
     // Use subjectStaffList as the source of truth (already section-specific and has staff names)
     // Filter by section's department to ensure we only show subjects from that department
     if (!subjectStaffList || subjectStaffList.length === 0) {
       return []
     }
-    
+
     const filtered = subjectStaffList.filter((subject: any) => {
       // If section has a department, only include subjects from that department
       if (sectionDepartmentId && subject.department_id) {
@@ -1728,7 +1728,7 @@ export default function TimetableEditor(){
       // If no department filter, include all
       return true
     })
-    
+
     // Combine with curriculum staff data if available
     const combined = filtered.map((subject: any) => {
       const idKey = `id:${Number(subject.id || 0)}`
@@ -1741,7 +1741,7 @@ export default function TimetableEditor(){
         staff,
       }
     })
-    
+
     return combined
   }
 
@@ -1762,7 +1762,7 @@ export default function TimetableEditor(){
                 <p className="text-sm md:text-base text-gray-600">Manage class schedules and assignments</p>
               </div>
             </div>
-            
+
             <div className="flex flex-col sm:flex-row sm:flex-wrap items-start sm:items-center gap-2 sm:gap-3">
               {sections.length > 1 ? (
                 <div className="px-3 py-1.5 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg border border-indigo-200 w-full sm:w-auto flex items-center gap-2">
@@ -1855,7 +1855,7 @@ export default function TimetableEditor(){
               <h3 className="text-lg font-semibold text-gray-900">Weekly Schedule</h3>
             </div>
           </div>
-          
+
           {visiblePeriods.length === 0 ? (
             <div className="p-12 text-center flex flex-col items-center justify-center">
               <AlertCircle className="h-12 w-12 text-amber-500 mb-3" />
@@ -1893,8 +1893,8 @@ export default function TimetableEditor(){
                         {visiblePeriods.map(p=> {
                           const isSelected = editingCell && editingCell.day === (di+1) && editingCell.periodId === p.id
                           return (
-                            <td 
-                              key={p.id} 
+                            <td
+                              key={p.id}
                               className={`px-4 py-3 align-top ${
                                 isSelected ? 'bg-indigo-50 border-2 border-indigo-300 shadow-md' : ''
                               }`}
@@ -1940,10 +1940,10 @@ export default function TimetableEditor(){
                     <tbody className="divide-y divide-gray-100">
                       {(() => {
                         const nonBreakPeriods = visiblePeriods.filter((p: any) => !p.is_break && !p.is_lunch)
-                        
+
                         return nonBreakPeriods.map((p: any) => {
                           const isSelected = editingCell && editingCell.day === (selectedDay + 1) && editingCell.periodId === p.id
-                          
+
                           return (
                             <tr key={p.id} className={`${isSelected ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}>
                               <td className="px-3 py-3 align-top">
@@ -1986,7 +1986,7 @@ export default function TimetableEditor(){
               </h3>
             </div>
           </div>
-          
+
           <div className="overflow-x-auto max-h-96">
             <table className="w-full">
               <thead className="bg-gray-50 sticky top-0">
@@ -2001,7 +2001,7 @@ export default function TimetableEditor(){
                     <td colSpan={2} className="px-6 py-8 text-center">
                       <BookOpen className="h-8 w-8 text-gray-400 mx-auto mb-2" />
                       <p className="text-gray-500">
-                        {currentSectionRegulation 
+                        {currentSectionRegulation
                           ? `No subjects found for regulation ${currentSectionRegulation.code}`
                           : 'No subjects found'}
                       </p>
@@ -2046,9 +2046,9 @@ export default function TimetableEditor(){
           </div>
         </div>
       </div>
-      
+
       {showCellPopup ? (
-        <CellPopup 
+        <CellPopup
           editingCell={editingCell}
           periods={periods}
           assignmentMap={assignmentMap}

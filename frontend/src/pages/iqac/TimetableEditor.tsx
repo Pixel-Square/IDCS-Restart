@@ -213,24 +213,24 @@ export default function TimetableEditor(){
               <Calendar className="w-5 h-5 text-indigo-600" />
               <h3 className="text-lg font-semibold text-gray-900">Academic Years</h3>
             </div>
-            
+
             {/* Create Academic Year Form */}
             <div className="space-y-3 mb-6 p-4 bg-gray-50 rounded-lg">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-                <input 
+                <input
                   type="text"
-                  placeholder="e.g. 2025-26" 
-                  value={newAcademicYear.name} 
-                  onChange={e=>setNewAcademicYear({...newAcademicYear, name: e.target.value})} 
+                  placeholder="e.g. 2025-26"
+                  value={newAcademicYear.name}
+                  onChange={e=>setNewAcademicYear({...newAcademicYear, name: e.target.value})}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
-              
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Parity</label>
-                <select 
-                  value={newAcademicYear.parity} 
+                <select
+                  value={newAcademicYear.parity}
                   onChange={e=>setNewAcademicYear({...newAcademicYear, parity: e.target.value})}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
@@ -238,19 +238,19 @@ export default function TimetableEditor(){
                   <option value="EVEN">Even</option>
                 </select>
               </div>
-              
+
               <div className="flex items-center">
-                <input 
-                  type="checkbox" 
-                  id="activate" 
-                  checked={newAcademicYear.is_active} 
+                <input
+                  type="checkbox"
+                  id="activate"
+                  checked={newAcademicYear.is_active}
                   onChange={e=>setNewAcademicYear({...newAcademicYear, is_active: e.target.checked})}
                   className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
                 <label htmlFor="activate" className="ml-2 text-sm text-gray-700">Activate on create</label>
               </div>
-              
-              <button 
+
+              <button
                 onClick={createAcademicYear}
                 className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors font-medium"
               >
@@ -270,11 +270,11 @@ export default function TimetableEditor(){
                         {ay.is_active && <span className="ml-2 text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">Active</span>}
                       </div>
                     </div>
-                    <button 
+                    <button
                       onClick={()=>toggleAcademicYear(ay.id, !ay.is_active)}
                       className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
-                        ay.is_active 
-                          ? 'bg-red-100 text-red-700 hover:bg-red-200' 
+                        ay.is_active
+                          ? 'bg-red-100 text-red-700 hover:bg-red-200'
                           : 'bg-green-100 text-green-700 hover:bg-green-200'
                       }`}
                     >
@@ -294,14 +294,14 @@ export default function TimetableEditor(){
               <Clock className="w-5 h-5 text-indigo-600" />
               <h3 className="text-lg font-semibold text-gray-900">Template Management</h3>
             </div>
-            
+
             {!selected && (
               <div className="text-center py-12 text-gray-500">
                 <Clock className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                 <p>Select a template to manage its periods.</p>
               </div>
             )}
-            
+
             {selected && (
               <div>
                 {/* Template Header */}
@@ -448,18 +448,18 @@ export default function TimetableEditor(){
                     <Plus className="w-5 h-5 text-green-600" />
                     <h5 className="text-lg font-medium text-gray-900">Add New Period</h5>
                   </div>
-                  
+
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Index</label>
-                      <input 
-                        type="number" 
-                        value={newSlot.index} 
+                      <input
+                        type="number"
+                        value={newSlot.index}
                         onChange={e=>setNewSlot({...newSlot, index: Number(e.target.value)})}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                       />
                     </div>
-                    
+
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Start Time</label>
                       <TimePickerDropdown
@@ -467,7 +467,7 @@ export default function TimetableEditor(){
                         onChange={val => setNewSlot({...newSlot, start_time: val})}
                       />
                     </div>
-                    
+
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">End Time</label>
                       <TimePickerDropdown
@@ -475,42 +475,42 @@ export default function TimetableEditor(){
                         onChange={val => setNewSlot({...newSlot, end_time: val})}
                       />
                     </div>
-                    
+
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Label</label>
-                      <input 
+                      <input
                         type="text"
-                        placeholder="Period 1, Break, etc." 
-                        value={newSlot.label} 
+                        placeholder="Period 1, Break, etc."
+                        value={newSlot.label}
                         onChange={e=>setNewSlot({...newSlot, label: e.target.value})}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                       />
                     </div>
                   </div>
-                  
+
                   <div className="flex flex-wrap gap-4 mb-4">
                     <label className="flex items-center">
-                      <input 
-                        type="checkbox" 
-                        checked={newSlot.is_break} 
+                      <input
+                        type="checkbox"
+                        checked={newSlot.is_break}
                         onChange={e=>setNewSlot({...newSlot, is_break: e.target.checked, is_lunch: false})}
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                       />
                       <span className="ml-2 text-sm text-gray-700">Break Period</span>
                     </label>
-                    
+
                     <label className="flex items-center">
-                      <input 
-                        type="checkbox" 
-                        checked={newSlot.is_lunch} 
+                      <input
+                        type="checkbox"
+                        checked={newSlot.is_lunch}
                         onChange={e=>setNewSlot({...newSlot, is_lunch: e.target.checked, is_break: false})}
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                       />
                       <span className="ml-2 text-sm text-gray-700">Lunch Period</span>
                     </label>
                   </div>
-                  
-                  <button 
+
+                  <button
                     onClick={addSlot}
                     className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors font-medium flex items-center gap-2"
                   >

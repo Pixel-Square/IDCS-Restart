@@ -82,15 +82,15 @@ export default function AcademicControllerQPPage(): JSX.Element {
 
   // Question-wise pattern for CIA/MODEL
   type PatternRow = { marks: string; co: string; btl: string };
-  
+
   // CO-wise pattern for SSA/FA
-  type CoWisePatternRow = { 
-    description: string; 
-    co1?: string; 
-    co2?: string; 
-    co3?: string; 
-    co4?: string; 
-    co5?: string; 
+  type CoWisePatternRow = {
+    description: string;
+    co1?: string;
+    co2?: string;
+    co3?: string;
+    co4?: string;
+    co5?: string;
   };
 
   const [patternRows, setPatternRows] = useState<PatternRow[]>([]);
@@ -559,8 +559,8 @@ export default function AcademicControllerQPPage(): JSX.Element {
         cos = extractedCos;
       } else {
         // For CIA/MODEL: Question-wise format
-        const cleaned = patternRows.map((r) => ({ 
-          marks: String(r.marks ?? '').trim(), 
+        const cleaned = patternRows.map((r) => ({
+          marks: String(r.marks ?? '').trim(),
           co: String((r as any)?.co ?? '').trim(),
           btl: String((r as any)?.btl ?? '1').trim(),
         }));
@@ -568,7 +568,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
           setError('Enter marks and CO for all rows (or delete empty rows).');
           return;
         }
-        
+
         for (const r of cleaned) {
           const n = Number(r.marks);
           if (!Number.isFinite(n) || n < 0) {
@@ -714,12 +714,12 @@ export default function AcademicControllerQPPage(): JSX.Element {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
           {(['SSA1', 'SSA2', 'FORMATIVE1', 'FORMATIVE2', 'CIA1', 'CIA2', 'MODEL'] as const).map((k) => {
             const active = selectedExam === k;
-            const label = k === 'SSA1' ? 'SSA 1' 
+            const label = k === 'SSA1' ? 'SSA 1'
               : k === 'SSA2' ? 'SSA 2'
               : k === 'FORMATIVE1' ? 'FA 1'
               : k === 'FORMATIVE2' ? 'FA 2'
-              : k === 'CIA1' ? 'CIA 1' 
-              : k === 'CIA2' ? 'CIA 2' 
+              : k === 'CIA1' ? 'CIA 1'
+              : k === 'CIA2' ? 'CIA 2'
               : 'MODEL';
             return (
               <button
@@ -819,8 +819,8 @@ export default function AcademicControllerQPPage(): JSX.Element {
                 : selectedExam === 'SSA2' ? 'SSA 2'
                 : selectedExam === 'FORMATIVE1' ? 'FA 1'
                 : selectedExam === 'FORMATIVE2' ? 'FA 2'
-                : selectedExam === 'CIA1' ? 'CIA 1' 
-                : selectedExam === 'CIA2' ? 'CIA 2' 
+                : selectedExam === 'CIA1' ? 'CIA 1'
+                : selectedExam === 'CIA2' ? 'CIA 2'
                 : 'MODEL'
               }</strong>
             </>
@@ -844,8 +844,8 @@ export default function AcademicControllerQPPage(): JSX.Element {
                   : selectedExam === 'SSA2' ? 'SSA 2'
                   : selectedExam === 'FORMATIVE1' ? 'FA 1'
                   : selectedExam === 'FORMATIVE2' ? 'FA 2'
-                  : selectedExam === 'CIA1' ? 'CIA 1' 
-                  : selectedExam === 'CIA2' ? 'CIA 2' 
+                  : selectedExam === 'CIA1' ? 'CIA 1'
+                  : selectedExam === 'CIA2' ? 'CIA 2'
                   : 'MODEL'
                 } • ${selectedClassType}${selectedClassType === 'THEORY' && selectedQpType ? ` ${selectedQpType}` : ''}`
               : `${customExamKeys.find((k) => k.key === selectedCustomExam)?.label || selectedCustomExam} • ${selectedClassType}${selectedClassType === 'THEORY' && selectedQpType ? ` ${selectedQpType}` : ''}${selectedBatch ? ` • ${selectedBatch.name}` : ''}`}

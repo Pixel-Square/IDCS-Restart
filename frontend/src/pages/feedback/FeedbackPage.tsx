@@ -428,7 +428,7 @@ export default function FeedbackPage() {
   const [departmentDropdownOpen, setDepartmentDropdownOpen] = useState(false);
   const [departmentLoading, setDepartmentLoading] = useState(true);
   const [departmentError, setDepartmentError] = useState<string | null>(null);
-  
+
   // IQAC department state - for IQAC users to select from all departments
   const [iqacAllDepartments, setIqacAllDepartments] = useState<Department[]>([]);
   const [iqacSelectedDepartmentIds, setIqacSelectedDepartmentIds] = useState<number[]>([]);
@@ -500,7 +500,7 @@ export default function FeedbackPage() {
 
   const [commonExportDeptDropdownOpen, setCommonExportDeptDropdownOpen] = useState(false);
   const [commonExportYearDropdownOpen, setCommonExportYearDropdownOpen] = useState(false);
-  
+
   // Subject Wise Report modal state
   const [subjectWiseReportOpen, setSubjectWiseReportOpen] = useState(false);
   const [subjectWiseReportLoading, setSubjectWiseReportLoading] = useState(false);
@@ -516,7 +516,7 @@ export default function FeedbackPage() {
   const [subjectWiseReportYears, setSubjectWiseReportYears] = useState<number[]>([1, 2, 3, 4]);
   const [subjectWiseReportDeptDropdownOpen, setSubjectWiseReportDeptDropdownOpen] = useState(false);
   const [subjectWiseReportYearDropdownOpen, setSubjectWiseReportYearDropdownOpen] = useState(false);
-  
+
   // Deactivated forms accordion state
   const [showDeactivatedForms, setShowDeactivatedForms] = useState(false);
 
@@ -583,7 +583,7 @@ export default function FeedbackPage() {
     has_electives?: boolean;
   } | null>(null);
   const [loadingSubjects, setLoadingSubjects] = useState(false);
-  
+
   // Expanded elective categories state (for expand/collapse behavior)
 
   // Check permissions
@@ -691,10 +691,10 @@ export default function FeedbackPage() {
     if (formData.years.length === 0) {
       return classOptions.sections || [];
     }
-    
+
     const availableSections: ClassOption[] = [];
     const seenIds = new Set<number>();
-    
+
     for (const year of formData.years) {
       const yearSections = classOptions.year_sections?.[year] || [];
       for (const section of yearSections) {
@@ -704,7 +704,7 @@ export default function FeedbackPage() {
         }
       }
     }
-    
+
     return availableSections.sort((a, b) => (a.display_name || a.label).localeCompare(b.display_name || b.label));
   };
 
@@ -967,10 +967,10 @@ export default function FeedbackPage() {
         try {
           setDepartmentLoading(true);
           const response = await fetchWithAuth('/api/feedback/department/');
-          
+
           // Log the response for debugging
           console.log('Department API response status:', response.status);
-          
+
           if (response.ok) {
             const data: DepartmentResponse = await response.json();
             console.log('Department API data:', data);
@@ -1109,7 +1109,7 @@ export default function FeedbackPage() {
     if (canCreateFeedback) {
       try {
         setLoadingClassOptions(true);
-        
+
         // Build URL with department/year filters when provided
         let url = '/api/feedback/class-options/';
         const params = new URLSearchParams();
@@ -1122,7 +1122,7 @@ export default function FeedbackPage() {
         if (params.toString()) {
           url += `?${params.toString()}`;
         }
-        
+
         const response = await fetchWithAuth(url);
         if (response.ok) {
           const data = await response.json();
@@ -1257,13 +1257,13 @@ export default function FeedbackPage() {
       const iqacYears = formData.years;
 
       if (
-        canCreateFeedback && 
-        formData.type === 'SUBJECT_FEEDBACK' && 
+        canCreateFeedback &&
+        formData.type === 'SUBJECT_FEEDBACK' &&
         ((isIQACUser && iqacSingleDepartmentSelected && iqacYears.length > 0) || (!isIQACUser && formData.years.length > 0 && activeDepartment))
       ) {
         try {
           setLoadingSubjects(true);
-          
+
           // Fetch subjects for ALL selected years (comma-separated)
           const yearsParam = isIQACUser ? iqacYears.join(',') : formData.years.join(',');
           const previewDepartmentId = isIQACUser ? selectedDepartments[0] : activeDepartment?.id;
@@ -1273,16 +1273,16 @@ export default function FeedbackPage() {
             preview_only: '1',
             include_electives: '1'
           });
-          
+
           // Add sections filter if sections are selected
           if (formData.sections.length > 0) {
             queryParams.append('sections', formData.sections.join(','));
           }
-          
+
           console.log('[SubjectFetch] Calling API:', `/api/feedback/subjects-by-year/?${queryParams}`);
           const response = await fetchWithAuth(`/api/feedback/subjects-by-year/?${queryParams}`);
           console.log('[SubjectFetch] Response status:', response.status, response.ok);
-          
+
           if (response.ok) {
             const data = await response.json();
             console.log('[SubjectFetch] Data received:', data);
@@ -1360,7 +1360,7 @@ export default function FeedbackPage() {
         }));
 
         setFeedbackForms(normalizedForms);
-        
+
         // If HOD, fetch response statistics for each form
         if (canCreateFeedback) {
           fetchAllResponseStatistics(normalizedForms);
@@ -1376,7 +1376,7 @@ export default function FeedbackPage() {
   // Fetch response statistics for all forms (HOD only)
   const fetchAllResponseStatistics = async (forms: FeedbackForm[]) => {
     const stats: Record<number, ResponseStatistics> = {};
-    
+
     for (const form of forms) {
       try {
         const response = await fetchWithAuth(`/api/feedback/${form.id}/statistics/`);
@@ -1388,7 +1388,7 @@ export default function FeedbackPage() {
         console.error(`Error fetching statistics for form ${form.id}:`, error);
       }
     }
-    
+
     setResponseStats(stats);
   };
 
@@ -1398,7 +1398,7 @@ export default function FeedbackPage() {
       const response = await fetchWithAuth(`/api/feedback/${formId}/toggle-active/`, {
         method: 'POST',
       });
-      
+
       if (response.ok) {
         const data = await response.json();
         // Re-fetch forms to get proper sorting and updated data
@@ -1420,7 +1420,7 @@ export default function FeedbackPage() {
       const response = await fetchWithAuth(`/api/feedback/${formId}/toggle-allow-hod-view/`, {
         method: 'POST',
       });
-      
+
       if (response.ok) {
         const data = await response.json();
         // Update local state to reflect the change immediately
@@ -1454,7 +1454,7 @@ export default function FeedbackPage() {
       const response = await fetchWithAuth(`/api/feedback/${formId}/delete/`, {
         method: 'DELETE',
       });
-      
+
       if (response.ok) {
         // Re-fetch forms to update the list
         await fetchFeedbackForms();
@@ -1475,12 +1475,12 @@ export default function FeedbackPage() {
       const response = await fetchWithAuth(`/api/feedback/${formId}/publish/`, {
         method: 'POST',
       });
-      
+
       if (response.ok) {
         const data = await response.json();
         // Update local state - change status to ACTIVE
-        setFeedbackForms(prev => 
-          prev.map(form => 
+        setFeedbackForms(prev =>
+          prev.map(form =>
             form.id === formId ? { ...form, status: 'ACTIVE' } : form
           )
         );
@@ -1505,7 +1505,7 @@ export default function FeedbackPage() {
       console.log(`[Feedback] Fetching responses for form ID: ${formId}`);
       const response = await fetchWithAuth(`/api/feedback/${formId}/responses/`);
       console.log(`[Feedback] Response status: ${response.status} ${response.statusText}`);
-      
+
       if (response.ok) {
         const data = await response.json();
         console.log('[Feedback] Response data received:', data);
@@ -1575,7 +1575,7 @@ export default function FeedbackPage() {
     try {
       const params = new URLSearchParams();
       if (formId) params.append('form_id', formId.toString());
-      
+
       const response = await fetchWithAuth(`/api/feedback/subject-wise-report/?${params}`);
 
       if (!response.ok) {
@@ -1839,9 +1839,9 @@ export default function FeedbackPage() {
     const newSelectedYears = commonExportSelectedYears.includes(yearValue)
       ? commonExportSelectedYears.filter((y) => y !== yearValue)
       : [...commonExportSelectedYears, yearValue].sort((a, b) => a - b);
-    
+
     setCommonExportSelectedYears(newSelectedYears);
-    
+
     // Auto-select "All Years" if all individual years are now selected
     if (newSelectedYears.length === commonExportYears.length && commonExportYears.length > 0) {
       setCommonExportAllYears(true);
@@ -2190,7 +2190,7 @@ export default function FeedbackPage() {
       } else {
         newSelection = [...prev, yearValue].sort((a, b) => a - b);
       }
-      
+
       // Auto-select "All Years" if all individual years are now selected
       if (newSelection.length === subjectWiseReportYears.length && subjectWiseReportYears.length > 0) {
         setSubjectWiseReportAllYears(true);
@@ -2198,7 +2198,7 @@ export default function FeedbackPage() {
         // Auto-unselect "All Years" if any year was unselected
         setSubjectWiseReportAllYears(false);
       }
-      
+
       return newSelection;
     });
   };
@@ -2546,7 +2546,7 @@ export default function FeedbackPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submitting) return;
-    
+
     // Validation
     if (!formData.target_type) {
       setSubmitError('Please select a target audience');
@@ -2625,7 +2625,7 @@ export default function FeedbackPage() {
           return;
         }
       }
-      
+
       // Use the fetched HOD department
       if (!activeDepartment?.id && (!departmentData || !departmentData.has_multiple_departments)) {
         setSubmitError('Department information not found. Please refresh the page or contact administrator.');
@@ -2651,7 +2651,7 @@ export default function FeedbackPage() {
         // Single department - use active department
         departmentsToSend = [activeDepartment.id];
       }
-      
+
       const payload = {
         form_name: formData.form_name,
         target_type: formData.target_type,
@@ -2721,10 +2721,10 @@ export default function FeedbackPage() {
       setSubmitSuccess(true);
       setShowCreateForm(false);
       setEditingFormId(null);
-      
+
       // Refresh the feedback forms list to show the new form
       await fetchFeedbackForms();
-      
+
       // Reset form
       setFormData(getInitialFormData());
 
@@ -2944,7 +2944,7 @@ export default function FeedbackPage() {
 
       if (!response.ok) {
         // Handle specific error messages from backend
-        const errorMessage = data.detail || data.message || 
+        const errorMessage = data.detail || data.message ||
                             (data.errors ? JSON.stringify(data.errors) : null) ||
                             'Failed to submit feedback';
         console.error('Submission failed:', errorMessage, data);
@@ -2954,7 +2954,7 @@ export default function FeedbackPage() {
       // Success
       console.log('Feedback submitted successfully');
       const submissionStatus = (data?.submission_status || '').toUpperCase();
-      
+
       if (selectedSubject) {
         // For subject feedback, refresh the subject list and go back
         await fetchStudentSubjects(selectedForm.id);
@@ -2982,7 +2982,7 @@ export default function FeedbackPage() {
         setCommentValidationErrors({});
         setRatingValidationErrors({});
         setOptionValidationErrors({});
-        
+
         // Update local lock state immediately
         setFeedbackForms(prev => prev.map(f => (
           f.id === submittedFormId ? { ...f, is_submitted: true, submission_status: 'SUBMITTED' } : f
@@ -3019,15 +3019,15 @@ export default function FeedbackPage() {
   const handleDepartmentSwitch = async (department: Department) => {
     try {
       setActiveDepartment(department);
-      
+
       // Notify backend by calling the department API with the new active_department_id
       const response = await fetchWithAuth(`/api/feedback/department/?active_department_id=${department.id}`);
      if (response.ok) {
         console.log(`Switched to department: ${department.name}`);
-        
+
         // Reload class options for the new department
         fetchClassOptions();
-        
+
         // Reload subjects if currently viewing subject feedback
         if (formData.type === 'SUBJECT_FEEDBACK') {
           setSubjectsByYear(null); // Will trigger re-fetch via useEffect
@@ -3043,11 +3043,11 @@ export default function FeedbackPage() {
     setLoadingStudentSubjects(true);
     try {
       const response = await fetchWithAuth(`/api/feedback/${formId}/subjects/`);
-      
+
       if (!response.ok) {
         throw new Error('Failed to fetch student subjects');
       }
-      
+
       const data: StudentSubjectsResponse = await response.json();
       setStudentSubjects(data);
     } catch (error) {
@@ -3271,8 +3271,8 @@ export default function FeedbackPage() {
                           <input
                             type="checkbox"
                             checked={q.allow_own_type}
-                            onChange={(e) => updatePrincipalQuestion(q.id, prev => ({ 
-                              ...prev, 
+                            onChange={(e) => updatePrincipalQuestion(q.id, prev => ({
+                              ...prev,
                               allow_own_type: e.target.checked,
                               // Clear options when Own Type is enabled (mutual exclusivity)
                               options: e.target.checked ? [] : prev.options
@@ -4029,7 +4029,7 @@ export default function FeedbackPage() {
                       <FileText className="w-4 h-4 text-blue-600" />
                       Subjects for Selected Year(s)
                     </h3>
-                    
+
                     {loadingSubjects ? (
                       <div className="flex items-center justify-center py-3">
                         <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
@@ -4066,13 +4066,13 @@ export default function FeedbackPage() {
                               </h4>
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                                 {previewRegularSubjects.map((subject, index) => {
-                                  const yearText = subject.years && subject.years.length > 0 
+                                  const yearText = subject.years && subject.years.length > 0
                                     ? subject.years.map((y: number) => `Y${y}`).join(', ')
                                     : '';
-                                  
+
                                   return (
-                                    <div 
-                                      key={`regular-${index}`} 
+                                    <div
+                                      key={`regular-${index}`}
                                       className="bg-white p-2 rounded border border-blue-200 hover:border-blue-300 transition-colors"
                                     >
                                       <div className="flex items-start justify-between gap-1">
@@ -4146,13 +4146,13 @@ export default function FeedbackPage() {
                           {(!subjectsByYear.regular_subjects && !subjectsByYear.elective_categories) && subjectsByYear.subjects.length > 0 && (
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                               {subjectsByYear.subjects.map((subject, index) => {
-                                const yearText = subject.years && subject.years.length > 0 
+                                const yearText = subject.years && subject.years.length > 0
                                   ? subject.years.map((y: number) => `Y${y}`).join(', ')
                                   : '';
-                                
+
                                 return (
-                                  <div 
-                                    key={index} 
+                                  <div
+                                    key={index}
                                     className="bg-white p-2 rounded border border-blue-200 hover:border-blue-300 transition-colors"
                                   >
                                     <div className="flex items-start justify-between gap-1">
@@ -4545,7 +4545,7 @@ export default function FeedbackPage() {
                 </div>
               )}
             </div>
-            
+
             {loadingForms ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
@@ -4566,7 +4566,7 @@ export default function FeedbackPage() {
                 {(() => {
                   const activeForms = feedbackForms.filter(f => f.active || f.status === 'DRAFT');
                   const deactivatedForms = feedbackForms.filter(f => !f.active && f.status === 'ACTIVE');
-                  
+
                   return (
                     <>
                       {/* Active and Draft Forms */}
@@ -4576,31 +4576,31 @@ export default function FeedbackPage() {
                             const stats = responseStats[form.id];
                             const isDraft = form.status === 'DRAFT';
                             const isDeactivated = !form.active && form.status === 'ACTIVE';
-                            
+
                             // Role-based visibility logic (exact spec)
                             const isIQAC = user?.roles?.includes('IQAC');
                             const isAdmin = user?.roles?.includes('ADMIN');
                             const isHOD = user?.roles?.includes('HOD');
                             const isOwner = form.created_by === user?.id;
-                            
+
                             // Permissions
                             const canView = isIQAC || isAdmin || isOwner || (isHOD && form.allow_hod_view);
                             const canExport = canView; // Same as canView
                             const canEdit = isIQAC || isAdmin || isOwner;
-                            
+
                             // Hide card if HOD and not allowed to view
                             if (isHOD && !canView && !isOwner) {
                               return null;
                             }
-                            
+
                             return (
                               <div
                                 key={form.id}
                                 className={`p-5 border-2 rounded-lg transition-all ${
                                   isDeactivated
-                                    ? 'border-slate-300 bg-slate-100 opacity-60' 
-                                    : form.active 
-                                    ? 'border-slate-200 hover:border-indigo-300 hover:shadow-md bg-white' 
+                                    ? 'border-slate-300 bg-slate-100 opacity-60'
+                                    : form.active
+                                    ? 'border-slate-200 hover:border-indigo-300 hover:shadow-md bg-white'
                                     : 'border-slate-200 bg-white'
                                 }`}
                               >
@@ -4613,8 +4613,8 @@ export default function FeedbackPage() {
                                         {form.type === 'SUBJECT_FEEDBACK' ? 'Subject Feedback' : 'Common Feedback'}
                                       </h3>
                                       <span className={`text-xs px-2 py-1 rounded-full ${
-                                        form.type === 'SUBJECT_FEEDBACK' 
-                                          ? 'bg-green-100 text-green-800' 
+                                        form.type === 'SUBJECT_FEEDBACK'
+                                          ? 'bg-green-100 text-green-800'
                                           : 'bg-blue-100 text-blue-800'
                                       }`}>
                                         {form.type === 'SUBJECT_FEEDBACK' ? 'About Subjects' : 'General'}
@@ -4685,8 +4685,8 @@ export default function FeedbackPage() {
                                     ) : stats && (
                                       <div className="flex items-center gap-2 text-sm">
                                         <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${
-                                          isDeactivated 
-                                            ? 'bg-slate-200 border border-slate-300' 
+                                          isDeactivated
+                                            ? 'bg-slate-200 border border-slate-300'
                                             : 'bg-indigo-50 border border-indigo-200'
                                         }`}>
                                           <span className={`font-semibold ${
@@ -4724,7 +4724,7 @@ export default function FeedbackPage() {
                                         Publish
                                       </button>
                                     )}
-                                    
+
                                     {/* View Responses Button */}
                                     {!isDraft && form.active && canView && (
                                       <button
@@ -4758,7 +4758,7 @@ export default function FeedbackPage() {
                                         {exportingFormId === form.id ? 'Exporting...' : 'Export'}
                                       </button>
                                     )}
-                                    
+
                                     {/* Allow HOD View Toggle (only for IQAC/Admin and student feedback, not draft) */}
                                     {!isDraft && canEdit && form.target_type === 'STUDENT' && (
                                       <button
@@ -4774,7 +4774,7 @@ export default function FeedbackPage() {
                                         HOD View: {form.allow_hod_view ? 'ON' : 'OFF'}
                                       </button>
                                     )}
-                                    
+
                                     {/* Activate/Deactivate (only owners/IQAC, not HOD viewing IQAC feedback) */}
                                     {!isDraft && canEdit && (
                                       <button
@@ -4795,7 +4795,7 @@ export default function FeedbackPage() {
                           })}
                         </div>
                       )}
-                      
+
                       {/* Deactivated Forms Accordion */}
                       {deactivatedForms.length > 0 && (
                         <div className="border-t border-slate-200 pt-4">
@@ -4864,24 +4864,24 @@ export default function FeedbackPage() {
                               />
                             </div>
                           </button>
-                          
+
                           {showDeactivatedForms && (
                             <div className="mt-4 space-y-4">
                               {deactivatedForms.map((form) => {
                                 const stats = responseStats[form.id];
                                 const isDraft = form.status === 'DRAFT';
                                 const isDeactivated = !form.active && form.status === 'ACTIVE';
-                                
+
                                 // Role-based visibility logic (same as active forms)
                                 const isIQAC = user?.roles?.includes('IQAC');
                                 const isAdmin = user?.roles?.includes('ADMIN');
                                 const isHOD = user?.roles?.includes('HOD');
                                 const isOwner = form.created_by === user?.id;
-                                
+
                                 const canView = isIQAC || isAdmin || isOwner || (isHOD && form.allow_hod_view);
                                 const canExport = canView;
                                 const canEdit = isIQAC || isAdmin || isOwner;
-                                
+
                                 return (
                                   <div
                                     key={form.id}
@@ -4894,8 +4894,8 @@ export default function FeedbackPage() {
                                             {form.type === 'SUBJECT_FEEDBACK' ? 'Subject Feedback' : 'Common Feedback'}
                                           </h3>
                                           <span className={`text-xs px-2 py-1 rounded-full ${
-                                            form.type === 'SUBJECT_FEEDBACK' 
-                                              ? 'bg-green-100 text-green-800' 
+                                            form.type === 'SUBJECT_FEEDBACK'
+                                              ? 'bg-green-100 text-green-800'
                                               : 'bg-blue-100 text-blue-800'
                                           }`}>
                                             {form.type === 'SUBJECT_FEEDBACK' ? 'About Subjects' : 'General'}
@@ -5585,12 +5585,12 @@ export default function FeedbackPage() {
                       {selectedResponseView.responded.map((resp) => {
                         // Check if this is subject feedback by looking if any answer has teaching_assignment
                         const isSubjectFeedback = resp.answers.some(a => a.teaching_assignment);
-                        
+
                         if (isSubjectFeedback) {
                           // Group answers by teaching assignment
                           const subjectGroups = resp.answers.reduce((acc, answer) => {
                             if (!answer.teaching_assignment) return acc;
-                            
+
                             const taId = answer.teaching_assignment.teaching_assignment_id;
                             if (!acc[taId]) {
                               acc[taId] = {
@@ -5610,9 +5610,9 @@ export default function FeedbackPage() {
                             staff_name: string;
                             answers: typeof resp.answers;
                           }>);
-                          
+
                           const subjects = Object.values(subjectGroups);
-                          
+
                           return (
                             <div key={resp.user_id} className="bg-green-50 border border-green-200 rounded-lg p-3">
                               {/* User Header */}
@@ -5634,7 +5634,7 @@ export default function FeedbackPage() {
                                   {new Date(resp.submitted_at).toLocaleDateString()}
                                 </p>
                               </div>
-                              
+
                               {/* Subject Cards in 3-column grid */}
                               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                                 {subjects.map((subject) => (
@@ -5652,7 +5652,7 @@ export default function FeedbackPage() {
                                         {subject.staff_name}
                                       </p>
                                     </div>
-                                    
+
                                     {/* Questions and Answers */}
                                     <div className="space-y-1.5">
                                       {(() => {
@@ -5677,7 +5677,7 @@ export default function FeedbackPage() {
                                             const selectedOption = String(answer.selected_option ?? answer.selected_option_text ?? '').trim();
                                             return (
                                               <>
-                                          
+
                                           {/* Star rating */}
                                           {answer.answer_star !== null && answer.answer_star !== undefined && (
                                             <div className="flex items-center gap-0.5 mb-0.5">
@@ -5694,7 +5694,7 @@ export default function FeedbackPage() {
                                               <span className="ml-0.5 text-[10px] text-slate-600 font-medium">({answer.answer_star}/5)</span>
                                             </div>
                                           )}
-                                          
+
                                           {/* Question-wise comment */}
                                           {questionComment !== '' && (
                                             <p className="text-[10px] text-slate-600 bg-slate-50 p-1 rounded border border-slate-200 italic leading-snug">
@@ -5781,7 +5781,7 @@ export default function FeedbackPage() {
                                       const selectedOption = String(answer.selected_option ?? answer.selected_option_text ?? '').trim();
                                       return (
                                         <>
-                                    
+
                                     {/* Display star rating if provided */}
                                     {answer.answer_star !== null && answer.answer_star !== undefined && (
                                       <div className="flex items-center gap-1 mb-0.5">
@@ -5798,7 +5798,7 @@ export default function FeedbackPage() {
                                         <span className="ml-1 text-xs text-slate-600 font-medium">({answer.answer_star}/5)</span>
                                       </div>
                                     )}
-                                    
+
                                     {/* Display question-wise comment if provided */}
                                     {questionComment !== '' && (
                                       <p className="text-xs text-slate-700 bg-white p-1.5 rounded border border-slate-200 leading-snug">
@@ -5812,7 +5812,7 @@ export default function FeedbackPage() {
                                         <span className="font-semibold">Selected Option:</span> {selectedOption}
                                       </p>
                                     )}
-                                    
+
                                     {/* Show message if neither rating nor comment provided */}
                                     {(!answer.answer_star || answer.answer_star === 0) && questionComment === '' && selectedOption === '' && (
                                       <p className="text-xs text-slate-400 italic">(No response provided)</p>
@@ -5944,7 +5944,7 @@ export default function FeedbackPage() {
                 </button>
               </div>
             )}
-            
+
             {loadingForms ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
@@ -5965,8 +5965,8 @@ export default function FeedbackPage() {
                   <div
                     key={form.id}
                     className={`p-5 border border-slate-200 rounded-lg transition-all ${
-                      form.is_submitted 
-                        ? 'opacity-75' 
+                      form.is_submitted
+                        ? 'opacity-75'
                         : isStudentUser
                           ? ''
                           : 'hover:border-indigo-300 hover:shadow-md cursor-pointer'
@@ -6008,8 +6008,8 @@ export default function FeedbackPage() {
                                 {form.type === 'SUBJECT_FEEDBACK' ? 'Subject Feedback' : 'Common Feedback'}
                               </h3>
                               <span className={`text-xs px-2 py-1 rounded-full ${
-                                form.type === 'SUBJECT_FEEDBACK' 
-                                  ? 'bg-green-100 text-green-800' 
+                                form.type === 'SUBJECT_FEEDBACK'
+                                  ? 'bg-green-100 text-green-800'
                                   : 'bg-blue-100 text-blue-800'
                               }`}>
                                 {form.type === 'SUBJECT_FEEDBACK' ? 'About Subjects' : 'General'}
@@ -6111,13 +6111,13 @@ export default function FeedbackPage() {
                   )}
                   <div>
                     <h2 className="text-2xl font-bold text-slate-800">
-                      {selectedSubject 
-                        ? selectedSubject.subject_name 
+                      {selectedSubject
+                        ? selectedSubject.subject_name
                         : selectedForm.type === 'SUBJECT_FEEDBACK' ? 'Subject Feedback' : 'Common Feedback'
                       }
                     </h2>
                     <p className="text-slate-600 text-sm mt-1">
-                      {selectedSubject 
+                      {selectedSubject
                         ? `${selectedSubject.subject_code} • ${selectedSubject.staff_name}`
                         : `${selectedForm.context_display || selectedForm.target_display} • ${selectedForm.questions.length} questions`
                       }
@@ -6276,7 +6276,7 @@ export default function FeedbackPage() {
                                   const currentRating = currentResponses[question.id!]?.answer_star || 0;
                                   const isActive = star <= currentRating;
                                   const isSelected = star === currentRating;
-                                  
+
                                   return (
                                     <button
                                       key={star}

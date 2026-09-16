@@ -42,7 +42,7 @@ export default function SwapNotifications() {
       setLoading(true);
       const resp = await fetchWithAuth('/api/timetable/swap-requests/?status=PENDING');
       const data = await resp.json();
-      
+
       if (data.success) {
         setPendingRequests(data.received || []);
       }
@@ -77,8 +77,8 @@ export default function SwapNotifications() {
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', { 
-      month: 'short', 
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
       day: 'numeric',
       year: 'numeric'
     });
@@ -137,8 +137,8 @@ export default function SwapNotifications() {
 
       <div className="space-y-4">
         {pendingRequests.map((request) => (
-          <div 
-            key={request.id} 
+          <div
+            key={request.id}
             className="border border-blue-200 bg-blue-50 rounded-lg p-4"
           >
             <div className="flex items-start justify-between mb-3">
@@ -150,7 +150,7 @@ export default function SwapNotifications() {
                   </span>
                   <span className="text-gray-600">wants to swap periods</span>
                 </div>
-                
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                   <div className="bg-white rounded p-3">
                     <div className="font-medium text-gray-700 mb-1">Their Period:</div>
@@ -205,7 +205,7 @@ export default function SwapNotifications() {
                 <Check className="w-4 h-4" />
                 {actionLoading === request.id ? 'Processing...' : 'Approve'}
               </button>
-              
+
               <button
                 onClick={() => {
                   const msg = prompt('Optional: Enter a reason for rejection');

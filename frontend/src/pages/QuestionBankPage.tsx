@@ -253,7 +253,7 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
 
       // The user wants the full content shown in the dropdown.
       // We'll still trim and filter empty, but avoid splitting by comma/newline if it might break things.
-      // Actually, if a row has multiple subtopics separated by something, we might want to split, 
+      // Actually, if a row has multiple subtopics separated by something, we might want to split,
       // but let's stick to the prompt's "all the content... must be shown".
       const options = [subTopicsRaw.trim()].filter(Boolean);
       if (!options.length) continue;
@@ -305,7 +305,7 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
     // Find the question S.No from the questions list
     const question = questions.find((q) => q.id === log.question_bank);
     const qSNo = question?.s_no || log.question_bank;
-    
+
     if (log.action === 'created') {
       return `Question #${qSNo} created`;
     }
@@ -319,7 +319,7 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
       const changes: string[] = [];
       const oldVals = log.old_values || {};
       const newVals = log.new_values || {};
-      
+
       const fieldLabels: Record<string, string> = {
         question_text: 'Question',
         subtopics: 'Subtopics',
@@ -339,7 +339,7 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
           changes.push(`${label}: ${oldVal !== null && oldVal !== undefined ? oldVal : '-'} → ${newVal !== null && newVal !== undefined ? newVal : '-'}`);
         }
       }
-      
+
       const changesText = changes.length > 0 ? changes.join(', ') : 'Updated';
       return `Q#${qSNo}: ${changesText}`;
     }
@@ -585,12 +585,12 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
 
     const code = generateAlphanumericCode(6);
     const expiryTime = new Date(Date.now() + verifyTimeLimit * 60 * 1000);
-    
+
     setGeneratedCode(code);
     setCodeExpiry(expiryTime.toLocaleString());
     setShowVerifyModal(false);
     setError(null);
-    
+
     // Reset selections
     setSelectedQuestions(new Set());
     setSelectedCOs(new Set());
@@ -717,17 +717,17 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
         if (!text) return '';
         // Pre-processing
         let tempText = text;
-        
+
         // Handle custom highlighting
-        tempText = tempText.replace(/\\colorbox\{([^}]+)\}\{([\s\S]*?)\}/g, 
+        tempText = tempText.replace(/\\colorbox\{([^}]+)\}\{([\s\S]*?)\}/g,
           '<span style="background-color:$1; padding: 2px 4px; border: 0.5pt solid #ccc;">$2</span>'
         );
-        tempText = tempText.replace(/\\highlight\{([^}]+)\}/g, 
+        tempText = tempText.replace(/\\highlight\{([^}]+)\}/g,
           '<span style="background-color: #fef3c7; padding: 2px 4px; font-weight: bold; border: 0.8pt solid #d97706;">$1</span>'
         );
 
         const segments = parseQuestionContent(tempText);
-        
+
         const segmentsHtml = segments.map(seg => {
           let val = seg.value;
           if (seg.type === 'mermaid') {
@@ -736,11 +736,11 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
           if (seg.type === 'image') {
             return `<div style="margin: 10px 0; text-align:center;"><img src="${val}" style="max-height: 180px; border: 1pt solid #e2e8f0;"/></div>`;
           }
-          
+
           if (seg.type === 'math' || seg.type === 'text') {
             // STEP 1: Fractions (Cleanest implementation for Excel - using 1.2pt border for visibility)
             for(let i=0; i<3; i++) {
-              val = val.replace(/\\frac\{([\s\S]*?)\}\{([\s\S]*?)\}/g, 
+              val = val.replace(/\\frac\{([\s\S]*?)\}\{([\s\S]*?)\}/g,
                 `<table style="display:inline-table; vertical-align:middle; line-height:1.1; margin:0 4px; border-collapse:collapse;">
                   <tr><td style="border-bottom:1.2pt solid black; text-align:center; padding:1px 8px; font-family: 'Times New Roman', serif; font-size:11.5pt;">$1</td></tr>
                   <tr><td style="text-align:center; padding:1px 8px; font-family: 'Times New Roman', serif; font-size:11.5pt;">$2</td></tr>
@@ -766,11 +766,11 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
             val = val.replace(/\\begin\{([pbvBV]matrix|cases|array)\}([\s\S]*?)\\end\{\1\}/g, (_, type, content) => {
               const cleanContent = type === 'array' ? content.replace(/^\{[^}]+\}/, '').trim() : content.trim();
               const rows = cleanContent.split(/\\\\/).map(r => r.split('&').map(c => c.trim()));
-              
+
               const isCases = type === 'cases';
               const isPMatrix = type === 'pmatrix';
 
-              const tableRows = rows.map(r => 
+              const tableRows = rows.map(r =>
                 `<tr>${r.map(c => `<td style="padding: 8px 12px; text-align: center; border: none; font-family: 'Times New Roman', serif; font-size: 13pt; color:#000;">${c}</td>`).join('')}</tr>`
               ).join('');
 
@@ -826,10 +826,10 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
             // Final Polish: Super/Sub-scripts and generic cleanup
             val = val.replace(/\^\{?([^}\s]+)\}?/g, '<sup>$1</sup>')
                      .replace(/_\{?([^}\s]+)\}?/g, '<sub>$1</sub>')
-                     .replace(/\$+/g, '') 
+                     .replace(/\$+/g, '')
                      .replace(/\\mathrm|\\text|\\quad|\\qquad|\\,|\\!/g, ' ')
                      .replace(/\\left[({[.]|\\right[)}\].]|\\left|\\right/g, '')
-                     .replace(/\\/g, ''); 
+                     .replace(/\\/g, '');
 
             return `<span>${val.replace(/\n/g, '<br/>')}</span>`;
           }
@@ -849,16 +849,16 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
             .college-title { font-size: 22pt; font-weight: bold; color: #1e3a8a; margin: 0; text-decoration: underline; }
             .dept-title { font-size: 14pt; font-weight: 600; color: #334155; margin: 8px 0; }
             .doc-type { font-size: 16pt; font-weight: bold; background-color: #f8fafc; padding: 12px; border: 1.5pt solid #1e3a8a; margin: 15px 0; color: #1e3a8a; }
-            
+
             .metadata { width: 100%; border-collapse: collapse; margin-bottom: 20px; border: 1pt solid #cbd5e1; }
             .meta-item { padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 11pt; color: #1e293b; border: 0.5pt solid #cbd5e1; }
             .label { font-weight: bold; background: #f1f5f9; color: #000; width: 18%; }
-            
+
             .data-table { border-collapse: collapse; width: 100%; border: 2.2pt solid #000; }
             .data-table th { background-color: #f1f5f9; border: 1pt solid #000; padding: 14px 10px; font-weight: bold; font-family: 'Segoe UI', sans-serif; font-size: 11pt; text-align: center; color: #000; }
             .data-table td { border: 1pt solid #000; padding: 14px 10px; vertical-align: top; font-family: 'Segoe UI', sans-serif; font-size: 10.5pt; mso-number-format: "\@"; }
             .alt-row { background-color: #fcfdfe; }
-            
+
             .sno-cell { text-align: center; font-weight: bold; font-size: 11pt; }
             .type-badge { font-weight: bold; text-align: center; color: #1e40af; background: #eff6ff; border-radius: 4px; }
           </style>
@@ -949,7 +949,7 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
-      
+
       setError(null);
     } catch (e: any) {
       setError('Export failed: ' + (e.message || 'Unknown error'));
@@ -966,7 +966,7 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
 
     try {
       setError(null);
-      
+
       const arrayBuffer = await file.arrayBuffer();
       const wb = XLSX.read(arrayBuffer, { type: 'array' });
       const wsName = wb.SheetNames[0];
@@ -1166,7 +1166,7 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
               <X size={20} />
             </button>
           </div>
-          
+
           {!codeTerminated ? (
             <>
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '12px' }}>
@@ -1469,7 +1469,7 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
                                               const current = (e.currentTarget as HTMLTextAreaElement).value || '';
                                               const nextValue = `${current}\n![image](${dataUrl})`.trim();
                                               updateQuestionField(q.s_no, 'question_text', nextValue);
-                                              
+
                                               // Immediate save for "lively" experience
                                               const latest = questionsRef.current.find(item => item.s_no === q.s_no);
                                               if (latest) {
@@ -1825,7 +1825,7 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
                 {verifyTab === 'questions' && (
                   <div>
                     <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '600', color: '#111827' }}>Select Questions</h3>
-                    
+
                     <div style={{ marginBottom: '16px' }}>
                       <label style={{ display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: '500', color: '#374151' }}>
                         Enter Question Numbers
@@ -1904,7 +1904,7 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
                 {verifyTab === 'cos' && (
                   <div>
                     <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '600', color: '#111827' }}>Select Course Outcomes</h3>
-                    
+
                     <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
                       <button
                         onClick={selectAllCOs}
@@ -2069,9 +2069,9 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
       )}
 
       {/* Specialty Editors & Palettes */}
-      <MathEquationKeyboard 
-        isOpen={!!activeMathField} 
-        onClose={() => setActiveMathField(null)} 
+      <MathEquationKeyboard
+        isOpen={!!activeMathField}
+        onClose={() => setActiveMathField(null)}
         initialValue={activeMathField?.value || ''}
         onApply={(latex) => {
           if (activeMathField) {
@@ -2088,8 +2088,8 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
         }}
       />
 
-      <ComponentPalette 
-        isOpen={!!activeElectricalPalette} 
+      <ComponentPalette
+        isOpen={!!activeElectricalPalette}
         onClose={() => setActiveElectricalPalette(null)}
         title="Electrical Components"
         icon={<Zap size={18} color="#f59e0b" />}
@@ -2114,8 +2114,8 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
         }}
       />
 
-      <ComponentPalette 
-        isOpen={!!activeDataStructurePalette} 
+      <ComponentPalette
+        isOpen={!!activeDataStructurePalette}
         onClose={() => setActiveDataStructurePalette(null)}
         title="Data Structures & Algorithms"
         icon={<TreePine size={18} color="#10b981" />}

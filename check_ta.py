@@ -24,6 +24,6 @@ for ta in empty_tas:
             parent = getattr(elec, "parent", None)
             dept = getattr(parent, "department", None)
         dept = dept.code if hasattr(dept, "code") else str(dept)
-    
+
     first_name = getattr(ta.staff.user, "first_name", "") if getattr(ta.staff, "user", None) else ""
     print(f"TA {ta.id} | Staff: {ta.staff.staff_id} {first_name} | Subj: {subject_name} | Dept: {dept}")

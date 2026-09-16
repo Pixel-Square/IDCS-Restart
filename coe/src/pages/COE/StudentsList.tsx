@@ -368,7 +368,7 @@ export default function StudentsList() {
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(14); // Increased from 11
-    doc.text(dummyText, x, y + 11.8); 
+    doc.text(dummyText, x, y + 11.8);
 
     const barcodeImg = barcodeDataUrlForValue(barcodeValue);
     // Reduced length (width) of the barcode
@@ -383,18 +383,18 @@ export default function StudentsList() {
     // Dummy number below barcode with a small gap
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(13); // Increased from 10
-    doc.text(barcodeValue, barcodeX, y + 11.8); 
+    doc.text(barcodeValue, barcodeX, y + 11.8);
   };
 
   const buildCombinedCoursesPdf = (targets: { dept: string; course: AugCourse }[]) => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
-    const marginX = 14; 
+    const marginX = 14;
     const topY = 14;
     const contentStartY = 29.0;
     const bottomMargin = 10;
-    const colGap = 12; 
+    const colGap = 12;
     const colWidth = (pageWidth - marginX * 2 - colGap) / 2;
     const rightColumnShift = 6; // mm (0.6 cm)
     const rowsPerPage = 11;
@@ -483,7 +483,7 @@ export default function StudentsList() {
           doc.addPage();
           drawHeader(target.dept, target.course);
           summaryTableY = contentStartY;
-          
+
           // Repeat Table Header on new page
           doc.setFont('helvetica', 'bold');
           doc.setFillColor(240, 240, 240);
@@ -512,7 +512,7 @@ export default function StudentsList() {
         // Horizontal line
         doc.setDrawColor(200, 200, 200);
         doc.line(marginX, summaryTableY + rowH, pageWidth - marginX, summaryTableY + rowH);
-        
+
         summaryTableY += rowH;
       }
     });
@@ -1069,7 +1069,7 @@ export default function StudentsList() {
       alert('Please shuffle the student list before saving to DB.');
       return;
     }
-    
+
     // Calculate total students to verify
     let totalRecords = 0;
     enriched.departments.forEach(dept => {
@@ -1477,8 +1477,8 @@ export default function StudentsList() {
                                       {canNavigateToMarkEntry ? (
                                         <a
                                           href="#"
-                                          
-                                          
+
+
                                           onClick={(e) => handleOpenMarkEntry(e, student, qpType, courseClassType, deptBlock.department, semester)}
 className="font-medium text-blue-700 underline hover:text-blue-800"
                                         >

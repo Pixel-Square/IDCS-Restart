@@ -9,7 +9,7 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
     search_fields = ['user__username', 'user__first_name', 'user__last_name']
     date_hierarchy = 'date'
     readonly_fields = ['uploaded_by', 'uploaded_at', 'source_file']
-    
+
     fieldsets = (
         ('Basic Information', {
             'fields': ('user', 'date', 'status')
@@ -38,7 +38,7 @@ class UploadLogAdmin(admin.ModelAdmin):
     search_fields = ['filename', 'uploader__username']
     readonly_fields = ['uploader', 'uploaded_at', 'processed_rows', 'success_count', 'error_count', 'errors']
     date_hierarchy = 'uploaded_at'
-    
+
     def has_add_permission(self, request):
         # Prevent manual creation via admin
         return False
@@ -51,7 +51,7 @@ class HolidayAdmin(admin.ModelAdmin):
     search_fields = ['name', 'notes']
     date_hierarchy = 'date'
     readonly_fields = ['created_by', 'created_at']
-    
+
     def save_model(self, request, obj, form, change):
         if not change:
             obj.created_by = request.user
@@ -62,17 +62,17 @@ class HolidayAdmin(admin.ModelAdmin):
 class AttendanceSettingsAdmin(admin.ModelAdmin):
     list_display = ['id', 'attendance_in_time_limit', 'mid_time_split', 'attendance_out_time_limit', 'lunch_from', 'lunch_to', 'apply_time_based_absence', 'updated_by', 'updated_at']
     readonly_fields = ['created_at', 'updated_at']
-    
+
     def save_model(self, request, obj, form, change):
         obj.updated_by = request.user
         super().save_model(request, obj, form, change)
-    
+
     def has_add_permission(self, request):
         # Only allow one settings object
         if AttendanceSettings.objects.exists():
             return False
         return super().has_add_permission(request)
-    
+
     def has_delete_permission(self, request, obj=None):
         # Prevent deletion of settings
         return False
@@ -85,7 +85,7 @@ class DepartmentAttendanceSettingsAdmin(admin.ModelAdmin):
     search_fields = ['name', 'description']
     filter_horizontal = ['departments']
     readonly_fields = ['created_at', 'updated_at']
-    
+
     fieldsets = (
         ('Configuration', {
             'fields': ('name', 'description', 'departments')
@@ -101,11 +101,11 @@ class DepartmentAttendanceSettingsAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
-    
+
     def get_departments(self, obj):
         return ', '.join([d.code for d in obj.departments.all()]) or 'None'
     get_departments.short_description = 'Departments'
-    
+
     def save_model(self, request, obj, form, change):
         if not change:
             obj.created_by = request.user

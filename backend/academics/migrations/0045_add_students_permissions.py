@@ -6,7 +6,7 @@ from django.db import migrations
 def create_students_permissions(apps, schema_editor):
     """Create students view permissions"""
     Permission = apps.get_model('accounts', 'Permission')
-    
+
     permissions = [
         {
             'code': 'students.view_students',
@@ -21,7 +21,7 @@ def create_students_permissions(apps, schema_editor):
             'description': 'Can view students from own department'
         },
     ]
-    
+
     for perm_data in permissions:
         Permission.objects.get_or_create(
             code=perm_data['code'],

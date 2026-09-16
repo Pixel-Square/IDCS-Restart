@@ -152,7 +152,7 @@ class AcV2SemesterConfigSerializer(serializers.ModelSerializer):
     time_remaining_seconds = serializers.SerializerMethodField()
     # Accept base64 data URL (or raw base64) and store it in seal_image
     seal_image_base64 = serializers.CharField(write_only=True, required=False, allow_blank=True)
-    
+
     class Meta:
         model = AcV2SemesterConfig
         fields = [
@@ -231,10 +231,10 @@ class AcV2SemesterConfigSerializer(serializers.ModelSerializer):
         self._apply_seal_image_base64(instance, seal_b64)
         instance.save()
         return instance
-    
+
     def get_is_open(self, obj):
         return obj.is_open()
-    
+
     def get_time_remaining_seconds(self, obj):
         remaining = obj.time_remaining()
         if remaining:
@@ -369,7 +369,7 @@ class AcV2ClassTypeSerializer(serializers.ModelSerializer):
     enabled_exams = serializers.SerializerMethodField()
     total_weight = serializers.SerializerMethodField()
     coattainment_layout = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = AcV2ClassType
         fields = [
@@ -393,7 +393,7 @@ class AcV2ClassTypeSerializer(serializers.ModelSerializer):
                 if isinstance(item, dict) and '_coattainment_layout' in item:
                     return item.get('_coattainment_layout', {})
         return {}
-    
+
     def validate_name(self, value):
         """Check uniqueness manually, excluding the current instance on updates."""
         instance = self.instance
@@ -406,7 +406,7 @@ class AcV2ClassTypeSerializer(serializers.ModelSerializer):
 
     def get_enabled_exams(self, obj):
         return obj.get_enabled_exams()
-    
+
     def get_total_weight(self, obj):
         return obj.get_total_weight()
 
@@ -559,7 +559,7 @@ class AcV2ClassTypeSerializer(serializers.ModelSerializer):
 class AcV2QpPatternSerializer(serializers.ModelSerializer):
     class_type_name = serializers.CharField(source='class_type.name', read_only=True, allow_null=True)
     questions = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = AcV2QpPattern
         fields = [
@@ -568,14 +568,14 @@ class AcV2QpPatternSerializer(serializers.ModelSerializer):
             'batch', 'cycle', 'is_active', 'updated_at',
         ]
         read_only_fields = ['id', 'updated_at']
-    
+
     def get_questions(self, obj):
         return obj.get_questions()
 
 
 class AcV2CourseSerializer(serializers.ModelSerializer):
     class_type_info = AcV2ClassTypeSerializer(source='class_type', read_only=True)
-    
+
     class Meta:
         model = AcV2Course
         fields = [
@@ -591,7 +591,7 @@ class AcV2CourseSerializer(serializers.ModelSerializer):
 class AcV2SectionSerializer(serializers.ModelSerializer):
     course_info = AcV2CourseSerializer(source='course', read_only=True)
     faculty_name = serializers.CharField(source='faculty_user.get_full_name', read_only=True, allow_null=True)
-    
+
     class Meta:
         model = AcV2Section
         fields = [
@@ -612,7 +612,7 @@ class AcV2ExamAssignmentSerializer(serializers.ModelSerializer):
     class_type = serializers.SerializerMethodField()
     class_type_name = serializers.SerializerMethodField()
     name = serializers.CharField(source='exam_display_name', read_only=True)
-    
+
     class Meta:
         model = AcV2ExamAssignment
         fields = [
@@ -629,17 +629,17 @@ class AcV2ExamAssignmentSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'published_at', 'published_by']
-    
+
     def get_question_btls(self, obj):
         draft = obj.draft_data if isinstance(obj.draft_data, dict) else {}
         return draft.get('question_btls', {})
-    
+
     def get_is_editable(self, obj):
         return obj.is_editable()
-    
+
     def get_is_past_due(self, obj):
         return obj.is_past_due()
-    
+
     def get_publish_control(self, obj):
         from .services.publish_control import check_publish_control
         ctrl = check_publish_control(obj)
@@ -648,14 +648,14 @@ class AcV2ExamAssignmentSerializer(serializers.ModelSerializer):
             ctrl['time_remaining_seconds'] = int(ctrl['time_remaining'].total_seconds())
             del ctrl['time_remaining']
         return ctrl
-    
+
     def get_class_type(self, obj):
         """Get class_type ID from nested section.course"""
         try:
             return str(obj.section.course.class_type.id) if obj.section.course.class_type else None
         except Exception:
             return None
-    
+
     def get_class_type_name(self, obj):
         """Get class_type name from nested section.course"""
         try:
@@ -692,7 +692,7 @@ class AcV2EditRequestSerializer(serializers.ModelSerializer):
     requested_by_username = serializers.SerializerMethodField()
     requested_by_staff_id = serializers.SerializerMethodField()
     requested_by_profile_image = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = AcV2EditRequest
         fields = [
@@ -704,7 +704,7 @@ class AcV2EditRequestSerializer(serializers.ModelSerializer):
             'reviewed_by', 'reviewed_at', 'rejection_reason',
         ]
         read_only_fields = ['id', 'requested_at', 'reviewed_at']
-    
+
     def get_exam_info(self, obj):
         ea = obj.exam_assignment
         dept = None
@@ -899,7 +899,7 @@ class AcV2UserPatternOverrideSerializer(serializers.ModelSerializer):
 class AcV2QpTypeSerializer(serializers.ModelSerializer):
     """Serializer for QP Type (Question Paper Type)"""
     class_type_name = serializers.CharField(source='class_type.name', read_only=True)
-    
+
     class Meta:
         model = AcV2QpType
         fields = [

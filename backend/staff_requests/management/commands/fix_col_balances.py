@@ -25,58 +25,58 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         dry_run = options['dry_run']
-        
+
         if dry_run:
             self.stdout.write(self.style.WARNING('DRY RUN MODE - No changes will be made\n'))
-        
+
         # Find all templates with action='earn'
         earn_templates = RequestTemplate.objects.filter(
             is_active=True,
             leave_policy__action='earn'
         )
-        
+
         self.stdout.write(f'Found {earn_templates.count()} earn action templates:\n')
-        
+
         total_reset = 0
-        
+
         for template in earn_templates:
             leave_type = template.name
             self.stdout.write(f'\n{leave_type}:')
-            
+
             # Find all balances for this leave type
             balances = StaffLeaveBalance.objects.filter(leave_type=leave_type)
-            
+
             if balances.count() == 0:
                 self.stdout.write('  No balance records found')
                 continue
-            
+
             self.stdout.write(f'  Found {balances.count()} balance records')
-            
+
             # Find balances that are not 0
             non_zero_balances = balances.exclude(balance=0.0)
-            
+
             if non_zero_balances.count() == 0:
                 self.stdout.write('  All balances are already 0 ✓')
                 continue
-            
+
             self.stdout.write(f'  Resetting {non_zero_balances.count()} non-zero balances:')
-            
+
             for balance in non_zero_balances[:10]:  # Show first 10
                 old_value = balance.balance
                 self.stdout.write(
                     f'    {balance.staff.username}: {old_value} -> 0'
                 )
-            
+
             if non_zero_balances.count() > 10:
                 self.stdout.write(f'    ... and {non_zero_balances.count() - 10} more')
-            
+
             if not dry_run:
                 # Reset all non-zero balances to 0
                 updated_count = non_zero_balances.update(balance=0.0)
                 total_reset += updated_count
             else:
                 total_reset += non_zero_balances.count()
-        
+
         # Summary
         self.stdout.write('\n' + '='*60)
         if dry_run:
@@ -92,8 +92,8 @@ class Command(BaseCommand):
                     f'\nSuccessfully reset {total_reset} earn action balance(s) to 0'
                 )
             )
-            
-            self.stdout.write('\n' + self.style.WARNING('IMPORTANT:') + 
+
+            self.stdout.write('\n' + self.style.WARNING('IMPORTANT:') +
                 ' Earn balances (like COL) should only increase when earn requests are approved.')
             self.stdout.write('If these balances keep getting set to non-zero values, check for:')
             self.stdout.write('  1. Migrations that incorrectly initialize earn balances')

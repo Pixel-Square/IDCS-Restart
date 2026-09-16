@@ -951,7 +951,7 @@ export default function MarkEntryTabs({
         if (!mounted) return;
         const desiredCode = String(subjectId || '').trim().toUpperCase();
         let filtered = (all || []).filter((a) => String((a as any)?.subject_code || '').trim().toUpperCase() === desiredCode);
-        
+
         // If user doesn't have a TA for this subject, try to fetch from server
         if (filtered.length === 0) {
           try {
@@ -981,7 +981,7 @@ export default function MarkEntryTabs({
             }
           }
         }
-        
+
         setTas(filtered);
         setTaError(null);
 
@@ -1050,7 +1050,7 @@ export default function MarkEntryTabs({
     setAssessmentNotice(state.reason || `${state.cycle_name || 'This cycle'} is locked for the selected semester.`);
     setActive('dashboard');
   }, [active, assessmentStateMap]);
-  
+
 
   const counts = useMemo(() => {
     if (!subjectId) return {} as Record<string, number>;
@@ -1128,7 +1128,7 @@ export default function MarkEntryTabs({
           onApplied={() => setRefreshKey((k) => k + 1)}
         />
       )}
-      
+
       <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 12 }}>
         <div style={{ minWidth: 260 }}>
           <div style={{ fontSize: 12, color: '#6b7280' }}>Teaching Assignment (Section)</div>
@@ -1286,7 +1286,7 @@ export default function MarkEntryTabs({
             const activeCqi = activeTabDef?.cqi || null;
             return (
           <div style={{ color: '#6b7280', marginBottom: 12, fontSize: 14 }}>
-            {active === 'formative1' 
+            {active === 'formative1'
               ? (normalizedEffectiveClassType === 'TCPL' ? 'Enter and manage LAB-1 marks (experiments + totals).' : 'Enter and manage Formative-1 assessment marks with BTL mapping.')
               : active === 'formative2'
                 ? (normalizedEffectiveClassType === 'TCPL' ? 'Enter and manage LAB-2 marks (experiments + totals).' : 'Enter and manage Formative-2 assessment marks with BTL mapping.')

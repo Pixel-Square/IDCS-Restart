@@ -481,7 +481,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
 
 
   // Polls State
-  const [polls, setPolls] = useState<ElectivePoll[]>([]); 
+  const [polls, setPolls] = useState<ElectivePoll[]>([]);
   const [isLoadingPolls, setIsLoadingPolls] = useState(false);
   const [expandedPolls, setExpandedPolls] = useState<Record<number, boolean>>({});
   const [downloading, setDownloading] = useState<Record<number, boolean>>({});
@@ -765,7 +765,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
         setBatchYears(years);
         setElectivesData(Array.isArray(elects) ? elects : []);
         setCurriculumElectives(Array.isArray(currElects) ? currElects : []);
-        
+
         // Load Polls
         try {
           const loadedPolls = await fetchElectivePolls();
@@ -821,7 +821,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
       await showAlert(`Check seats settings for subject #${autoSeatIssue + 1}.`, 'warning');
       return;
     }
-    
+
     try {
       const payload = {
         parent_elective_name: selectedParent,
@@ -839,17 +839,17 @@ export default function ElectivePollPage({ user }: { user?: any }) {
           blocked_departments: s.blocked_depts || []
         }))
       };
-      
+
       const createdPoll = await createElectivePoll(payload as any);
       setPolls([createdPoll, ...polls]);
-      
+
       // Reset form
       setElectivesForm([{ code: '', name: '', seats: '', seats_mode: 'custom', seats_divide_by: '1', staff: '', dept: '', blocked_depts: [] }]);
       setSelectedYear('');
       setSelectedSemester('');
       setSelectedGroup('');
       setSelectedParent('');
-      
+
     } catch (err: any) {
       console.error(err);
       await showAlert(err?.message || "Failed to create elective poll.", 'error');
@@ -1009,7 +1009,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
         <div className="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
           <div className="flex items-center gap-4">
             {view !== 'dashboard' ? (
-              <button 
+              <button
                 onClick={() => setView('dashboard')}
                 className="bg-slate-100 p-3 rounded-xl text-slate-600 hover:bg-slate-200 transition-colors">
                 <ChevronLeft className="w-6 h-6" />
@@ -1029,7 +1029,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
             </div>
           </div>
           {view !== 'dashboard' && (
-            <button 
+            <button
               onClick={() => setView('dashboard')}
               className="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">
               <ChevronLeft className="w-4 h-4" /> Back to Dashboard
@@ -1040,7 +1040,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
         {/* Dashboard View */}
         {view === 'dashboard' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 py-8">
-            <button 
+            <button
               onClick={() => setView('create')}
               className="group bg-white p-8 rounded-3xl border-2 border-slate-200 hover:border-indigo-500 hover:shadow-xl transition-all text-left">
               <div className="bg-indigo-100 text-indigo-600 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
@@ -1055,7 +1055,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
               </div>
             </button>
 
-            <button 
+            <button
               onClick={() => setView('manage')}
               className="group bg-white p-8 rounded-3xl border-2 border-slate-200 hover:border-indigo-500 hover:shadow-xl transition-all text-left">
               <div className="bg-emerald-100 text-emerald-600 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
@@ -1076,7 +1076,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
         {view === 'create' && (
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-6">
-              <button 
+              <button
                 onClick={() => {
                   setElectivesForm([{ code: '', name: '', seats: '', seats_mode: 'custom', seats_divide_by: '1', staff: '', dept: '', blocked_depts: [] }]);
                   setSelectedYear('');
@@ -1128,22 +1128,22 @@ export default function ElectivePollPage({ user }: { user?: any }) {
               </div>
 
               <div className="flex justify-end gap-3 pt-2">
-                <button 
+                <button
                   onClick={handleBlockProvidingDept}
                   className="flex items-center gap-2 text-sm font-medium text-indigo-600 bg-indigo-50 px-4 py-2 rounded-lg hover:bg-indigo-100 transition-colors">
                   <ShieldAlert className="w-4 h-4" /> Block providing dept
                 </button>
-                <button 
+                <button
                   onClick={handleBlockOtherDepartments}
                   className="flex items-center gap-2 text-sm font-medium text-indigo-600 bg-indigo-50 px-4 py-2 rounded-lg hover:bg-indigo-100 transition-colors">
                   <ShieldAlert className="w-4 h-4" /> Block other depts
                 </button>
-                <button 
+                <button
                   onClick={handleBlockOutsideGroup}
                   className="flex items-center gap-2 text-sm font-medium text-indigo-600 bg-indigo-50 px-4 py-2 rounded-lg hover:bg-indigo-100 transition-colors">
                   <Users className="w-4 h-4" /> Block outside group
                 </button>
-                <button 
+                <button
                   onClick={handleClearAllBlocks}
                   className="flex items-center gap-2 text-sm font-medium text-rose-600 bg-rose-50 px-4 py-2 rounded-lg hover:bg-rose-100 transition-colors">
                   <Trash2 className="w-4 h-4" /> Clear all blocks
@@ -1174,7 +1174,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
               <div className="space-y-4">
                 {electivesForm.map((el, i) => (
                   <div key={i} className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm relative">
-                    <button 
+                    <button
                       onClick={() => setElectivesForm(electivesForm.filter((_, idx) => idx !== i))}
                       className="absolute top-4 right-4 text-rose-500 hover:text-rose-700">
                       <X className="w-5 h-5" />
@@ -1243,15 +1243,15 @@ export default function ElectivePollPage({ user }: { user?: any }) {
                         </select>
                       </div>
                     </div>
-                    
+
                     <div className="mt-4 grid grid-cols-1 md:grid-cols-5 gap-6">
                       <div className="md:col-span-4">
                         <label className="block text-xs font-medium text-slate-700 mb-1.5">Blocked for Departments</label>
                         <div className="flex flex-wrap gap-2">
                           {departments.map(d => (
                             <label key={d.id} className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg cursor-pointer hover:bg-slate-100 transition-colors">
-                              <input 
-                                type="checkbox" 
+                              <input
+                                type="checkbox"
                                 checked={(el.blocked_depts || []).includes(d.id)}
                                 onChange={() => toggleBlockedDept(i, d.id)}
                                 className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
@@ -1276,7 +1276,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
               </div>
 
               <div className="mt-6 flex justify-center">
-                <button 
+                <button
                   onClick={() => setElectivesForm([...electivesForm, { code: '', name: '', seats: '', seats_mode: 'custom', seats_divide_by: '1', staff: '', dept: '', blocked_depts: [] }])}
                   className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-indigo-700 shadow-sm transition-colors">
                   <Plus className="w-4 h-4" /> Add another elective
@@ -1285,7 +1285,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
             </div>
 
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex justify-end">
-              <button 
+              <button
                 onClick={handleCreateElectives}
                 className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-indigo-700 shadow-sm transition-colors">
                 <Check className="w-4 h-4" /> Create Electives
@@ -1357,7 +1357,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
                           )}
                         </div>
                         <p className="text-sm text-slate-500 mt-1">
-                          Year: {poll.batch_year_name || '-'} • 
+                          Year: {poll.batch_year_name || '-'} •
                           Subjects: {poll.poll_subjects?.length || 0}
                         </p>
                       </div>
@@ -1377,11 +1377,11 @@ export default function ElectivePollPage({ user }: { user?: any }) {
                           <Download className="w-4 h-4" />
                           {downloading[poll.id] ? 'Downloading...' : 'Download Excel'}
                         </button>
-                        <button 
+                        <button
                           onClick={() => handleTogglePollStatus(poll.id, poll.is_active)}
                           className={`px-5 py-2 rounded-lg font-medium text-sm shadow-sm transition-colors ${
-                            poll.is_active 
-                              ? 'bg-rose-100 text-rose-700 hover:bg-rose-200' 
+                            poll.is_active
+                              ? 'bg-rose-100 text-rose-700 hover:bg-rose-200'
                               : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
                           }`}>
                           {poll.is_active ? 'Deactivate Polling' : 'Activate Polling'}
@@ -1533,7 +1533,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
                 </div>
                 <h3 className="text-lg font-bold text-slate-900">No polls found</h3>
                 <p className="text-slate-500 mt-1">You haven't created any elective polls yet.</p>
-                <button 
+                <button
                   onClick={() => setView('create')}
                   className="mt-6 text-indigo-600 font-bold hover:underline">
                   Create your first poll &rarr;

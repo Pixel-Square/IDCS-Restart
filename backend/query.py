@@ -17,7 +17,7 @@ if not student:
     print(f"Student {student_id} not found")
 else:
     print(f"Found student: {student.name} ({student.register_number})")
-    
+
     # Check section
     print(f"Section: {student.section}")
     print(f"Batch: {student.batch}")

@@ -234,7 +234,7 @@ export default function GateScanPage(): JSX.Element {
       const cd = checkCooldown(uid)
       if (!cd.allowed) {
         let cachedProfile = profileCacheRef.current.get(uid)
-        
+
         // If not in cache, and we're online, try a quick lookup so we can still show the card
         if (!cachedProfile && isOnline) {
           try {
@@ -250,7 +250,7 @@ export default function GateScanPage(): JSX.Element {
             // ignore network errors on lookup fallback
           }
         }
-        
+
         appendScanLog({ uid, mode: 'ONLINE', title: 'COOLDOWN', subtitle: `Try IN after ${cd.remainingStr}` })
         showFlash({
           kind: 'denied',
@@ -379,7 +379,7 @@ export default function GateScanPage(): JSX.Element {
             </div>
           ) : (
             <div className="flex flex-col md:flex-row items-center justify-center gap-12 sm:gap-16 w-full animate-in fade-in zoom-in duration-200">
-              
+
               {flash.profile && (
                 <div className="flex-shrink-0 relative">
                   <div className="w-[480px] h-[480px] rounded-[3rem] border-[16px] border-white/20 shadow-2xl flex items-center justify-center overflow-hidden bg-black/10 backdrop-blur-sm transform transition-all">
@@ -393,15 +393,15 @@ export default function GateScanPage(): JSX.Element {
               )}
 
               <div className={`flex flex-col flex-1 max-w-5xl text-left ${!flash.profile ? 'items-center text-center' : ''}`}>
-                
+
                 {flash.profile ? (
                   <>
                     <div className="w-full">
-                      <div 
+                      <div
                         className="font-black tracking-tight drop-shadow-2xl mb-2 sm:mb-4 uppercase text-white break-words"
                         style={{
-                          fontSize: flash.profile.name && flash.profile.name.length > 20 
-                            ? 'clamp(60px, 6vw, 90px)' 
+                          fontSize: flash.profile.name && flash.profile.name.length > 20
+                            ? 'clamp(60px, 6vw, 90px)'
                             : 'clamp(80px, 8vw, 130px)',
                           lineHeight: '1.2'
                         }}
@@ -409,7 +409,7 @@ export default function GateScanPage(): JSX.Element {
                          {flash.profile.name || 'Unknown User'}
                       </div>
                     </div>
-                    
+
                     <div className="flex items-center gap-4 mb-6">
                        {flash.profile.type && (
                          <span className="px-4 py-2 bg-white/20 text-white border border-white/40 text-xl font-bold uppercase tracking-widest rounded-xl shadow-md backdrop-blur-md">
@@ -424,7 +424,7 @@ export default function GateScanPage(): JSX.Element {
                 ) : (
                    flash.studentLine && <div className="text-3xl font-bold opacity-90 mb-4 drop-shadow-md">{flash.studentLine}</div>
                 )}
-                
+
                 <div className="mt-2 space-y-2">
                   <div className="text-6xl sm:text-7xl font-black tracking-tight drop-shadow-xl mb-3 sm:mb-4 uppercase text-white/95">
                     {flash.title}
@@ -472,7 +472,7 @@ export default function GateScanPage(): JSX.Element {
         )}
 
         <div className="w-full max-w-2xl bg-white rounded-3xl border border-gray-200 shadow-xl overflow-hidden p-8 flex flex-col items-center gap-8">
-          
+
           <div className="w-full flex flex-col items-center gap-4">
             <button
               onClick={handleSelect}
@@ -482,7 +482,7 @@ export default function GateScanPage(): JSX.Element {
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
               Select USB Scanner
             </button>
-            
+
             {port && (
               <div className="w-full flex items-center justify-between bg-green-50 border border-green-200 rounded-2xl px-6 py-4">
                 <div className="flex items-center gap-4">

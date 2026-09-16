@@ -12,24 +12,24 @@ PERMISSIONS = [
     # Page access permissions
     ('academic_v2.page.staff', 'Access Academic 2.1 staff pages (Assigned Courses, Mark Entry)'),
     ('academic_v2.page.admin', 'Access Academic 2.1 admin pages (Publish Control, Class Types, Patterns, Approvals)'),
-    
+
     # Mark entry permissions
     ('academic_v2.marks.view_own', 'View own course marks'),
     ('academic_v2.marks.edit_own', 'Enter and edit marks for assigned courses'),
     ('academic_v2.marks.publish', 'Publish marks (locks for editing)'),
     ('academic_v2.marks.request_edit', 'Request edit access for published marks'),
     ('academic_v2.marks.view_all', 'View all marks across departments'),
-    
+
     # Admin permissions
     ('academic_v2.admin.semester_config', 'Manage semester configurations (due dates, publish control)'),
     ('academic_v2.admin.class_types', 'Manage class types and exam assignments'),
     ('academic_v2.admin.qp_patterns', 'Manage question paper patterns'),
     ('academic_v2.admin.approve_edit', 'Approve edit requests for published marks'),
-    
+
     # HOD specific
     ('academic_v2.hod.view_department', 'View department marks and internal reports'),
     ('academic_v2.hod.approve_edit', 'HOD approve edit requests'),
-    
+
     # Internal marks
     ('academic_v2.internal.view_own', 'View internal marks for own courses'),
     ('academic_v2.internal.view_department', 'View internal marks for department'),
@@ -107,7 +107,7 @@ def seed_academic_v2_permissions(apps, schema_editor):
     Permission = apps.get_model('accounts', 'Permission')
     Role = apps.get_model('accounts', 'Role')
     RolePermission = apps.get_model('accounts', 'RolePermission')
-    
+
     # Create all permissions
     perm_map = {}
     for code, description in PERMISSIONS:
@@ -119,7 +119,7 @@ def seed_academic_v2_permissions(apps, schema_editor):
             perm_obj.description = description
             perm_obj.save(update_fields=['description'])
         perm_map[code] = perm_obj
-    
+
     # Assign permissions to roles
     for role_name, perm_codes in ROLE_PERMISSIONS.items():
         # Use filter().first() to handle multiple roles gracefully
@@ -135,23 +135,23 @@ def reverse_seed(apps, schema_editor):
     """Remove seeded permissions."""
     Permission = apps.get_model('accounts', 'Permission')
     RolePermission = apps.get_model('accounts', 'RolePermission')
-    
+
     codes = [code for code, _ in PERMISSIONS]
-    
+
     # Remove role assignments
     RolePermission.objects.filter(permission__code__in=codes).delete()
-    
+
     # Remove permissions
     Permission.objects.filter(code__in=codes).delete()
 
 
 class Migration(migrations.Migration):
-    
+
     dependencies = [
         ('academic_v2', '0001_initial'),  # After schema migration
         ('accounts', '0001_initial'),  # Permission model
     ]
-    
+
     operations = [
         migrations.RunPython(seed_academic_v2_permissions, reverse_seed),
     ]

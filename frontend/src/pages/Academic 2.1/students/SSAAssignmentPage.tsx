@@ -45,7 +45,7 @@ export default function SSAAssignmentPage() {
       setSubmitting(true);
       const formData = new FormData();
       formData.append('file', file);
-      
+
       const res = await fetchWithAuth(`/api/academic-v2/ssa/student/assignment/${examId}/submit/`, {
         method: 'POST',
         body: formData,
@@ -99,11 +99,11 @@ export default function SSAAssignmentPage() {
 
   return (
     <MyMarksLayout activeTab="courses" title={`SSA Assignment — ${assignment.assignment_type}`} subtitle={`${assignment.course_code} - ${assignment.course_name}`} showBack>
-      
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column - Assignment Details & Submission */}
         <div className="lg:col-span-2 space-y-6">
-          
+
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
             <div className="border-b border-gray-200 bg-gray-50 px-6 py-4">
               <h2 className="text-lg font-bold text-gray-900">Submission Status</h2>
@@ -124,7 +124,7 @@ export default function SSAAssignmentPage() {
                       <p className="text-sm text-gray-500">Submitted on {new Date(submission.submitted_at).toLocaleString()}</p>
                     </div>
                   </div>
-                  
+
                   {submission.submission_status === 'EVALUATED' && (
                     <div className="bg-green-50 rounded-lg p-4 mt-4 border border-green-100">
                       <p className="text-sm text-green-800 font-medium uppercase tracking-wide mb-1">Marks Awarded</p>

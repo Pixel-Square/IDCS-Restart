@@ -221,7 +221,7 @@ function learnerCentricFromCourseLevel(level: CourseLevelCode): LearnerCentricCo
 
 // Note: dynamically import 'xlsx' inside parsePbrExcel to avoid build-time resolution errors
 // (helps show a clear error if the dependency is missing).
- 
+
  async function parsePbrExcel(file: File): Promise<PbrSummary> {
   // Dynamic import for 'xlsx'. Vite will include it in the bundle.
   let XLSX: any;
@@ -232,7 +232,7 @@ function learnerCentricFromCourseLevel(level: CourseLevelCode): LearnerCentricCo
       'Missing dependency "xlsx". Install it with: npm install xlsx  (or yarn add xlsx / pnpm add xlsx)'
     );
   }
- 
+
    const buf = await file.arrayBuffer();
    const wb = XLSX.read(buf, { type: 'array' });
    const sheetName = wb.SheetNames?.[0];
@@ -240,16 +240,16 @@ function learnerCentricFromCourseLevel(level: CourseLevelCode): LearnerCentricCo
    const ws = wb.Sheets[sheetName];
    const rows = (XLSX.utils.sheet_to_json(ws, { defval: '' }) || []) as Array<Record<string, unknown>>;
    if (!rows.length) throw new Error('Excel sheet is empty.');
- 
+
    const headers = Object.keys(rows[0] || {});
    const byNorm = new Map<string, string>();
    headers.forEach((h) => byNorm.set(normalizeHeaderKey(h), h));
- 
+
    const gradeKey =
      byNorm.get('grade') ||
      headers.find((h) => normalizeHeaderKey(h).includes('grade')) ||
      null;
- 
+
    const gpaKey =
      byNorm.get('gpaconversion') ||
      byNorm.get('gpaconvert') ||
@@ -258,11 +258,11 @@ function learnerCentricFromCourseLevel(level: CourseLevelCode): LearnerCentricCo
        return n.includes('gpaconversion') || n.includes('gpaconvert') || n === 'gpa';
      }) ||
      null;
- 
+
    if (!gradeKey || !gpaKey) {
      throw new Error('Excel must contain columns for "Grade" and "GPA conversion".');
    }
- 
+
    const gpas: number[] = [];
    for (const r of rows) {
      const grade = String((r as any)[gradeKey] ?? '').trim();
@@ -271,11 +271,11 @@ function learnerCentricFromCourseLevel(level: CourseLevelCode): LearnerCentricCo
      if (gpa === null) continue;
      gpas.push(gpa);
    }
- 
+
    if (!gpas.length) throw new Error('No numeric "GPA conversion" values found.');
    const mean = gpas.reduce((a, b) => a + b, 0) / gpas.length;
    const meanRounded = Number(mean.toFixed(2));
- 
+
    // GPA band counts: 0–6 = HC, 6–8 = MC, >8 = EC
    const gpaBreakdown = { hc: 0, mc: 0, ec: 0 };
    for (const g of gpas) {
@@ -283,7 +283,7 @@ function learnerCentricFromCourseLevel(level: CourseLevelCode): LearnerCentricCo
      else if (g <= 8) gpaBreakdown.mc++;
      else gpaBreakdown.ec++;
    }
- 
+
    return {
      fileName: file.name,
      studentsCount: gpas.length,
@@ -586,7 +586,7 @@ export default function LCAPage({
   // Auto-save effect
   useEffect(() => {
     if (!initialLoadDone || readOnly || !subjectIdForRequests) return;
-    
+
     const handler = setTimeout(() => {
       saveLcaRevision(
         subjectIdForRequests,
@@ -1096,7 +1096,7 @@ export default function LCAPage({
               <th style={styles.th}>5 - 7.5</th>
               <th style={styles.th}>&gt; 7.5</th>
               <th style={styles.th}> </th>
-              <th style={styles.th}> </th> 
+              <th style={styles.th}> </th>
             </tr>
           </thead>
           <tbody>

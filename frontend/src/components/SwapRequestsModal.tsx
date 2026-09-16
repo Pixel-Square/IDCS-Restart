@@ -41,7 +41,7 @@ export default function SwapRequestsModal({ isOpen, onClose, onRequestUpdated }:
       const res = await fetchWithAuth(`/api/timetable/swap-requests/${requestId}/${action}/`, {
         method: 'POST',
       });
-      
+
       if (res.ok) {
         // Remove the request from the list
         setRequests(prev => prev.filter(r => r.id !== requestId));

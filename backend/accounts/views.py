@@ -3,10 +3,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.contrib.auth import get_user_model
 from .serializers import (
-    UserSerializer, 
-    RegisterSerializer, 
-    MeSerializer, 
-    IdentifierTokenObtainPairSerializer, 
+    UserSerializer,
+    RegisterSerializer,
+    MeSerializer,
+    IdentifierTokenObtainPairSerializer,
     NotificationTemplateSerializer,
     UserQuerySerializer,
     UserQueryListSerializer,
@@ -193,7 +193,7 @@ class MobileOtpRequestView(APIView):
         # Use the Node.js WhatsApp service for OTP
         endpoint = str(getattr(settings, 'OBE_WHATSAPP_API_URL', '') or '').strip()
         api_key = str(getattr(settings, 'OBE_WHATSAPP_API_KEY', '') or '').strip()
-        
+
         if not endpoint:
             return Response({
                 'detail': 'WhatsApp OTP service not configured'
@@ -205,7 +205,7 @@ class MobileOtpRequestView(APIView):
                 {'detail': reason or 'WhatsApp is not connected. Pair the device first.'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
-        
+
         # Replace '/send-whatsapp' with '/mobile/request-otp' if needed
         if endpoint.endswith('/send-whatsapp'):
             endpoint = endpoint[:-len('/send-whatsapp')] + '/mobile/request-otp'
@@ -304,7 +304,7 @@ class MobileOtpVerifyView(APIView):
         # Use the Node.js WhatsApp service for OTP verification
         endpoint = str(getattr(settings, 'OBE_WHATSAPP_API_URL', '') or '').strip()
         api_key = str(getattr(settings, 'OBE_WHATSAPP_API_KEY', '') or '').strip()
-        
+
         if not endpoint:
             return Response({
                 'detail': 'WhatsApp OTP service not configured'
@@ -316,7 +316,7 @@ class MobileOtpVerifyView(APIView):
                 {'detail': reason or 'WhatsApp is not connected. Pair the device first.'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
-        
+
         # Replace '/send-whatsapp' with '/mobile/verify-otp' if needed
         if endpoint.endswith('/send-whatsapp'):
             endpoint = endpoint[:-len('/send-whatsapp')] + '/mobile/verify-otp'
@@ -333,15 +333,15 @@ class MobileOtpVerifyView(APIView):
             import requests
             timeout = float(getattr(settings, 'OBE_WHATSAPP_TIMEOUT_SECONDS', 15.0) or 15.0)
             response = requests.post(endpoint, json=payload, timeout=timeout)
-            
+
             status_code = response.status_code
             data = response.json() if response.headers.get('content-type', '').startswith('application/json') else {}
-            
+
             if 200 <= status_code < 300:
                 # OTP verified successfully by Node.js service
                 # Now update the user's profile with the verified mobile number
                 now = timezone.now()
-                
+
                 # Persist to profile (student/staff) and also mirror to User.mobile_no
                 _set_verified_mobile_on_profile(request.user, mobile, now)
                 try:
@@ -365,7 +365,7 @@ class MobileOtpVerifyView(APIView):
                     if otp:
                         otp.verified_at = now
                         otp.save(update_fields=['verified_at'])
-                        
+
                         # Cleanup older OTP rows for this mobile
                         MobileOtp.objects.filter(
                             user=request.user,
@@ -417,7 +417,7 @@ class MobileOtpVerifyView(APIView):
                     confirmation_message = str(template_text)
                     for k, v in ctx.items():
                         confirmation_message = confirmation_message.replace(k, v)
-                    
+
                     # Send confirmation via WhatsApp
                     send_whatsapp(mobile, confirmation_message)
                 except Exception as e:
@@ -426,7 +426,7 @@ class MobileOtpVerifyView(APIView):
                 # Return success with updated user info
                 from .serializers import MeSerializer
                 me_data = MeSerializer(request.user).data
-                
+
                 return Response({
                     'ok': True,
                     'mobile_verified': True,
@@ -439,7 +439,7 @@ class MobileOtpVerifyView(APIView):
                 if 'detail' in data:
                     error_detail = f"{error_detail}: {data['detail']}"
                 return Response({'detail': error_detail}, status=status_code)
-                
+
         except requests.exceptions.Timeout:
             return Response({
                 'detail': 'WhatsApp service timeout. Please try again.'
@@ -730,7 +730,7 @@ class ProfileUpdateView(APIView):
             # Log full exception to help debug unexpected serialization errors
             log.exception('Unhandled exception while serializing updated user in ProfileUpdateView')
             return Response({'detail': 'Internal server error while returning updated profile.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+
 
 
 def _can_approve_profile_image_unlock(user) -> bool:
@@ -1438,16 +1438,16 @@ class AllQueriesListView(APIView):
         status_filter = request.GET.get('status')
         dept_filter = request.GET.get('department')
         role_filter = request.GET.get('role')
-        
+
         queries = UserQuery.objects.select_related('user').prefetch_related(
             'user__user_roles__role',
             'user__staff_profile__department',
             'user__student_profile__section__batch__course__department'
         ).all()
-        
+
         if status_filter:
             queries = queries.filter(status=status_filter)
-        
+
         # Department filter
         if dept_filter:
             from django.db.models import Q
@@ -1455,23 +1455,23 @@ class AllQueriesListView(APIView):
                 Q(user__staff_profile__department_id=dept_filter) |
                 Q(user__student_profile__section__batch__course__department_id=dept_filter)
             )
-        
+
         # Role filter
         if role_filter:
             queries = queries.filter(user__user_roles__role__name=role_filter)
-        
+
         queries = queries.order_by('-created_at').distinct()
-        
+
         # Store count before serialization
         filtered_count = queries.count()
-        
+
         serializer = UserQuerySerializer(queries, many=True)
-        
+
         # Get unique departments and roles for filter options
         from academics.models import Department
         departments = Department.objects.all().order_by('code').values('id', 'code', 'name', 'short_name')
         roles = Role.objects.all().order_by('name').values('id', 'name')
-        
+
         return Response({
             'queries': serializer.data,
             'departments': list(departments),
@@ -1492,13 +1492,13 @@ class QueryUpdateView(APIView):
             query = UserQuery.objects.get(pk=pk)
         except UserQuery.DoesNotExist:
             return Response({'detail': 'Query not found.'}, status=status.HTTP_404_NOT_FOUND)
-        
+
         # Update allowed fields
         if 'status' in request.data:
             query.status = request.data['status']
         if 'admin_notes' in request.data:
             query.admin_notes = request.data['admin_notes']
-        
+
         query.save()
         serializer = UserQuerySerializer(query)
         return Response(serializer.data)

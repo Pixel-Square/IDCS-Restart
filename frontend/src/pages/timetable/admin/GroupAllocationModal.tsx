@@ -82,7 +82,7 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
   const [selectedDepartments, setSelectedDepartments] = useState<string[]>([]);
   const [selectedSectionKeys, setSelectedSectionKeys] = useState<string[]>([]);
   const [selectedMixedSectionKeys, setSelectedMixedSectionKeys] = useState<string[]>([]);
-  
+
   // Exception Courses
   const [courseSearchQuery, setCourseSearchQuery] = useState('');
   const [availableCourses, setAvailableCourses] = useState<ExceptionCourse[]>([]);
@@ -182,7 +182,7 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
           const mData = await mixedRes.json();
           setRawMixedSections(mData.results || mData || []);
         }
-        
+
         if (venueRes.ok) {
            const vData = await venueRes.json();
            const parsed = (vData.results || vData).map((item: any) => ({
@@ -639,7 +639,7 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden border border-gray-100">
-        
+
         {/* Header */}
         <div className="px-6 py-4 bg-gradient-to-r from-blue-600 to-indigo-700 text-white flex items-center justify-between shadow-md">
           <div>

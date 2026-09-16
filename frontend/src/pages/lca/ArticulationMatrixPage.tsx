@@ -246,7 +246,7 @@ export default function ArticulationMatrixPage({ courseId, embedded = false }: P
           to { transform: rotate(360deg); }
         }
       `}</style>
-      
+
       <div style={cardStyle}>
         {!embedded && (
           <div style={styles.header}>
@@ -261,10 +261,10 @@ export default function ArticulationMatrixPage({ courseId, embedded = false }: P
           {!courseId && (
             <div style={styles.inputSection}>
               <label style={styles.label}>Course ID</label>
-              <input 
-                value={subject} 
-                onChange={e => setSubject(e.target.value)} 
-                placeholder="Enter course identifier (e.g., CS101)" 
+              <input
+                value={subject}
+                onChange={e => setSubject(e.target.value)}
+                placeholder="Enter course identifier (e.g., CS101)"
                 style={{
                   ...styles.input,
                   ...(isFocused ? styles.inputFocus : {}),
@@ -276,8 +276,8 @@ export default function ArticulationMatrixPage({ courseId, embedded = false }: P
           )}
 
           <div style={styles.actionBar}>
-            <button 
-              onClick={refresh} 
+            <button
+              onClick={refresh}
               disabled={status === 'loading' || !subject}
               style={{
                 ...styles.button,

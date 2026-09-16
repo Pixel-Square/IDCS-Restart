@@ -54,23 +54,23 @@ save_c_repl = r"""onClick={async () => {
                                               const staffSel = document.getElementById(`staff-${section.id}-${subject.id}`) as HTMLInputElement;
                                               const selectedIds = JSON.parse(staffSel?.value || '[]').map(Number).filter(Boolean);
                                               if (selectedIds.length === 0) return alert('Select at least one staff member');
-                                              
+
                                               try {
                                                 const existingStaffIds = existingAssignments.map((a: any) => a.staff_details?.id || a.staff);
-                                                
+
                                                 const toDelete = existingAssignments.filter((a: any) => !selectedIds.includes(a.staff_details?.id || a.staff));
                                                 for (const a of toDelete) {
                                                   await fetchWithAuth(`/api/academics/teaching-assignments/${a.id}/`, { method: 'DELETE' });
                                                 }
-                                                
+
                                                 const toAdd = selectedIds.filter((id: number) => !existingStaffIds.includes(id));
                                                 for (const id of toAdd) {
-                                                  await fetchWithAuth('/api/academics/teaching-assignments/', { 
-                                                    method: 'POST', 
-                                                    body: JSON.stringify({ section_id: section.id, curriculum_row_id: subject.id, staff_id: id, is_active: true }) 
+                                                  await fetchWithAuth('/api/academics/teaching-assignments/', {
+                                                    method: 'POST',
+                                                    body: JSON.stringify({ section_id: section.id, curriculum_row_id: subject.id, staff_id: id, is_active: true })
                                                   });
                                                 }
-                                                
+
                                                 alert('Saved successfully');
                                                 cancelEditing(section.id, subject.id);
                                                 fetchData(true);
@@ -89,12 +89,12 @@ save_core_repl = r"""onClick={async () => {
                                           if (selectedIds.length === 0) return alert('Select a staff member');
                                           try {
                                             const existingStaffIds = existingAssignments.map((a: any) => a.staff_details?.id || a.staff);
-                                            
+
                                             const toDelete = existingAssignments.filter((a: any) => !selectedIds.includes(a.staff_details?.id || a.staff));
                                             for (const a of toDelete) {
                                               await fetchWithAuth(`/api/academics/teaching-assignments/${a.id}/`, { method: 'DELETE' });
                                             }
-                                            
+
                                             const toAdd = selectedIds.filter((id: number) => !existingStaffIds.includes(id));
                                             for (const id of toAdd) {
                                               await fetchWithAuth('/api/academics/teaching-assignments/', {
@@ -102,7 +102,7 @@ save_core_repl = r"""onClick={async () => {
                                                 body: JSON.stringify({ section_id: sec.id, curriculum_row_id: parent.id, staff_id: id, is_active: true })
                                               });
                                             }
-                                            
+
                                             cancelEditing(sec.id, parent.id);
                                             fetchData(true);
                                           } catch (e) { alert('Error: ' + e); }
@@ -118,12 +118,12 @@ save_elec_repl = r"""onClick={async () => {
                                         if (selectedIds.length === 0) return alert('Select staff');
                                         try {
                                           const existingStaffIds = existingElectiveAssignments.map((a: any) => a.staff_details?.id || a.staff);
-                                          
+
                                           const toDelete = existingElectiveAssignments.filter((a: any) => !selectedIds.includes(a.staff_details?.id || a.staff));
                                           for (const a of toDelete) {
                                             await fetchWithAuth(`/api/academics/teaching-assignments/${a.id}/`, { method: 'DELETE' });
                                           }
-                                          
+
                                           const toAdd = selectedIds.filter((id: number) => !existingStaffIds.includes(id));
                                           for (const id of toAdd) {
                                             await fetchWithAuth('/api/academics/teaching-assignments/', {
@@ -131,7 +131,7 @@ save_elec_repl = r"""onClick={async () => {
                                               body: JSON.stringify({ elective_subject_id: opt.id, staff_id: id, is_active: true })
                                             });
                                           }
-                                          
+
                                           cancelEditingElective(opt.id);
                                           fetchData(true);
                                         } catch(e) { alert('Error: ' + e); }
@@ -147,21 +147,21 @@ bulk_course_repl = r"""const staffSel = document.getElementById(`staff-${section
           if (selectedIds.length === 0) continue;
 
           const existingAssignments = findExistingAssignments(section.id, subject.id);
-          
+
           try {
             const existingStaffIds = existingAssignments.map((a: any) => a.staff_details?.id || a.staff);
-            
+
             const toDelete = existingAssignments.filter((a: any) => !selectedIds.includes(a.staff_details?.id || a.staff));
             for (const a of toDelete) {
               const res = await fetchWithAuth(`/api/academics/teaching-assignments/${a.id}/`, { method: 'DELETE' });
               if (!res.ok) failureCount++;
             }
-            
+
             const toAdd = selectedIds.filter((id: number) => !existingStaffIds.includes(id));
             for (const id of toAdd) {
-              const res = await fetchWithAuth('/api/academics/teaching-assignments/', { 
-                method: 'POST', 
-                body: JSON.stringify({ section_id: section.id, staff_id: id, curriculum_row_id: subject.id, is_active: true }) 
+              const res = await fetchWithAuth('/api/academics/teaching-assignments/', {
+                method: 'POST',
+                body: JSON.stringify({ section_id: section.id, staff_id: id, curriculum_row_id: subject.id, is_active: true })
               });
               if (res.ok) successCount++;
               else failureCount++;
@@ -179,21 +179,21 @@ bulk_elec_repl = r"""const staffSel = document.getElementById(`elective-staff-${
           if (selectedIds.length === 0) continue;
 
           const existingElectiveAssignments = findExistingElectiveAssignments(opt.id);
-          
+
           try {
             const existingStaffIds = existingElectiveAssignments.map((a: any) => a.staff_details?.id || a.staff);
-            
+
             const toDelete = existingElectiveAssignments.filter((a: any) => !selectedIds.includes(a.staff_details?.id || a.staff));
             for (const a of toDelete) {
               const res = await fetchWithAuth(`/api/academics/teaching-assignments/${a.id}/`, { method: 'DELETE' });
               if (!res.ok) failureCount++;
             }
-            
+
             const toAdd = selectedIds.filter((id: number) => !existingStaffIds.includes(id));
             for (const id of toAdd) {
-              const res = await fetchWithAuth('/api/academics/teaching-assignments/', { 
-                method: 'POST', 
-                body: JSON.stringify({ elective_subject_id: opt.id, staff_id: id, is_active: true }) 
+              const res = await fetchWithAuth('/api/academics/teaching-assignments/', {
+                method: 'POST',
+                body: JSON.stringify({ elective_subject_id: opt.id, staff_id: id, is_active: true })
               });
               if (res.ok) successCount++;
               else failureCount++;

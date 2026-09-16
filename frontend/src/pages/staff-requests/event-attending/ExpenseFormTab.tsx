@@ -32,7 +32,7 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
   const [selectedOD, setSelectedOD] = useState<ApprovedODForm | null>(null);
   const [expandedOD, setExpandedOD] = useState<number | null>(null);
   const [odClaim, setOdClaim] = useState<'yes' | 'no'>('yes'); // for manual mode
-  
+
   // Manual Event Details state
   const [eventDetails, setEventDetails] = useState<Record<string, any>>({});
   const [odTemplates, setOdTemplates] = useState<RequestTemplate[]>([]);
@@ -81,8 +81,8 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
     if (file) {
       setActiveCropperKey(key);
       setActiveCropperFile(file);
-    } else { 
-      const n = { ...files }; delete n[key]; setFiles(n); 
+    } else {
+      const n = { ...files }; delete n[key]; setFiles(n);
       const o = { ...orientations }; delete o[key]; setOrientations(o);
     }
   };
@@ -101,10 +101,10 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
   const isOtherEmpty = (r: OtherExpenseRow) => !r.date && !r.bill_no && !r.expense_details && (!r.amount || Number(r.amount) === 0);
 
   const handleSubmit = async () => {
-    if (formMode === 'od' && !selectedOD) { 
-      setError('Please select an approved On Duty form'); return; 
+    if (formMode === 'od' && !selectedOD) {
+      setError('Please select an approved On Duty form'); return;
     }
-    
+
     if (formMode === 'manual') {
       const requiresOdFields = odClaim === 'yes';
       if (requiresOdFields && (!eventDetails.type || !eventDetails.reason)) {
@@ -116,7 +116,7 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
         return;
       }
     }
-    
+
     const invalidTravel = travel.some(r => !isTravelEmpty(r) && (!r.date || !r.mode_of_travel || !r.from || !r.to || !r.amount));
     if (invalidTravel) { setError('Please fill all required fields (*) in Travel Expenses for the rows you entered.'); return; }
 
@@ -137,8 +137,8 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
       if (formMode === 'od') {
         fd.append('on_duty_request_id', String(selectedOD!.id));
       } else {
-        const detailsToSend = odClaim === 'no' 
-          ? { ...eventDetails, type: '', reason: '' } 
+        const detailsToSend = odClaim === 'no'
+          ? { ...eventDetails, type: '', reason: '' }
           : { ...eventDetails, template_id: selectedOdTemplateId };
         fd.append('event_details', JSON.stringify(detailsToSend));
         fd.append('od_claim', odClaim);
@@ -154,7 +154,7 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
         fd.append(k, f);
         if (orientations[k]) fd.append(`${k}_orientation`, orientations[k]);
       });
-      
+
       await submitEventForm(fd);
       setSuccess('Event Attending form submitted successfully!');
       setSelectedOD(null);
@@ -204,13 +204,13 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
       )}
 
       <div className="flex bg-gray-100 p-1 rounded-lg w-fit">
-        <button 
+        <button
           onClick={() => setFormMode('od')}
           className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${formMode === 'od' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
         >
           <Link2 size={16} /> Link to Approved On Duty Form
         </button>
-        <button 
+        <button
           onClick={() => setFormMode('manual')}
           className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${formMode === 'manual' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
         >
@@ -374,7 +374,7 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
                 <DragDropFileInput fileKey="advance_proof" files={files} orientations={orientations} onChange={handleFileChange} />
               </div>
             )}
-            
+
             <div className="mt-2">
                <label className="block text-xs font-bold text-gray-700 mb-2">Upload Overall Event/Fees Proof</label>
                <DragDropFileInput fileKey="fees_proof" files={files} orientations={orientations} onChange={handleFileChange} />
@@ -450,11 +450,11 @@ function Input({ label, value, onChange, type = 'text', readOnly = false, requir
   );
 }
 
-function FileInput({ fileKey, files, onChange, label, required }: { 
-  fileKey: string; 
-  files: Record<string, File>; 
-  onChange: (k: string, f: File | null) => void; 
-  label?: string; 
+function FileInput({ fileKey, files, onChange, label, required }: {
+  fileKey: string;
+  files: Record<string, File>;
+  onChange: (k: string, f: File | null) => void;
+  label?: string;
   required?: boolean;
 }) {
   const file = files[fileKey];
@@ -464,10 +464,10 @@ function FileInput({ fileKey, files, onChange, label, required }: {
         <Upload size={14} />
         <span className="truncate max-w-[120px]">{file?.name || label || 'Proof'}</span>
         {required && <span className="text-red-500">*</span>}
-        <input 
+        <input
           key={file ? file.name + file.size : 'empty'}
           type="file" className="hidden" accept="image/*,application/pdf"
-          onChange={e => onChange(fileKey, e.target.files?.[0] || null)} 
+          onChange={e => onChange(fileKey, e.target.files?.[0] || null)}
         />
       </label>
       {file && (
@@ -477,15 +477,15 @@ function FileInput({ fileKey, files, onChange, label, required }: {
   );
 }
 
-function DragDropFileInput({ fileKey, files, orientations, onChange }: { 
-  fileKey: string; 
-  files: Record<string, File>; 
+function DragDropFileInput({ fileKey, files, orientations, onChange }: {
+  fileKey: string;
+  files: Record<string, File>;
   orientations: Record<string, 'portrait' | 'landscape'>;
-  onChange: (k: string, f: File | null) => void; 
+  onChange: (k: string, f: File | null) => void;
 }) {
   const file = files[fileKey];
   const orientation = orientations[fileKey] || 'portrait';
-  
+
   const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); };
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation();
@@ -494,7 +494,7 @@ function DragDropFileInput({ fileKey, files, orientations, onChange }: {
 
   return (
     <div className="flex flex-col w-full">
-      <label 
+      <label
         className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-blue-200 rounded-xl cursor-pointer bg-blue-50/50 hover:bg-blue-50 hover:border-blue-400 transition-colors"
         onDragOver={handleDragOver} onDrop={handleDrop}
       >
@@ -506,16 +506,16 @@ function DragDropFileInput({ fileKey, files, orientations, onChange }: {
         </div>
         <input type="file" className="hidden" onChange={e => onChange(fileKey, e.target.files?.[0] || null)} />
       </label>
-      
+
       {file && (
         <div className="mt-2 flex items-center justify-end gap-2 pr-1">
           <span className="text-xs text-gray-600 font-medium">Layout:</span>
           <span className="text-xs font-semibold text-blue-700 capitalize bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
             {orientation}
           </span>
-          <button 
+          <button
             type="button"
-            onClick={(e) => { e.preventDefault(); onChange(fileKey, null); }} 
+            onClick={(e) => { e.preventDefault(); onChange(fileKey, null); }}
             className="text-xs text-red-500 hover:text-red-700 underline ml-2"
           >
             Remove File

@@ -113,8 +113,8 @@ export default function MyAttendancePage() {
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { 
-      weekday: 'short', 
+    return date.toLocaleDateString('en-US', {
+      weekday: 'short',
       day: 'numeric',
       month: 'short'
     });
@@ -173,13 +173,13 @@ export default function MyAttendancePage() {
               <ChevronLeft className="w-4 h-4" />
               Previous
             </button>
-            
+
             <div className="text-center">
               <h2 className="text-xl font-semibold text-gray-900">
                 {getCurrentMonthName()} {selectedYear}
               </h2>
             </div>
-            
+
             <button
               onClick={goToNextMonth}
               className="flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
@@ -201,7 +201,7 @@ export default function MyAttendancePage() {
                   </div>
                 </div>
               </div>
-              
+
               <div className="bg-green-50 rounded-lg p-4">
                 <div className="flex items-center gap-3">
                   <CheckCircle className="w-8 h-8 text-green-600" />
@@ -211,7 +211,7 @@ export default function MyAttendancePage() {
                   </div>
                 </div>
               </div>
-              
+
               <div className="bg-yellow-50 rounded-lg p-4">
                 <div className="flex items-center gap-3">
                   <AlertCircle className="w-8 h-8 text-yellow-600" />
@@ -221,7 +221,7 @@ export default function MyAttendancePage() {
                   </div>
                 </div>
               </div>
-              
+
               <div className="bg-red-50 rounded-lg p-4">
                 <div className="flex items-center gap-3">
                   <XCircle className="w-8 h-8 text-red-600" />
@@ -241,7 +241,7 @@ export default function MyAttendancePage() {
                 <span className="font-semibold text-gray-900">{getAttendancePercentage()}%</span>
               </div>
               <div className="mt-2 bg-gray-200 rounded-full h-3">
-                <div 
+                <div
                   className="bg-blue-600 h-3 rounded-full transition-all duration-500"
                   style={{ width: `${getAttendancePercentage()}%` }}
                 />
@@ -260,7 +260,7 @@ export default function MyAttendancePage() {
           <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
             <XCircle className="w-8 h-8 text-red-600 mx-auto mb-4" />
             <p className="text-red-800 font-medium">{error}</p>
-            <button 
+            <button
               onClick={fetchMonthlyAttendance}
               className="mt-4 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
             >

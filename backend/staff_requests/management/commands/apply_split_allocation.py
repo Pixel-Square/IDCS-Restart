@@ -40,51 +40,51 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         from staff_requests.models import RequestTemplate, StaffLeaveBalance
-        
+
         dry_run = options['dry_run']
         force = options['force']
         template_name = options.get('template')
-        
+
         if dry_run:
             self.stdout.write(self.style.WARNING('DRY RUN MODE - No changes will be made'))
-        
+
         # Get all active templates with leave_policy and split_date
         templates = RequestTemplate.objects.filter(
             is_active=True
         ).exclude(leave_policy={})
-        
+
         if template_name:
             templates = templates.filter(name=template_name)
-        
+
         today = date.today()
         total_updated = 0
-        
+
         for template in templates:
             leave_policy = template.leave_policy
-            
+
             if not leave_policy or 'action' not in leave_policy:
                 continue
-            
+
             action = leave_policy.get('action')
-            
+
             # Only process deduct and neutral action templates with allotment
             if action not in ['deduct', 'neutral']:
                 continue
-            
+
             # Check if allotment is configured (required for split logic)
             allotment_per_role = leave_policy.get('allotment_per_role', {})
             if not allotment_per_role:
                 continue
-            
+
             split_date_str = leave_policy.get('split_date')
-            
+
             # Skip if no split_date configured
             if not split_date_str:
                 continue
-            
+
             from_date_str = leave_policy.get('from_date')
             to_date_str = leave_policy.get('to_date')
-            
+
             if not from_date_str or not to_date_str:
                 self.stdout.write(
                     self.style.WARNING(
@@ -92,7 +92,7 @@ class Command(BaseCommand):
                     )
                 )
                 continue
-            
+
             try:
                 split_date = datetime.strptime(split_date_str, '%Y-%m-%d').date()
                 from_date = datetime.strptime(from_date_str, '%Y-%m-%d').date()
@@ -104,7 +104,7 @@ class Command(BaseCommand):
                     )
                 )
                 continue
-            
+
             # Check if we're in the valid window for split allocation
             if not force and today < split_date:
                 self.stdout.write(
@@ -113,7 +113,7 @@ class Command(BaseCommand):
                     )
                 )
                 continue
-            
+
             if today > to_date:
                 self.stdout.write(
                     self.style.WARNING(
@@ -121,10 +121,10 @@ class Command(BaseCommand):
                     )
                 )
                 continue
-            
+
             # Get all balances for this leave type
             balances = StaffLeaveBalance.objects.filter(leave_type=template.name)
-            
+
             if balances.count() == 0:
                 self.stdout.write(
                     self.style.WARNING(
@@ -132,14 +132,14 @@ class Command(BaseCommand):
                     )
                 )
                 continue
-            
+
             self.stdout.write(f'\n{template.name}')
             self.stdout.write(f'  Split date: {split_date}')
             self.stdout.write(f'  Period: {from_date} to {to_date}')
             self.stdout.write(f'  Balances to update: {balances.count()}')
-            
+
             allotment_per_role = leave_policy.get('allotment_per_role', {})
-            
+
             if not allotment_per_role:
                 self.stdout.write(
                     self.style.WARNING(
@@ -147,27 +147,27 @@ class Command(BaseCommand):
                     )
                 )
                 continue
-            
+
             for balance in balances:
                 # Get user's primary role
                 user_role = self._get_primary_role(balance.staff)
                 full_allotment = allotment_per_role.get(user_role, 0.0)
                 second_half = full_allotment / 2
-                
+
                 old_balance = balance.balance
                 new_balance = old_balance + second_half
-                
+
                 if not dry_run:
                     balance.balance = new_balance
                     balance.save()
-                
+
                 self.stdout.write(
                     self.style.SUCCESS(
                         f'    {balance.staff.username} ({user_role}): {old_balance} + {second_half} = {new_balance}'
                     )
                 )
                 total_updated += 1
-        
+
         if total_updated == 0:
             self.stdout.write(
                 self.style.WARNING(
@@ -190,7 +190,7 @@ class Command(BaseCommand):
                     f'\nSuccessfully updated {total_updated} balance(s)'
                 )
             )
-    
+
     def _get_primary_role(self, user):
         """Get the primary role for a user.
         SPL roles take priority over generic STAFF/FACULTY."""

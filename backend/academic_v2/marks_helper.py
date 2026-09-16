@@ -1,5 +1,7 @@
 from django.db.models import Max, Q
 
+# NOTE: DEFAULT_TOTALS removed. All total marks are now derived dynamically using get_max_ref.
+
 def get_remark(pct):
     if pct >= 90: return "Excellent"
     if pct >= 80: return "Very Good"
@@ -55,7 +57,7 @@ def get_student_marks_data(student, exam_type, subject_filter=''):
             ("MODEL", ModelExamMark, "total_mark"), ("LAB", LabExamMark, "total_mark"),
             ("FINAL INTERNAL", FinalInternalMark, "final_mark"),
         ]
-        
+
         max_refs = {}
         def get_max_ref(model, field):
             if model not in max_refs:
@@ -75,7 +77,9 @@ def get_student_marks_data(student, exam_type, subject_filter=''):
         if exam in ("ALL", "ALL ASSESSMENTS"):
             acc = {}
             for label, model, field in all_models:
-                max_ref = get_max_ref(model, field)
+                # Determine total marks for this assessment type using DEFAULT_TOTALS
+                                # Determine total marks for this assessment type dynamically from the model's max observed value
+                total_marks = get_max_ref(model, field)
                 for m in _matches_subject(model.objects.filter(student=student).select_related("subject")):
                     if not m.subject:
                         continue
@@ -85,7 +89,7 @@ def get_student_marks_data(student, exam_type, subject_filter=''):
                     score = _score_of(m, field)
                     if score is not None:
                         acc[code]["scores"].append(score)
-                        acc[code]["pcts"].append((score / max_ref) * 100.0)
+                        acc[code]["pcts"].append((score / total_marks) * 100.0)
             for code, data in acc.items():
                 if not data["scores"]:
                     continue
@@ -108,14 +112,16 @@ def get_student_marks_data(student, exam_type, subject_filter=''):
                     selected_field = field
                     assessment_label = key
                     break
-            
-            max_ref = get_max_ref(selected_model, selected_field)
+
+            # Determine total marks for the selected assessment
+                            # Determine total marks for the selected assessment dynamically
+                total_marks = get_max_ref(selected_model, selected_field)
             for m in _matches_subject(selected_model.objects.filter(student=student).select_related("subject")):
                 if not m.subject:
                     continue
                 score = _score_of(m, selected_field)
                 if score is not None:
-                    pct = (score / max_ref) * 100.0
+                    pct = (score / total_marks) * 100.0
                     marks_data.append({
                         "subject_code": m.subject.code,
                         "subject_name": m.subject.name,

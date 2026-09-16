@@ -20,6 +20,8 @@
 
 require('dotenv').config();
 
+const path    = require('path');
+const fs      = require('fs');
 const express = require('express');
 const cors    = require('cors');
 const QRCode  = require('qrcode');
@@ -37,6 +39,8 @@ try {
 // Configuration
 // ─────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3000', 10);
+const WA_SESSION_DIR = path.resolve(__dirname, process.env.WA_SESSION_DIR || './.wwebjs_auth');
+const WA_CACHE_DIR   = path.resolve(__dirname, process.env.WA_CACHE_DIR   || './.wwebjs_cache');
 
 // Accept either env var name to avoid configuration drift between services.
 // - `WA_API_KEY` is the gateway's canonical name
@@ -228,16 +232,19 @@ async function initClient() {
   pushSSE('status', statusSnapshot());
   console.log('[WA] Initializing client…');
 
+  let authTimeoutTimer = null;
+
   waClient = new Client({
     authStrategy: new LocalAuth({
-      dataPath: (process.env.WA_SESSION_DIR || './.wwebjs_auth'),
+      dataPath: WA_SESSION_DIR,
       clientId:  'iqac-main',
     }),
-    // Pin a known-working WhatsApp Web version – avoids the "outdated browser" rejection
-    webVersion: '2.3000.1034427372-alpha',
+    // Pin a known-working WhatsApp Web version and use local disk cache
+    webVersion: '2.3000.1047561935-alpha',
     webVersionCache: {
-      type: 'remote',
-      remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1034427372-alpha.html',
+      type: 'local',
+      path: WA_CACHE_DIR + '/',
+      strict: false,
     },
     puppeteer: {
       headless: true,
@@ -249,7 +256,6 @@ async function initClient() {
         '--disable-accelerated-2d-canvas',
         '--disable-blink-features=AutomationControlled',
         '--window-size=1920,1080',
-        '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       ],
       executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome',
       defaultViewport: { width: 1920, height: 1080 },
@@ -284,9 +290,17 @@ async function initClient() {
     waStatus = 'INITIALIZING';
     console.log('[WA] Authenticated – waiting for ready');
     pushSSE('status', statusSnapshot());
+    if (authTimeoutTimer) clearTimeout(authTimeoutTimer);
+    authTimeoutTimer = setTimeout(() => {
+      if (waStatus === 'INITIALIZING') {
+        console.warn('[WA] Timed out waiting for ready event after authentication – scheduling restart...');
+        scheduleRestart('auth ready timeout', 1000);
+      }
+    }, 45000);
   });
 
   waClient.on('auth_failure', (msg) => {
+    if (authTimeoutTimer) { clearTimeout(authTimeoutTimer); authTimeoutTimer = null; }
     waStatus   = 'DISCONNECTED';
     lastError  = `Auth failure: ${msg}`;
     console.error('[WA]', lastError);
@@ -294,6 +308,7 @@ async function initClient() {
   });
 
   waClient.on('ready', async () => {
+    if (authTimeoutTimer) { clearTimeout(authTimeoutTimer); authTimeoutTimer = null; }
     waStatus        = 'CONNECTED';
     currentQrText   = null;
     currentQrDataUrl = null;
@@ -309,6 +324,7 @@ async function initClient() {
   });
 
   waClient.on('disconnected', (reason) => {
+    if (authTimeoutTimer) { clearTimeout(authTimeoutTimer); authTimeoutTimer = null; }
     waStatus        = 'DISCONNECTED';
     connectedNumber = null;
     lastError       = `Disconnected: ${reason}`;
@@ -326,6 +342,7 @@ async function initClient() {
     try {
       await waClient.initialize();
     } catch (e) {
+      if (authTimeoutTimer) { clearTimeout(authTimeoutTimer); authTimeoutTimer = null; }
       waStatus  = 'DISCONNECTED';
       lastError = `Init error: ${e.message}`;
       console.error('[WA] Init error:', e.message);
@@ -625,12 +642,9 @@ app.post('/disconnect', requireApiKey, async (_req, res) => {
   currentQrDataUrl = null;
   // Wipe saved session so next restart forces fresh QR
   try {
-    const fs   = require('fs');
-    const path = require('path');
-    const dir  = path.resolve(process.env.WA_SESSION_DIR || './.wwebjs_auth');
-    if (fs.existsSync(dir)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-      console.log('[WA] Session directory cleared:', dir);
+    if (fs.existsSync(WA_SESSION_DIR)) {
+      fs.rmSync(WA_SESSION_DIR, { recursive: true, force: true });
+      console.log('[WA] Session directory cleared:', WA_SESSION_DIR);
     }
   } catch (e) {
     console.warn('[WA] Could not clear session directory:', e.message);
@@ -654,12 +668,9 @@ app.post('/clear-session', requireApiKey, async (_req, res) => {
   currentQrDataUrl = null;
   lastError        = null;
   try {
-    const fs   = require('fs');
-    const path = require('path');
-    const dir  = path.resolve(process.env.WA_SESSION_DIR || './.wwebjs_auth');
-    if (fs.existsSync(dir)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-      console.log('[WA] Session directory wiped:', dir);
+    if (fs.existsSync(WA_SESSION_DIR)) {
+      fs.rmSync(WA_SESSION_DIR, { recursive: true, force: true });
+      console.log('[WA] Session directory wiped:', WA_SESSION_DIR);
     }
   } catch (e) {
     console.warn('[WA] Could not wipe session directory:', e.message);

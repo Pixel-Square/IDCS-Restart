@@ -74,12 +74,12 @@ export async function fetchAllQueries(
   if (statusFilter) params.append('status', statusFilter);
   if (departmentFilter) params.append('department', departmentFilter);
   if (roleFilter) params.append('role', roleFilter);
-  
+
   let url = '/api/accounts/queries/all/';
   if (params.toString()) {
     url += `?${params.toString()}`;
   }
-  
+
   const res = await fetchWithAuth(url);
   if (!res.ok) {
     throw new Error('Failed to fetch all queries');

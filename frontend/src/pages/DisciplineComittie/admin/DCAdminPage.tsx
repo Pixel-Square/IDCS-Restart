@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { 
-  ShieldCheck, 
-  Settings2, 
-  ClipboardList, 
+import {
+  ShieldCheck,
+  Settings2,
+  ClipboardList,
   QrCode,
   Sparkles,
   Layers,

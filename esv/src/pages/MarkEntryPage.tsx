@@ -131,7 +131,7 @@ export default function MarkEntryPage() {
       const { type, facultyCode: receivedFacultyCode } = event.data;
       if (type === 'RESET_FACULTY_DATA' && receivedFacultyCode === facultyCode) {
         console.warn('RELOAD_REQUIRED: ESV Reset approved by COE. Clearing local data and refreshing UI.');
-        
+
         // 1. Clear marks from local storage that match the facultyCode
         Object.keys(localStorage).forEach(key => {
           if (key.startsWith(`idcs-marks-v1-${facultyCode}-`)) {
@@ -142,7 +142,7 @@ export default function MarkEntryPage() {
 
         // 2. Clear marks from memory
         setMarksMap({});
-        
+
         // 3. Trigger UI Refresh
         setRefreshTrigger(prev => prev + 1);
         setMarksRefreshTrigger(prev => prev + 1);
@@ -286,7 +286,7 @@ export default function MarkEntryPage() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
-        document.activeElement?.tagName === 'INPUT' || 
+        document.activeElement?.tagName === 'INPUT' ||
         document.activeElement?.tagName === 'TEXTAREA'
       ) {
         return;
@@ -357,18 +357,18 @@ export default function MarkEntryPage() {
 
     return (
       <div className="fixed inset-0 z-50 overflow-y-auto bg-gray-50 flex flex-col items-center justify-start p-4 sm:p-8">
-        <BarScanMarkEntry 
+        <BarScanMarkEntry
           embeddedCode={codeToUse}
           embeddedQpType={qpTypeToUse}
           embeddedDept={deptToUse}
           embeddedSem={semToUse}
-          onClose={() => { 
-            setScannedCode(null); 
+          onClose={() => {
+            setScannedCode(null);
             setActiveEntryParams(null);
-            setMarksRefreshTrigger(p=>p+1); 
+            setMarksRefreshTrigger(p=>p+1);
           }}
-          onNextScan={(code) => { 
-            setScannedCode(code); 
+          onNextScan={(code) => {
+            setScannedCode(code);
             setActiveEntryParams(null);
           }}
         />
@@ -393,7 +393,7 @@ export default function MarkEntryPage() {
           <div className="hidden md:flex flex-col items-end mr-4 text-white/90">
              <span className="text-xs font-medium uppercase tracking-wider opacity-60">Session Valuation</span>
              <span className="text-lg font-bold leading-none">
-                {Object.values(marksMap).flat().filter(e => getTotal(e.marks) > 0).length} 
+                {Object.values(marksMap).flat().filter(e => getTotal(e.marks) > 0).length}
                 <span className="text-sm font-normal opacity-70 ml-1">Papers Done</span>
              </span>
           </div>
@@ -416,7 +416,7 @@ export default function MarkEntryPage() {
       {/* Global Search & Scanner Status */}
       <div className="flex flex-col md:flex-row gap-4">
         <div className="flex-1 relative group">
-          <input 
+          <input
             type="text"
             placeholder="Search by dummy number or course..."
             value={searchTerm}
@@ -452,9 +452,9 @@ export default function MarkEntryPage() {
         </div>
       ) : (
         courseBlocks
-          .filter(block => 
-            !searchTerm || 
-            block.courseName.toLowerCase().includes(searchTerm.toLowerCase()) || 
+          .filter(block =>
+            !searchTerm ||
+            block.courseName.toLowerCase().includes(searchTerm.toLowerCase()) ||
             block.courseCode.toLowerCase().includes(searchTerm.toLowerCase()) ||
             block.dummies.some(d => d.toLowerCase().includes(searchTerm.toLowerCase()))
           )
@@ -498,7 +498,7 @@ export default function MarkEntryPage() {
                              {entries.filter(e => getTotal(e.marks) > 0).length} / {block.dummies.length}
                           </span>
                           <div className="w-24 h-2 bg-[#ead7d0] rounded-full overflow-hidden shrink-0">
-                             <div 
+                             <div
                                className="h-full bg-gradient-to-r from-[#6f1d34] to-[#b2472e] transition-all duration-700"
                                style={{ width: `${(entries.filter(e => getTotal(e.marks) > 0).length / Math.max(1, block.dummies.length)) * 100}%` }}
                              />

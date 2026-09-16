@@ -48,7 +48,7 @@ export default function RegistrationSettings() {
       if (!res.ok) throw new Error('Unable to load settings');
       const data = await res.json();
       setSettings(data);
-      
+
       // Generate QR code
       if (data.share_url) {
         const qr = await QRCode.toDataURL(data.share_url, {
@@ -105,7 +105,7 @@ export default function RegistrationSettings() {
     if (!settings) return;
     const newValue = !settings.is_accepting_responses;
     setSettings({ ...settings, is_accepting_responses: newValue });
-    
+
     try {
       const res = await fetchWithAuth('/api/academics/ext-staff-form/settings/', {
         method: 'PUT',
@@ -153,17 +153,17 @@ export default function RegistrationSettings() {
   const handleDragOver = (e: React.DragEvent, index: number) => {
     e.preventDefault();
     if (draggedIndex === null || draggedIndex === index || !settings) return;
-    
+
     const newConfig = [...settings.field_config];
     const draggedItem = newConfig[draggedIndex];
     newConfig.splice(draggedIndex, 1);
     newConfig.splice(index, 0, draggedItem);
-    
+
     // Update order values
     newConfig.forEach((item, idx) => {
       item.order = idx + 1;
     });
-    
+
     setSettings({ ...settings, field_config: newConfig });
     setDraggedIndex(index);
   };
@@ -253,16 +253,16 @@ export default function RegistrationSettings() {
               <div>
                 <h3 className="font-bold text-[#5a192f]">Accept Responses</h3>
                 <p className="text-sm text-gray-600">
-                  {settings.is_accepting_responses 
-                    ? 'Form is currently accepting new registrations' 
+                  {settings.is_accepting_responses
+                    ? 'Form is currently accepting new registrations'
                     : 'Form is closed and not accepting registrations'}
                 </p>
               </div>
               <button
                 onClick={toggleAcceptResponses}
                 className={`p-2 rounded-lg transition-colors ${
-                  settings.is_accepting_responses 
-                    ? 'bg-green-500 text-white' 
+                  settings.is_accepting_responses
+                    ? 'bg-green-500 text-white'
                     : 'bg-gray-300 text-gray-600'
                 }`}
               >
@@ -304,7 +304,7 @@ export default function RegistrationSettings() {
             <p className="text-sm text-gray-500 mb-4">
               Drag to reorder • Toggle to enable/disable • Check to make required
             </p>
-            
+
             <div className="space-y-2">
               {settings.field_config.map((field, index) => (
                 <div
@@ -314,16 +314,16 @@ export default function RegistrationSettings() {
                   onDragOver={(e) => handleDragOver(e, index)}
                   onDragEnd={handleDragEnd}
                   className={`flex items-center gap-3 p-3 rounded-lg border ${
-                    field.enabled 
-                      ? 'bg-white border-gray-200' 
+                    field.enabled
+                      ? 'bg-white border-gray-200'
                       : 'bg-gray-50 border-gray-100 opacity-60'
                   } ${draggedIndex === index ? 'opacity-50' : ''}`}
                 >
-                  <GripVertical 
-                    size={16} 
-                    className="text-gray-400 cursor-grab flex-shrink-0" 
+                  <GripVertical
+                    size={16}
+                    className="text-gray-400 cursor-grab flex-shrink-0"
                   />
-                  
+
                   {/* Enable/Disable Toggle */}
                   <button
                     onClick={() => toggleFieldEnabled(index)}
@@ -332,7 +332,7 @@ export default function RegistrationSettings() {
                   >
                     {field.enabled ? <Eye size={18} /> : <EyeOff size={18} />}
                   </button>
-                  
+
                   {/* Field Label */}
                   <input
                     type="text"
@@ -341,12 +341,12 @@ export default function RegistrationSettings() {
                     className="flex-1 px-2 py-1 text-sm border border-transparent hover:border-gray-200 rounded focus:border-[#6f1d34] focus:outline-none"
                     disabled={!field.enabled}
                   />
-                  
+
                   {/* Field Type Badge */}
                   <span className="text-xs px-2 py-1 bg-gray-100 rounded text-gray-600 capitalize">
                     {field.type}
                   </span>
-                  
+
                   {/* Required Checkbox */}
                   <label className="flex items-center gap-1 text-xs text-gray-600">
                     <input
@@ -382,8 +382,8 @@ export default function RegistrationSettings() {
               <button
                 onClick={copyLink}
                 className={`p-2 rounded-lg border ${
-                  copied 
-                    ? 'bg-green-50 border-green-200 text-green-600' 
+                  copied
+                    ? 'bg-green-50 border-green-200 text-green-600'
                     : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
                 }`}
                 title="Copy link"
@@ -436,8 +436,8 @@ export default function RegistrationSettings() {
               <div className="flex justify-between">
                 <span className="text-gray-600">Status:</span>
                 <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                  settings.is_accepting_responses 
-                    ? 'bg-green-100 text-green-700' 
+                  settings.is_accepting_responses
+                    ? 'bg-green-100 text-green-700'
                     : 'bg-red-100 text-red-700'
                 }`}>
                   {settings.is_accepting_responses ? 'Active' : 'Inactive'}

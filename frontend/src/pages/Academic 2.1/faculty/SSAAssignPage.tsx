@@ -30,7 +30,7 @@ export default function SSAAssignPage() {
 
   const [rubricsFile, setRubricsFile] = useState<File | null>(null);
   const [topicFile, setTopicFile] = useState<File | null>(null);
-  
+
   const [saving, setSaving] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
 
@@ -55,7 +55,7 @@ export default function SSAAssignPage() {
   const handleFileUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!examId) return;
-    
+
     const formData = new FormData();
     if (rubricsFile) formData.append('rubric_file', rubricsFile);
     if (topicFile) formData.append('student_topic_file', topicFile);
@@ -80,10 +80,10 @@ export default function SSAAssignPage() {
   const handleFinalize = async () => {
     const hasUnsavedFiles = rubricsFile || topicFile;
     if (!window.confirm(`Are you sure you want to finalize this assignment?${hasUnsavedFiles ? ' This will upload your selected files first.' : ''} Students will be able to see it.`)) return;
-    
+
     try {
       setFinalizing(true);
-      
+
       // Auto-upload if there are pending files
       if (hasUnsavedFiles) {
         const formData = new FormData();
@@ -101,7 +101,7 @@ export default function SSAAssignPage() {
         method: 'POST',
       });
       if (!res.ok) throw new Error('Failed to finalize assignment');
-      
+
       await fetchData();
       setRubricsFile(null);
       setTopicFile(null);
@@ -122,7 +122,7 @@ export default function SSAAssignPage() {
       setDownloadingTemplate(true);
       const res = await fetchWithAuth(`/api/academic-v2/ssa/assignment/${examId}/topic-template/?num_topics=${numTopics}`);
       if (!res.ok) throw new Error('Failed to download template');
-      
+
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -168,7 +168,7 @@ export default function SSAAssignPage() {
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
         <h2 className="text-lg font-bold text-gray-900 mb-4">Assignment Files</h2>
-        
+
         <form onSubmit={handleFileUpload} className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <FileUploadCard title="Rubrics" file={rubricsFile} setFile={setRubricsFile} existingUrl={assignment?.rubric_file_url} isFinalized={isFinalized} />
@@ -205,7 +205,7 @@ export default function SSAAssignPage() {
             <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
               <button onClick={() => setShowTopicModal(false)} disabled={downloadingTemplate} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50">Cancel</button>
               <button onClick={handleDownloadTemplate} disabled={downloadingTemplate} className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 flex items-center gap-2 disabled:opacity-50">
-                {downloadingTemplate ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />} 
+                {downloadingTemplate ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                 {downloadingTemplate ? 'Downloading...' : 'Download'}
               </button>
             </div>

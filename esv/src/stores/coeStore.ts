@@ -76,7 +76,7 @@ export function findAllocationsForFaculty(facultyCode: string): FacultyAllocatio
         if (vCode === code) {
           const hasScripts = Number(valuator.scripts) > 0;
           const hasBundles = Array.isArray(valuator.bundles) && valuator.bundles.length > 0;
-          
+
           if (hasScripts || hasBundles) {
             results.push({
               storeKey,

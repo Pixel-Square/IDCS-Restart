@@ -158,7 +158,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
   const validateForm = (): string | null => {
     if (!name.trim()) return 'Template name is required';
     if (formFields.length === 0) return 'At least one form field is required';
-    
+
     for (const field of formFields) {
       if (!field.name.trim()) return 'All fields must have a name';
       if (!field.label.trim()) return 'All fields must have a label';
@@ -166,13 +166,13 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
         return `Dropdown field "${field.label}" must have options`;
       }
     }
-    
+
     if (approvalSteps.length === 0) return 'At least one approval step is required';
-    
+
     for (const step of approvalSteps) {
       if (!step.approver_role) return 'All approval steps must have a role assigned';
     }
-    
+
     return null;
   };
 
@@ -350,7 +350,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
               {/* Leave & Attendance Settings */}
               <div className="border-t pt-6 mt-6">
                 <h3 className="text-base font-semibold text-gray-900 mb-4">Leave & Attendance Settings</h3>
-                
+
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -361,7 +361,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                       onChange={(e) => {
                         const action = e.target.value as LeavePolicy['action'] | '';
                         if (action) {
-                          handleLeavePolicyChange({ 
+                          handleLeavePolicyChange({
                             action,
                             overdraft_name: action === 'deduct' ? (leavePolicy.overdraft_name || 'LOP') : undefined,
                             reset_duration: action === 'deduct' ? (leavePolicy.reset_duration || 'yearly') : undefined
@@ -729,7 +729,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                           </label>
                           <select
                             value={field.type}
-                            onChange={(e) => handleUpdateField(index, { 
+                            onChange={(e) => handleUpdateField(index, {
                               type: e.target.value as FormField['type'],
                               options: e.target.value === 'select' ? [''] : undefined
                             })}
@@ -762,7 +762,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                           </label>
                           <textarea
                             value={(field.options || []).join('\n')}
-                            onChange={(e) => handleUpdateField(index, { 
+                            onChange={(e) => handleUpdateField(index, {
                               options: e.target.value.split('\n').filter(o => o.trim())
                             })}
                             placeholder="Casual Leave&#10;Sick Leave&#10;Earned Leave"
@@ -781,7 +781,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                             <input
                               type="number"
                               value={field.max_size_mb || 10}
-                              onChange={(e) => handleUpdateField(index, { 
+                              onChange={(e) => handleUpdateField(index, {
                                 max_size_mb: parseFloat(e.target.value) || 10
                               })}
                               min="1"
@@ -796,7 +796,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                             <input
                               type="text"
                               value={(field.allowed_extensions || []).join(', ')}
-                              onChange={(e) => handleUpdateField(index, { 
+                              onChange={(e) => handleUpdateField(index, {
                                 allowed_extensions: e.target.value.split(',').map(ext => ext.trim()).filter(ext => ext)
                               })}
                               placeholder=".pdf, .docx, .jpg, .png"
@@ -909,7 +909,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                     checked={attendanceAction.change_status || false}
                     onChange={(e) => {
                       if (e.target.checked) {
-                        handleAttendanceActionChange({ 
+                        handleAttendanceActionChange({
                           change_status: true,
                           from_status: 'absent',
                           to_status: 'present',
@@ -988,12 +988,12 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                                 onChange={(e) => {
                                   const current = attendanceAction.apply_to_dates || [];
                                   if (e.target.checked) {
-                                    handleAttendanceActionChange({ 
-                                      apply_to_dates: [...current, field.name] 
+                                    handleAttendanceActionChange({
+                                      apply_to_dates: [...current, field.name]
                                     });
                                   } else {
-                                    handleAttendanceActionChange({ 
-                                      apply_to_dates: current.filter(f => f !== field.name) 
+                                    handleAttendanceActionChange({
+                                      apply_to_dates: current.filter(f => f !== field.name)
                                     });
                                   }
                                 }}
@@ -1040,9 +1040,9 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
 
                   <div className="mt-4 p-4 bg-green-50 rounded-lg">
                     <p className="text-sm text-green-900">
-                      <strong>Preview:</strong> When this request is approved, attendance records with status "{attendanceAction.from_status}" 
+                      <strong>Preview:</strong> When this request is approved, attendance records with status "{attendanceAction.from_status}"
                       will be changed to "{attendanceAction.to_status}" for dates from: {
-                        (attendanceAction.apply_to_dates || []).length > 0 
+                        (attendanceAction.apply_to_dates || []).length > 0
                           ? (attendanceAction.apply_to_dates || []).join(', ')
                           : 'None selected'
                       }

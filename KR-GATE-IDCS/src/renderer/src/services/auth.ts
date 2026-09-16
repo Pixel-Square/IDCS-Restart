@@ -31,7 +31,7 @@ export async function login(identifier: string, password: string): Promise<{ acc
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identifier, password }),
       }
-      
+
       const krGate = (window as any).krGate
       if (krGate && krGate.nativeFetch) {
         const nativeReq = {

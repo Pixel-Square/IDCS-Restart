@@ -838,7 +838,7 @@ export default function MarkEntryPage() {
   const arrowKeysIncDec = examInfo?.mark_manager?.arrow_keys !== false && !!examInfo?.mark_manager?.arrow_keys;
   type SheetCellPos = { row: number; col: number };
   const [sheetSelection, setSheetSelection] = useState<null | { anchor: SheetCellPos; focus: SheetCellPos; dragging: boolean }>(null);
-  
+
   const getCellPos = (opts: { studentId: string; fieldType: 'question' | 'mark'; qId?: string }): SheetCellPos | null => {
     const row = filteredStudentIndexById.get(opts.studentId);
     if (row == null) return null;
@@ -854,7 +854,7 @@ export default function MarkEntryPage() {
     if (col < 0 || col >= markColCount) return null;
     return { row, col };
   };
-  
+
   const getSelectionRange = () => {
     if (!sheetSelection) return null;
     const r1 = Math.min(sheetSelection.anchor.row, sheetSelection.focus.row);
@@ -863,13 +863,13 @@ export default function MarkEntryPage() {
     const c2 = Math.max(sheetSelection.anchor.col, sheetSelection.focus.col);
     return { r1, r2, c1, c2 };
   };
-  
+
   const isCellInSelection = (row: number, col: number) => {
     const range = getSelectionRange();
     if (!range) return false;
     return row >= range.r1 && row <= range.r2 && col >= range.c1 && col <= range.c2;
   };
-  
+
   const getCellValueString = (row: number, col: number) => {
     const student = filteredStudents[row];
     if (!student) return '';
@@ -886,24 +886,24 @@ export default function MarkEntryPage() {
     const v = (student as any)?.mark;
     return v == null ? '' : String(v);
   };
-  
+
   const startSelection = (pos: SheetCellPos, extend: boolean) => {
     setSheetSelection(prev => {
       if (extend && prev) return { ...prev, focus: pos, dragging: true };
       return { anchor: pos, focus: pos, dragging: true };
     });
   };
-  
+
   const extendSelection = (pos: SheetCellPos) => {
     setSheetSelection(prev => (prev ? { ...prev, focus: pos } : { anchor: pos, focus: pos, dragging: true }));
   };
-  
+
   useEffect(() => {
     const onUp = () => setSheetSelection(prev => (prev ? { ...prev, dragging: false } : prev));
     window.addEventListener('mouseup', onUp);
     return () => window.removeEventListener('mouseup', onUp);
   }, []);
-  
+
   const copySelectionToClipboard = async () => {
     const range = getSelectionRange();
     if (!range) return;
@@ -931,47 +931,47 @@ export default function MarkEntryPage() {
       document.body.removeChild(ta);
     }
   };
-  
+
   const clearSelectionValues = () => {
     const range = getSelectionRange();
     if (!range) return;
-  
+
     if (autoSaveTimeoutRef.current) {
       clearTimeout(autoSaveTimeoutRef.current);
       autoSaveTimeoutRef.current = null;
       setAutoSaveStatus('idle');
     }
-  
+
     setStudents(prev => {
       const updatesByStudentId = new Map<string, { nextCoMarks?: Record<string, number | null>; nextMark?: number | null }>();
-  
+
       for (let r = range.r1; r <= range.r2; r++) {
         const student = filteredStudents[r];
         if (!student) continue;
         if (student.is_absent) continue;
-  
+
         if (questions.length > 0) {
           const cur = (prev.find(s => s.id === student.id)?.co_marks) || student.co_marks || {};
           const nextCoMarks: Record<string, number | null> = { ...(cur as any) };
-  
+
           for (let c = range.c1; c <= range.c2; c++) {
             if (c >= questions.length) continue;
             const q = questions[c];
             if (!q) continue;
             delete nextCoMarks[q.id];
           }
-  
+
           updatesByStudentId.set(student.id, { nextCoMarks });
           continue;
         }
-  
+
         if (range.c1 <= 0 && range.c2 >= 0) {
           updatesByStudentId.set(student.id, { nextMark: null });
         }
       }
-  
+
       if (updatesByStudentId.size === 0) return prev;
-  
+
       return prev.map(s => {
         const u = updatesByStudentId.get(s.id);
         if (!u) return s;
@@ -999,7 +999,7 @@ export default function MarkEntryPage() {
         copySelectionToClipboard();
         return;
       }
-  
+
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
         if (!canImport) return;
@@ -1007,7 +1007,7 @@ export default function MarkEntryPage() {
         return;
       }
     }
-  
+
     if (arrowKeysIncDec) return; // default browser behavior: inc/dec
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault();
@@ -1269,7 +1269,7 @@ export default function MarkEntryPage() {
   const triggerAutoSave = async () => {
     // Clear existing timeout
     if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
-    
+
     // Set timeout to auto-save after 2 seconds
     autoSaveTimeoutRef.current = setTimeout(async () => {
       setAutoSaveStatus('saving');
@@ -1284,7 +1284,7 @@ export default function MarkEntryPage() {
           body: JSON.stringify({ marks: marksData, question_btls: latestBtls, publish: false }),
         });
         if (!response.ok) throw new Error('Auto-save failed');
-        
+
         setStudents(prev => prev.map(s => ({ ...s, saved: true })));
         setHasChanges(false);
         const now = new Date().toLocaleString();
@@ -1299,7 +1299,7 @@ export default function MarkEntryPage() {
             questionBtls: latestBtls,
           });
         }
-        
+
         // Show saved state for 2 seconds then revert to idle
         setAutoSaveStatus('saved');
         setTimeout(() => setAutoSaveStatus('idle'), 2000);
@@ -1963,7 +1963,7 @@ export default function MarkEntryPage() {
     if (!importPreview) return;
     // Apply imported data to students state
     const importMap = new Map(importPreview.students.map(s => [s.student_id, s]));
-    
+
     setStudents(prev => prev.map(student => {
       const imported = importMap.get(student.id);
       if (!imported) return student;
@@ -1974,7 +1974,7 @@ export default function MarkEntryPage() {
           ? Object.values(normalizedCoMarks).reduce((sum, value) => sum + (typeof value === 'number' ? value : 0), 0)
           : null
       );
-      
+
       return {
         ...student,
         mark: derivedMark,
@@ -2365,12 +2365,12 @@ export default function MarkEntryPage() {
                   animation: slideOutSave 0.3s cubic-bezier(0.4, 0, 0.6, 1);
                 }
               `}</style>
-              
+
               {/* Publish Control Timers (Toolbar label) */}
               {(openRemainingSec > 0 || dueRemainingSec !== null || (pc?.edit_window_until_publish || (editWindowRemainingSec !== null && editWindowRemainingSec > 0))) && (
                 <div className={`relative flex items-center gap-2 mr-2 text-xs font-medium border px-3 py-1.5 rounded-lg shadow-sm overflow-hidden ${
-                  openRemainingSec > 0 
-                    ? 'bg-blue-50 border-blue-200 text-blue-700' 
+                  openRemainingSec > 0
+                    ? 'bg-blue-50 border-blue-200 text-blue-700'
                     : dueRemainingSec !== null && dueRemainingSec > 0
                       ? (publishControlEnabled ? 'bg-red-50 border-red-200 text-red-700' : 'bg-orange-50 border-orange-200 text-orange-800')
                       : dueRemainingSec !== null && dueRemainingSec <= 0
@@ -2389,7 +2389,7 @@ export default function MarkEntryPage() {
                         <span>Opens in <span className="font-bold">{formatRemaining(openRemainingSec)}</span></span>
                       </>
                     )}
-                    
+
                     {openRemainingSec <= 0 && dueRemainingSec !== null && (
                       <>
                         <Clock className="w-3.5 h-3.5 animate-pulse" />
@@ -2399,14 +2399,14 @@ export default function MarkEntryPage() {
                         {dueRemainingSec > 0 && !pc?.auto_publish_on_due && !publishControlEnabled && <span>Closes in <span className="font-bold">{formatRemaining(dueRemainingSec)}</span></span>}
                       </>
                     )}
-                    
+
                     {/* Edit Window Timer (if applicable) */}
                     {openRemainingSec <= 0 && (pc?.edit_window_until_publish || (editWindowRemainingSec !== null && editWindowRemainingSec > 0)) && (
                       <>
                         <div className="w-px h-3 bg-current opacity-30 mx-1" />
                         <Edit2 className="w-3.5 h-3.5 animate-pulse" />
                         <span>
-                          {pc?.edit_window_until_publish 
+                          {pc?.edit_window_until_publish
                             ? <>Edit window: <span className="font-bold">until Publish</span></>
                             : <>Edit window ends in <span className="font-bold">{formatRemaining(editWindowRemainingSec || 0)}</span></>}
                         </span>
@@ -2519,13 +2519,13 @@ export default function MarkEntryPage() {
                 </div>
 
                 <div className="px-8 py-5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-3">
-                  <button 
+                  <button
                     onClick={() => closePublishModal(false)}
                     className="px-5 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-100 transition-colors"
                   >
                     Cancel
                   </button>
-                  <button 
+                  <button
                     onClick={confirmPublish}
                     className="px-5 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-emerald-700 to-emerald-600 rounded-xl hover:from-emerald-800 hover:to-emerald-700 transition-colors shadow-[0_10px_25px_-10px_rgba(5,150,105,0.9)]"
                   >
@@ -2535,7 +2535,7 @@ export default function MarkEntryPage() {
 
               </>
             )}
-            
+
             {publishStatus === 'loading' && (
               <PublishProgressPanel
                 duration={publishProgressDuration}
@@ -2552,7 +2552,7 @@ export default function MarkEntryPage() {
                 onContinue={continuePublish}
               />
             )}
-            
+
             {publishStatus === 'success' && (
               <PublishSuccessPanel
                 onClose={() => closePublishModal(false)}
@@ -2783,7 +2783,7 @@ export default function MarkEntryPage() {
                                   : active
                                     ? 'bg-white text-yellow-500 border-2 border-yellow-400'
                                     : 'bg-white text-gray-400 border-2 border-gray-200';
-                                
+
                                 return (
                                   <div key={s.key} className="relative z-10 flex flex-col items-center w-24">
                                     <div

@@ -438,7 +438,7 @@ export default function AttendancePage() {
         doc.text('S.No', groupX + 1.5, tableTop + 4.7);
         doc.text('REG No', groupX + snoWidth + 1.5, tableTop + 4.7);
         doc.text('Attendance', groupX + snoWidth + regWidth + 0.5, tableTop + 3.2);
-        
+
         for (let r = 0; r < rowsInGroup; r += 1) {
           const y = tableTop + headerHeight + r * rowHeight;
           doc.rect(groupX, y, groupWidth, rowHeight);
@@ -458,13 +458,13 @@ export default function AttendancePage() {
         }
       }
 
-      
+
       doc.setFontSize(9);
       doc.setFont('helvetica', 'bold');
       const blockPresent = presentRows.length;
       const blockAbsent = block.rows.length - presentRows.length;
       doc.text(`Total no. of registered students: ${block.rows.length} (Present: ${blockPresent}, Absent: ${blockAbsent})`, margin, tableTop - 2);
-      
+
 
       // Bottom info boxes
       const boxWidth = (pageWidth - margin * 2) / 4;

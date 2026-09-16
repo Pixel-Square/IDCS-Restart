@@ -241,7 +241,7 @@ def google_sheet_links(request):
         for exam_assignment in sorted(section.exam_assignments.all(), key=lambda item: (getattr(item, 'exam', '') or '').lower()):
             assignment_name = exam_assignment.exam_display_name or exam_assignment.exam or 'Assignment'
             assignment_config = section_exam_configs.get(str(exam_assignment.id), {}) if isinstance(section_exam_configs.get(str(exam_assignment.id), {}), dict) else {}
-            
+
             # Apply fallback mapping if missing
             if not assignment_config or not assignment_config.get('regNoColumn'):
                 c_type_name_upper = str(class_type_name or 'THEORY').strip().upper()
@@ -273,15 +273,15 @@ def google_sheet_links(request):
                             p_marks = resolved_pattern.get('marks') or []
                             p_enabled = resolved_pattern.get('enabled') or [True] * len(p_titles)
                             # Also check nested questions array
-                            if not p_titles and isinstance(resolved_pattern.get('questions'), list):
+                            if isinstance(resolved_pattern.get('questions'), list) and resolved_pattern['questions']:
                                 for qi, q in enumerate(resolved_pattern['questions']):
                                     if isinstance(q, dict):
                                         mm_questions.append({
-                                            'id': str(q.get('id') or f'q{qi+1}'),
+                                            'id': str(q.get('id') or f'q{qi}'),
                                             'title': str(q.get('question_number') or q.get('title') or f'Q{qi+1}'),
                                             'max_marks': q.get('max_marks') or 0,
                                         })
-                            else:
+                            elif p_titles:
                                 for qi in range(len(p_titles)):
                                     if qi < len(p_enabled) and not p_enabled[qi]:
                                         continue
@@ -469,59 +469,7 @@ def _get_qp_specs_for_exam(ea):
         cos = user_pattern.get('cos', [])
         btls = user_pattern.get('btls', [])
         enabled = user_pattern.get('enabled', [])
-        for i in range(len(titles)):
-            if i < len(enabled) and not enabled[i]:
-                continue
-            questions.append({
-                'id': f'q{i}',
-                'title': titles[i] if i < len(titles) else str(i + 1),
-                'max_marks': marks_list[i] if i < len(marks_list) else 0,
-                'co': cos[i] if i < len(cos) else 0,
-                'btl': btls[i] if i < len(btls) else None,
-            })
-    else:
-        qp_type = ''
-        try:
-            qp_type = (ea.section.course.question_paper_type or '').strip()
-        except Exception:
-            qp_type = ''
-        if not qp_type:
-            qp_type = (getattr(cr, 'question_paper_type', None) or getattr(es, 'question_paper_type', None) or '').strip()
-        if not qp_type:
-            qp_type = (ea.qp_type or '').strip() or (ea.exam or '').strip() or ''
-
-        exam_key = (ea.exam_display_name or ea.exam or '').strip()
-
-        ct = None
-        try:
-            ct = ea.section.course.class_type
-        except Exception:
-            ct = None
-
-        base_qs = AcV2QpPattern.objects.filter(qp_type=qp_type, is_active=True)
-        matched_pattern = None
-
-        if ct is not None:
-            scoped = base_qs.filter(class_type=ct)
-            if exam_key:
-                matched_pattern = scoped.filter(name__iexact=exam_key).order_by('-updated_at').first()
-            else:
-                matched_pattern = scoped.order_by('-updated_at').first()
-
-        if not matched_pattern:
-            global_qs = base_qs.filter(class_type__isnull=True)
-            if exam_key:
-                matched_pattern = global_qs.filter(name__iexact=exam_key).order_by('-updated_at').first()
-            else:
-                matched_pattern = global_qs.order_by('-updated_at').first()
-
-        if matched_pattern and isinstance(matched_pattern.pattern, dict):
-            p = matched_pattern.pattern
-            titles = p.get('titles', [])
-            marks_list = p.get('marks', [])
-            cos = p.get('cos', [])
-            btls = p.get('btls', [])
-            enabled = p.get('enabled', [])
+        if titles:
             for i in range(len(titles)):
                 if i < len(enabled) and not enabled[i]:
                     continue
@@ -532,6 +480,47 @@ def _get_qp_specs_for_exam(ea):
                     'co': cos[i] if i < len(cos) else 0,
                     'btl': btls[i] if i < len(btls) else None,
                 })
+        elif isinstance(user_pattern.get('questions'), list):
+            for i, q in enumerate(user_pattern['questions']):
+                if isinstance(q, dict):
+                    questions.append({
+                        'id': str(q.get('id') or f'q{i}'),
+                        'title': str(q.get('question_number') or q.get('title') or f'Q{i + 1}'),
+                        'max_marks': q.get('max_marks') or 0,
+                        'co': q.get('co_number') or q.get('co') or 0,
+                        'btl': q.get('btl_level') or q.get('btl') or None,
+                    })
+
+    if not questions:
+        # Use ea.get_qp_pattern() which already handles mark_manager, custom patterns, and AcV2QpPattern lookup
+        resolved_pattern = ea.get_qp_pattern()
+        if isinstance(resolved_pattern, dict):
+            if isinstance(resolved_pattern.get('questions'), list) and resolved_pattern['questions']:
+                for i, q in enumerate(resolved_pattern['questions']):
+                    if isinstance(q, dict):
+                        questions.append({
+                            'id': str(q.get('id') or f'q{i}'),
+                            'title': str(q.get('question_number') or q.get('title') or f'Q{i + 1}'),
+                            'max_marks': q.get('max_marks') or 0,
+                            'co': q.get('co_number') or q.get('co') or 0,
+                            'btl': q.get('btl_level') or q.get('btl') or None,
+                        })
+            elif resolved_pattern.get('titles'):
+                titles = resolved_pattern.get('titles', [])
+                marks_list = resolved_pattern.get('marks', [])
+                cos = resolved_pattern.get('cos', [])
+                btls = resolved_pattern.get('btls', [])
+                enabled = resolved_pattern.get('enabled', [])
+                for i in range(len(titles)):
+                    if i < len(enabled) and not enabled[i]:
+                        continue
+                    questions.append({
+                        'id': f'q{i}',
+                        'title': titles[i] if i < len(titles) else str(i + 1),
+                        'max_marks': marks_list[i] if i < len(marks_list) else 0,
+                        'co': cos[i] if i < len(cos) else 0,
+                        'btl': btls[i] if i < len(btls) else None,
+                    })
     return questions
 
 
@@ -602,6 +591,32 @@ def google_sheets_sync_from_sheet(request):
         return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+def _resolve_google_sheet_exam_config(ea, lk):
+    if not lk:
+        return {}
+    exam_cfgs = lk.exam_configs if isinstance(lk.exam_configs, dict) else {}
+    cfg = exam_cfgs.get(str(ea.id))
+    if cfg and isinstance(cfg, dict) and (cfg.get('regNoColumn') or cfg.get('questionColumns')):
+        return cfg
+    # Fallback to matching (classType, qpType, examName) across links
+    c_type = getattr(getattr(ea.section, 'course', None), 'class_type', None)
+    c_type_code = str(getattr(c_type, 'name', 'THEORY') or 'THEORY').strip().upper()
+    qp_type = str(getattr(ea, 'qp_type', '') or '').strip().upper()
+    assignment_name = str(ea.exam_display_name or ea.exam or 'Assignment').strip().lower()
+    for other_lk in AcV2GoogleSheetLink.objects.filter(is_active=True).exclude(exam_configs__isnull=True):
+        other_cfgs = other_lk.exam_configs if isinstance(other_lk.exam_configs, dict) else {}
+        for other_ea in other_lk.section.exam_assignments.all():
+            other_cfg = other_cfgs.get(str(other_ea.id))
+            if other_cfg and isinstance(other_cfg, dict) and (other_cfg.get('regNoColumn') or other_cfg.get('questionColumns')):
+                other_ctype = getattr(getattr(other_lk.section, 'course', None), 'class_type', None)
+                other_ctype_code = str(getattr(other_ctype, 'name', 'THEORY') or 'THEORY').strip().upper()
+                other_qptype = str(getattr(other_ea, 'qp_type', '') or '').strip().upper()
+                other_assign_name = str(other_ea.exam_display_name or other_ea.exam or 'Assignment').strip().lower()
+                if (other_ctype_code, other_qptype, other_assign_name) == (c_type_code, qp_type, assignment_name):
+                    return other_cfg
+    return cfg if isinstance(cfg, dict) else {}
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def google_sheets_pull_live(request):
@@ -620,8 +635,7 @@ def google_sheets_pull_live(request):
         if not link or not link.spreadsheet_id:
             return Response({'detail': 'No linked Google Sheet found for this section.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        exam_configs = link.exam_configs if isinstance(link.exam_configs, dict) else {}
-        exam_config = exam_configs.get(str(exam_assignment.id), {}) if isinstance(exam_configs.get(str(exam_assignment.id), {}), dict) else {}
+        exam_config = _resolve_google_sheet_exam_config(exam_assignment, link)
         sheet_name = str(exam_config.get('sheetTab') or exam_assignment.exam_display_name or exam_assignment.exam or 'Marks').strip()
         result = sync_google_sheet_to_backend(
             exam_assignment=exam_assignment,
@@ -637,10 +651,9 @@ def google_sheets_pull_live(request):
     if not link or not link.spreadsheet_id:
         return Response({'detail': 'No linked Google Sheet found for this section.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    exam_configs = link.exam_configs if isinstance(link.exam_configs, dict) else {}
     results = []
     for exam_assignment in section.exam_assignments.all():
-        exam_config = exam_configs.get(str(exam_assignment.id), {}) if isinstance(exam_configs.get(str(exam_assignment.id), {}), dict) else {}
+        exam_config = _resolve_exam_config(exam_assignment, link)
         sheet_name = str(exam_config.get('sheetTab') or exam_assignment.exam_display_name or exam_assignment.exam or 'Marks').strip()
         results.append(sync_google_sheet_to_backend(
             exam_assignment=exam_assignment,
@@ -681,9 +694,30 @@ def google_sheets_inject_script(request):
     # Build per-exam config list for the Apps Script
     exam_configs_for_script: list[dict] = []
     section_exam_configs = link.exam_configs if isinstance(link.exam_configs, dict) else {}
+
+    # Pre-build fallback map
+    fallback_map = {}
+    for other_lk in AcV2GoogleSheetLink.objects.filter(is_active=True).exclude(exam_configs__isnull=True):
+        other_cfgs = other_lk.exam_configs if isinstance(other_lk.exam_configs, dict) else {}
+        for other_ea in other_lk.section.exam_assignments.all():
+            other_cfg = other_cfgs.get(str(other_ea.id))
+            if other_cfg and isinstance(other_cfg, dict) and other_cfg.get('regNoColumn'):
+                other_ctype = getattr(getattr(other_lk.section, 'course', None), 'class_type', None)
+                other_ctype_code = str(getattr(other_ctype, 'name', 'THEORY') or 'THEORY').strip().upper()
+                other_qptype = str(getattr(other_ea, 'qp_type', '') or '').strip().upper()
+                other_assign_name = str(other_ea.exam_display_name or other_ea.exam or 'Assignment').strip().lower()
+                fallback_map[(other_ctype_code, other_qptype, other_assign_name)] = other_cfg
+
     for ea in section.exam_assignments.order_by('exam'):
         ea_config = section_exam_configs.get(str(ea.id), {}) if isinstance(section_exam_configs.get(str(ea.id), {}), dict) else {}
         assignment_name = ea.exam_display_name or ea.exam or 'Assignment'
+        if not ea_config or not ea_config.get('regNoColumn'):
+            c_type = getattr(getattr(ea.section, 'course', None), 'class_type', None)
+            c_type_code = str(getattr(c_type, 'name', 'THEORY') or 'THEORY').strip().upper()
+            qp_type = str(getattr(ea, 'qp_type', '') or '').strip().upper()
+            assign_name_lower = str(assignment_name).strip().lower()
+            ea_config = fallback_map.get((c_type_code, qp_type, assign_name_lower), ea_config)
+
         exam_configs_for_script.append({
             'examId': str(ea.id),
             'sheetTab': ea_config.get('sheetTab') or assignment_name,
@@ -756,6 +790,8 @@ def google_sheets_webhook(request):
         qtitle = str(q.get('title') or '').strip()
         title_to_qid[qid] = qid
         title_to_qid[qid.lower()] = qid
+        title_to_qid[f"q_{index}"] = qid
+        title_to_qid[f"q{index}"] = qid
         if qtitle:
             title_to_qid[qtitle] = qid
             title_to_qid[qtitle.lower()] = qid
@@ -813,7 +849,7 @@ def google_sheets_webhook(request):
             ])
         except Exception:
             mark_obj.save(update_fields=['reg_no', 'student_name', 'question_marks'])
-            
+
         from .models import AcV2DraftMark
         AcV2DraftMark.objects.update_or_create(
             exam_assignment=exam_assignment,
@@ -867,7 +903,7 @@ def google_sheets_create(request):
         course_code = getattr(course, 'subject_code', '') or getattr(course, 'subject_name', '') or 'Course'
         course_name = getattr(course, 'subject_name', '') or 'Course'
         title = f"{course_code} - {course_name} Marks Entry"
-        
+
         assignments = []
         assignment_mapping = {}
         seen_names = {}
@@ -907,7 +943,7 @@ def google_sheets_create(request):
                     details.append(f"CO{q['co']}")
                 if q.get('btl'):
                     details.append(f"{q['btl']}")
-                
+
                 if details:
                     header_text += f" ({', '.join(details)})"
                 headers_row.append(header_text)
@@ -955,11 +991,11 @@ def google_sheets_create(request):
                         except Exception:
                             pass
                     row.append(float(val) if val is not None else '')
-                
+
                 row.append(mark_val if mark_val is not None else '')
                 row.append('Yes' if is_absent_val else 'No')
                 rows.append(row)
-            
+
             sheet_data[unique_name] = rows
 
         # Extract the target folder ID from the configuration and pass it explicitly
@@ -1235,7 +1271,7 @@ def _send_student_publish_notifications(
     if not recipients:
         logger.debug(f'No recipients selected for notifications (base={len(base_recipients)}, edited={len(edited_recipients)})')
         return
-    
+
     logger.info(f'Sending notifications to {len(recipients)} students: first_publish={bool(base_recipients)}, edited_only={bool(edited_recipients)}')
 
     # Course/exam context
@@ -1336,7 +1372,7 @@ def _send_student_publish_notifications(
         except Exception as e:
             logger.error(f'Failed to send notification to {reg_no} ({mobile}): {e}')
             continue
-    
+
     logger.info(f'Publish notifications: sent {sent_count}/{len(recipients)} messages')
 
 
@@ -1569,7 +1605,7 @@ def student_my_courses(request):
         from academics.models import StudentSectionAssignment
         ta = getattr(sec, 'teaching_assignment', None)
         ta_section_id = getattr(ta, 'section_id', None) if ta else None
-        
+
         sec_student_ids = []
         if ta_section_id:
             sec_student_ids = list(
@@ -1708,12 +1744,12 @@ def _compute_students_entered_weight_pct(student_ids, exam_ids):
     try:
         from academics.models import StudentProfile
         from .models import AcV2StudentMark, AcV2ExamAssignment, AcV2InternalMark
-        
+
         profiles = {
-            sp.id: sp 
+            sp.id: sp
             for sp in StudentProfile.objects.filter(id__in=student_ids).select_related('user')
         }
-        
+
         if not exam_ids or not student_ids:
             return []
         # Group exams by section_id
@@ -1767,7 +1803,7 @@ def _compute_students_entered_weight_pct(student_ids, exam_ids):
                 # Match exam assignment to its ClassType config
                 ex_name = re.sub(r'[^a-z0-9]+', '', str(getattr(ex, 'exam_display_name', '') or getattr(ex, 'exam', '') or '').strip().lower())
                 cfg = config_map.get(ex_name, {})
-                
+
                 # Determine covered COs
                 co_count = 5
                 try:
@@ -1838,11 +1874,11 @@ def _compute_students_entered_weight_pct(student_ids, exam_ids):
                     weight = _to_float(getattr(ea, 'weight', 0) or 0)
                     max_marks = _to_float(getattr(ea, 'max_marks', 0) or 0)
                     obtained = None if sm.total_mark is None else _to_float(sm.total_mark)
-                    
+
                     if (not sm.is_absent) and obtained is not None and max_marks > 0:
                         obtained_weight += (obtained / max_marks) * weight
                         max_weight += weight
-                
+
                 if max_weight > 0:
                     # Normalize the obtained weight relative to the computed section max weight
                     normalized_obt = (obtained_weight / max_weight) * sec_max_weight
@@ -1873,20 +1909,20 @@ def _compute_students_entered_weight_pct(student_ids, exam_ids):
                 pcts.append((obt / mx) * 100.0)
 
         avg_pct = round(float(sum(pcts) / len(pcts)), 2) if pcts else None
-        
+
         results.append({
             'student_id': sid,
             'student_name': name,
             'average_pct': avg_pct,
         })
-        
+
     # Sort descending
     results.sort(key=lambda x: (x['average_pct'] is None, -float(x['average_pct'] or 0.0)))
-    
+
     # Assign ranks
     for idx, item in enumerate(results):
         item['rank'] = idx + 1
-        
+
     return results
 
 
@@ -1914,7 +1950,7 @@ def student_my_class_leaderboard(request):
         TeachingAssignment.objects.filter(is_active=True, section_id__in=section_ids)
         .values_list('id', flat=True)
     )
-    
+
     acv2_section_ids = list(
         AcV2Section.objects.filter(teaching_assignment_id__in=ta_ids)
         .values_list('id', flat=True)
@@ -2126,17 +2162,17 @@ class AcV2SemesterConfigViewSet(viewsets.ModelViewSet):
     queryset = AcV2SemesterConfig.objects.all()
     serializer_class = AcV2SemesterConfigSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
         qs = super().get_queryset()
         semester_id = self.request.query_params.get('semester')
         if semester_id:
             qs = qs.filter(semester_id=semester_id)
         return qs.select_related('semester')
-    
+
     def perform_create(self, serializer):
         serializer.save(updated_by=self.request.user)
-    
+
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)
 
@@ -2154,7 +2190,7 @@ class AcV2SemesterGroupViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)
-    
+
     @action(detail=True, methods=['POST'], permission_classes=[IsAuthenticated])
     def reset_requests(self, request, pk=None):
         """
@@ -2172,11 +2208,11 @@ class AcV2SemesterGroupViewSet(viewsets.ModelViewSet):
         semester_ids = list(group.semesters.values_list('id', flat=True))
         if not semester_ids:
             return Response({'detail': 'Group has no semesters assigned.'}, status=400)
-        
+
         # Verify user is staff/admin
         if not _has_admin_bypass_access(request.user):
             return Response({'detail': 'Permission denied'}, status=403)
-        
+
         # Verify password
         password = request.data.get('password', '')
         if not password or not request.user.check_password(password):
@@ -2184,7 +2220,7 @@ class AcV2SemesterGroupViewSet(viewsets.ModelViewSet):
                 {'detail': 'Incorrect password. Action cancelled.'},
                 status=400
             )
-        
+
         try:
             exams = AcV2ExamAssignment.objects.filter(
                 section__course__semester_id__in=semester_ids
@@ -2205,7 +2241,7 @@ class AcV2SemesterGroupViewSet(viewsets.ModelViewSet):
             with transaction.atomic():
                 cancelled_count = pending_qs.update(status='REJECTED')
                 print(f"[RESET_REQUESTS] Rejected {cancelled_count} requests")
-                
+
                 if affected_exam_ids:
                     flag_clear_count = AcV2ExamAssignment.objects.filter(
                         id__in=affected_exam_ids
@@ -2231,7 +2267,7 @@ class AcV2SemesterGroupViewSet(viewsets.ModelViewSet):
                 'cancelled_count': cancelled_count,
                 'reopened_count': reopened_count,
             }, status=200)
-            
+
         except Exception as e:
             print(f"[RESET_REQUESTS] ERROR: {str(e)}")
             import traceback
@@ -2240,7 +2276,7 @@ class AcV2SemesterGroupViewSet(viewsets.ModelViewSet):
                 {'detail': f'Reset failed: {str(e)}'},
                 status=500
             )
-    
+
     @action(detail=True, methods=['POST'], permission_classes=[IsAuthenticated])
     def reset_marks(self, request, pk=None):
         """
@@ -2258,11 +2294,11 @@ class AcV2SemesterGroupViewSet(viewsets.ModelViewSet):
         semester_ids = list(group.semesters.values_list('id', flat=True))
         if not semester_ids:
             return Response({'detail': 'Group has no semesters assigned.'}, status=400)
-        
+
         # Verify user is staff/admin
         if not _has_admin_bypass_access(request.user):
             return Response({'detail': 'Permission denied'}, status=403)
-        
+
         # Verify password
         password = request.data.get('password', '')
         if not password or not request.user.check_password(password):
@@ -2270,13 +2306,13 @@ class AcV2SemesterGroupViewSet(viewsets.ModelViewSet):
                 {'detail': 'Incorrect password. Action cancelled.'},
                 status=400
             )
-        
+
         try:
             exams = AcV2ExamAssignment.objects.filter(
                 section__course__semester_id__in=semester_ids
             )
             print(f"[RESET_MARKS] Found {exams.count()} exams for group {group.id}")
-            
+
             affected_count = 0
             with transaction.atomic():
                 for exam in exams:
@@ -2287,28 +2323,28 @@ class AcV2SemesterGroupViewSet(viewsets.ModelViewSet):
                     exam.edit_window_until_publish = False
                     exam.has_pending_edit_request = False
                     exam.save(update_fields=[
-                        'draft_data', 'published_data', 'status', 
-                        'edit_window_until', 'edit_window_until_publish', 
+                        'draft_data', 'published_data', 'status',
+                        'edit_window_until', 'edit_window_until_publish',
                         'has_pending_edit_request'
                     ])
-                    
+
                     AcV2DraftMark.objects.filter(exam_assignment=exam).delete()
                     AcV2StudentMark.objects.filter(exam_assignment=exam).delete()
-                    
+
                     AcV2EditRequest.objects.filter(
                         exam_assignment=exam,
                         status__in=['PENDING', 'HOD_PENDING', 'IQAC_PENDING']
                     ).update(status='REJECTED')
-                    
+
                     affected_count += 1
-            
+
             print(f"[RESET_MARKS] Transaction committed successfully, affected: {affected_count}")
             return Response({
                 'status': 'success',
                 'message': f'Reset marks for {affected_count} exam assignments',
                 'affected_count': affected_count
             }, status=200)
-            
+
         except Exception as e:
             print(f"[RESET_MARKS] ERROR: {str(e)}")
             import traceback
@@ -2398,7 +2434,7 @@ class AcV2VersionViewSet(viewsets.ModelViewSet):
         name = self.request.query_params.get('name')
         if name:
             qs = qs.filter(name__icontains=name)
-        
+
         is_active_param = self.request.query_params.get('is_active')
         if is_active_param in ('true', 'True', '1'):
             qs = qs.filter(is_active=True)
@@ -2460,7 +2496,7 @@ class AcV2ClassTypeViewSet(viewsets.ModelViewSet):
     queryset = AcV2ClassType.objects.filter(is_active=True)
     serializer_class = AcV2ClassTypeSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
         qs = super().get_queryset()
         college_id = self.request.query_params.get('college')
@@ -2471,11 +2507,11 @@ class AcV2ClassTypeViewSet(viewsets.ModelViewSet):
             if version:
                 qs = qs.filter(version=version)
         return qs.order_by('name')
-    
+
     def perform_create(self, serializer):
         version = _resolve_academic_v2_version(self.request)
         serializer.save(updated_by=self.request.user, version=version)
-    
+
     def perform_update(self, serializer):
         layout = self.request.data.get('coattainment_layout')
         instance = serializer.save(updated_by=self.request.user)
@@ -2585,7 +2621,7 @@ class AcV2ClassTypeViewSet(viewsets.ModelViewSet):
         except Exception:
             # Never block saving class types due to CQI sync problems.
             pass
-    
+
     def perform_destroy(self, instance):
         # Soft delete
         instance.is_active = False
@@ -2733,7 +2769,7 @@ class AcV2QpTypeViewSet(viewsets.ModelViewSet):
     queryset = AcV2QpType.objects.filter(is_active=True)
     serializer_class = AcV2QpTypeSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
         qs = super().get_queryset()
         college_id = self.request.query_params.get('college')
@@ -2744,14 +2780,14 @@ class AcV2QpTypeViewSet(viewsets.ModelViewSet):
             if version:
                 qs = qs.filter(Q(version=version) | Q(version__isnull=True))
         return qs.order_by('name')
-    
+
     def perform_create(self, serializer):
         version = _resolve_academic_v2_version(self.request)
         serializer.save(updated_by=self.request.user, version=version)
-    
+
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)
-    
+
     def perform_destroy(self, instance):
         # Soft delete
         instance.is_active = False
@@ -2798,13 +2834,13 @@ class AcV2QpPatternViewSet(viewsets.ModelViewSet):
     queryset = AcV2QpPattern.objects.filter(is_active=True)
     serializer_class = AcV2QpPatternSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
         qs = super().get_queryset()
         qp_type = self.request.query_params.get('qp_type')
         class_type_id = self.request.query_params.get('class_type')
         batch_id = self.request.query_params.get('batch')
-        
+
         if qp_type:
             qs = qs.filter(qp_type=qp_type)
         if class_type_id:
@@ -2816,14 +2852,14 @@ class AcV2QpPatternViewSet(viewsets.ModelViewSet):
             version = _resolve_academic_v2_version(self.request)
             if version:
                 qs = qs.filter(version=version)
-        
+
         return qs.select_related('class_type', 'batch')
-    
+
     def perform_create(self, serializer):
         version = _resolve_academic_v2_version(self.request)
         qp_pattern = serializer.save(updated_by=self.request.user, version=version)
         self._sync_qp_assignment_from_pattern(qp_pattern)
-    
+
     def perform_update(self, serializer):
         qp_pattern = serializer.save(updated_by=self.request.user)
         self._sync_qp_assignment_from_pattern(qp_pattern)
@@ -2895,7 +2931,7 @@ class AcV2CourseViewSet(viewsets.ModelViewSet):
     queryset = AcV2Course.objects.all()
     serializer_class = AcV2CourseSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
         qs = super().get_queryset()
         semester_id = self.request.query_params.get('semester')
@@ -2908,17 +2944,17 @@ class AcV2SectionViewSet(viewsets.ModelViewSet):
     queryset = AcV2Section.objects.all()
     serializer_class = AcV2SectionSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
         qs = super().get_queryset()
         course_id = self.request.query_params.get('course')
         faculty_id = self.request.query_params.get('faculty')
-        
+
         if course_id:
             qs = qs.filter(course_id=course_id)
         if faculty_id:
             qs = qs.filter(faculty_user_id=faculty_id)
-        
+
         return qs.select_related('course', 'faculty_user', 'teaching_assignment')
 
 
@@ -2930,33 +2966,33 @@ class AcV2ExamAssignmentViewSet(viewsets.ModelViewSet):
     queryset = AcV2ExamAssignment.objects.all()
     serializer_class = AcV2ExamAssignmentSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
         qs = super().get_queryset()
         section_id = self.request.query_params.get('section')
         course_id = self.request.query_params.get('course')
         status_filter = self.request.query_params.get('status')
-        
+
         if section_id:
             qs = qs.filter(section_id=section_id)
         if course_id:
             qs = qs.filter(section__course_id=course_id)
         if status_filter:
             qs = qs.filter(status=status_filter)
-        
+
         return qs.select_related('section__course__class_type')
-    
+
     @action(detail=True, methods=['post'])
     def save_marks(self, request, pk=None):
         """Save draft marks."""
         exam = self.get_object()
-        
+
         if not _has_admin_bypass_access(request.user) and not exam.is_editable():
             return Response(
                 {'error': 'This exam is locked and cannot be edited.'},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
+
         marks_data = request.data.get('marks', {})
         question_btls = request.data.get('question_btls', None)
         marks_map = _save_draft_marks_for_exam(exam, marks_data)
@@ -2966,97 +3002,97 @@ class AcV2ExamAssignmentViewSet(viewsets.ModelViewSet):
         draft['marks'] = marks_map
         if question_btls is not None:
             draft['question_btls'] = question_btls
-        
+
         with transaction.atomic():
             exam.draft_data = draft
             exam.last_saved_at = timezone.now()
             exam.last_saved_by = request.user
             exam.save(update_fields=['draft_data', 'last_saved_at', 'last_saved_by'])
-        
+
         return Response({
             'success': True,
             'last_saved_at': exam.last_saved_at.isoformat(),
         })
-    
+
     @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):
         """Publish marks."""
         exam = self.get_object()
-        
+
         if not _has_admin_bypass_access(request.user) and not exam.is_editable():
             return Response(
                 {'error': 'This exam is locked and cannot be edited.'},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
+
         semester_config = exam.get_semester_config()
-        
+
         with transaction.atomic():
             exam.published_data = exam.draft_data
             exam.published_at = timezone.now()
             exam.published_by = request.user
-            
+
             # Set status based on publish control
             if semester_config and semester_config.publish_control_enabled:
                 exam.status = 'PUBLISHED'
             else:
                 exam.status = 'DRAFT'  # Keep as draft if no publish control
-            
+
             exam.save()
 
             # Keep materialized student marks in sync with published snapshot.
             published_marks = exam.published_data.get('marks', {}) if isinstance(exam.published_data, dict) else {}
             if isinstance(published_marks, dict) and published_marks:
                 _materialize_student_marks_from_map(exam, published_marks)
-            
+
             # Recompute internal marks
             compute_section_internal_marks(exam.section)
-        
+
         return Response({
             'success': True,
             'status': exam.status,
             'published_at': exam.published_at.isoformat(),
         })
-    
+
     @action(detail=True, methods=['post'])
     def request_edit(self, request, pk=None):
         """Request edit access for published exam."""
         exam = self.get_object()
         reason = request.data.get('reason', '')
-        
+
         if not reason:
             return Response(
                 {'error': 'Reason is required.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         result = create_edit_request(exam, request.user, reason)
-        
+
         if result['success']:
             return Response(result)
         else:
             return Response(result, status=status.HTTP_400_BAD_REQUEST)
-    
+
     @action(detail=True, methods=['post'])
     def reset_marks(self, request, pk=None):
         """Reset all marks for this exam."""
         exam = self.get_object()
-        
+
         if not exam.is_editable():
             return Response(
                 {'error': 'This exam is locked and cannot be edited.'},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
+
         with transaction.atomic():
             exam.draft_data = {}
             exam.last_saved_at = timezone.now()
             exam.last_saved_by = request.user
             exam.save(update_fields=['draft_data', 'last_saved_at', 'last_saved_by'])
-            
+
             # Delete student marks
             AcV2StudentMark.objects.filter(exam_assignment=exam).delete()
-        
+
         return Response({'success': True})
 
 
@@ -3068,42 +3104,42 @@ class AcV2StudentMarkViewSet(viewsets.ModelViewSet):
     queryset = AcV2StudentMark.objects.all()
     serializer_class = AcV2StudentMarkSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
         qs = super().get_queryset()
         exam_id = self.request.query_params.get('exam_assignment')
         if exam_id:
             qs = qs.filter(exam_assignment_id=exam_id)
         return qs.select_related('exam_assignment', 'student')
-    
+
     @action(detail=False, methods=['post'])
     def bulk_save(self, request):
         """Bulk save student marks."""
         exam_id = request.data.get('exam_assignment')
         marks_list = request.data.get('marks', [])
-        
+
         if not exam_id:
             return Response(
                 {'error': 'exam_assignment is required.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         exam = get_object_or_404(AcV2ExamAssignment, id=exam_id)
-        
+
         if not exam.is_editable():
             return Response(
                 {'error': 'This exam is locked.'},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
+
         qp_pattern = exam.get_qp_pattern()
-        
+
         with transaction.atomic():
             for mark_data in marks_list:
                 student_id = mark_data.get('student_id')
                 if not student_id:
                     continue
-                
+
                 defaults = {
                     'reg_no': mark_data.get('reg_no', ''),
                     'student_name': mark_data.get('student_name', ''),
@@ -3112,18 +3148,18 @@ class AcV2StudentMarkViewSet(viewsets.ModelViewSet):
                     'is_exempted': mark_data.get('is_exempted', False),
                     'remarks': mark_data.get('remarks', ''),
                 }
-                
+
                 sm, created = AcV2StudentMark.objects.update_or_create(
                     exam_assignment=exam,
                     student_id=student_id,
                     defaults=defaults
                 )
-                
+
                 # Calculate CO marks and total
                 sm.calculate_co_marks(qp_pattern)
                 sm.calculate_total()
                 sm.save()
-            
+
             # Update draft data on exam
             exam.last_saved_at = timezone.now()
             exam.last_saved_by = request.user
@@ -3140,7 +3176,7 @@ class AcV2StudentMarkViewSet(viewsets.ModelViewSet):
                 )
             except GoogleSheetsServiceError:
                 pass
-        
+
         return Response({'success': True, 'count': len(marks_list)})
 
 
@@ -3152,12 +3188,12 @@ class AcV2EditRequestViewSet(viewsets.ModelViewSet):
     queryset = AcV2EditRequest.objects.all()
     serializer_class = AcV2EditRequestSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
         qs = super().get_queryset()
         status_filter = self.request.query_params.get('status')
         requested_by = self.request.query_params.get('requested_by')
-        
+
         if status_filter:
             qs = qs.filter(status=status_filter)
 
@@ -3275,7 +3311,7 @@ class AcV2EditRequestViewSet(viewsets.ModelViewSet):
             if role_u and role_u not in roles:
                 roles.append(role_u)
         return roles
-    
+
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
         """Approve edit request."""
@@ -3376,7 +3412,7 @@ class AcV2EditRequestViewSet(viewsets.ModelViewSet):
 
         edit_request.approve(request.user, window_minutes, notes)
         return Response({'success': True, 'status': edit_request.status, 'approved_until': edit_request.approved_until.isoformat() if edit_request.approved_until else None})
-    
+
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None):
         """Reject edit request."""
@@ -3393,7 +3429,7 @@ class AcV2EditRequestViewSet(viewsets.ModelViewSet):
         else:
             if not self._has_any_role(request.user, ['HOD', 'IQAC', 'ADMIN']):
                 return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
-        
+
         if edit_request.status not in ['PENDING', 'HOD_PENDING', 'IQAC_PENDING']:
             return Response(
                 {'error': 'This request cannot be rejected.'},
@@ -3477,12 +3513,12 @@ class AcV2CqiEditRequestViewSet(viewsets.ModelViewSet):
     queryset = AcV2CqiEditRequest.objects.all()
     serializer_class = AcV2CqiEditRequestSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
         qs = super().get_queryset()
         status_filter = self.request.query_params.get('status')
         requested_by = self.request.query_params.get('requested_by')
-        
+
         if status_filter:
             qs = qs.filter(status=status_filter)
 
@@ -3790,19 +3826,19 @@ class AcV2InternalMarkViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = AcV2InternalMark.objects.all()
     serializer_class = AcV2InternalMarkSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
         qs = super().get_queryset()
         section_id = self.request.query_params.get('section')
         course_id = self.request.query_params.get('course')
-        
+
         if section_id:
             qs = qs.filter(section_id=section_id)
         if course_id:
             qs = qs.filter(section__course_id=course_id)
-        
+
         return qs.select_related('section__course').order_by('reg_no')
-    
+
     @action(detail=False, methods=['post'])
     def recompute(self, request):
         """Recompute internal marks for a section."""
@@ -3812,10 +3848,10 @@ class AcV2InternalMarkViewSet(viewsets.ReadOnlyModelViewSet):
                 {'error': 'section is required.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         section = get_object_or_404(AcV2Section, id=section_id)
         results = compute_section_internal_marks(section)
-        
+
         return Response({
             'success': True,
             'count': len(results),
@@ -3830,22 +3866,22 @@ class AcV2UserPatternOverrideViewSet(viewsets.ModelViewSet):
     queryset = AcV2UserPatternOverride.objects.all()
     serializer_class = AcV2UserPatternOverrideSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
         qs = super().get_queryset()
         course_id = self.request.query_params.get('course')
         exam_type = self.request.query_params.get('exam_type')
-        
+
         # Only show user's own overrides
         qs = qs.filter(created_by=self.request.user)
-        
+
         if course_id:
             qs = qs.filter(course_id=course_id)
         if exam_type:
             qs = qs.filter(exam_type=exam_type)
-        
+
         return qs
-    
+
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
 
@@ -3862,16 +3898,16 @@ def course_internal_summary(request, course_id):
     Shows class type, exam assignments, CO coverage, weight matrix.
     """
     course = get_object_or_404(AcV2Course, id=course_id)
-    
+
     # Get class type info
     class_type = course.class_type
     class_type_data = None
     if class_type:
         class_type_data = AcV2ClassTypeSerializer(class_type).data
-    
+
     # Get all sections for this course
     sections = course.sections.all()
-    
+
     # Get exam assignments
     exam_assignments = []
     for section in sections:
@@ -3887,7 +3923,7 @@ def course_internal_summary(request, course_id):
                 'section_id': str(section.id),
                 'section_name': section.section_name,
             })
-    
+
     # Build CO coverage matrix
     co_coverage = {}
     for ea in exam_assignments:
@@ -3899,7 +3935,7 @@ def course_internal_summary(request, course_id):
                 'exam': ea['exam'],
                 'weight': ea['weight'],
             })
-    
+
     # Build weight matrix
     weight_matrix = {}
     exam_types = set(ea['qp_type'] for ea in exam_assignments)
@@ -3913,7 +3949,7 @@ def course_internal_summary(request, course_id):
                 if ea['qp_type'] == et and co in ea['covered_cos']
             )
             weight_matrix[et][co_key] = round(total_weight, 2)
-    
+
     return Response({
         'course': AcV2CourseSerializer(course).data,
         'class_type': class_type_data,
@@ -3933,7 +3969,7 @@ def get_pattern_for_exam(request, course_id, exam_type):
     """
     course = get_object_or_404(AcV2Course, id=course_id)
     user = request.user
-    
+
     # 1. Check user override (if allow_customize_questions)
     if course.class_type and course.class_type.allow_customize_questions:
         user_pattern = AcV2UserPatternOverride.objects.filter(
@@ -3946,17 +3982,17 @@ def get_pattern_for_exam(request, course_id, exam_type):
                 'source': 'user_override',
                 'pattern': user_pattern.pattern,
             })
-    
+
     # 2. Check batch override
     # (Need to determine batch from course/semester - simplified here)
-    
+
     # 3. Global pattern
     pattern = AcV2QpPattern.objects.filter(
         qp_type=exam_type,
         class_type=course.class_type,
         is_active=True
     ).first()
-    
+
     if not pattern:
         # Fallback to global without class type
         pattern = AcV2QpPattern.objects.filter(
@@ -3964,13 +4000,13 @@ def get_pattern_for_exam(request, course_id, exam_type):
             class_type__isnull=True,
             is_active=True
         ).first()
-    
+
     if pattern:
         return Response({
             'source': 'global',
             'pattern': pattern.pattern,
         })
-    
+
     return Response({
         'source': 'none',
         'pattern': {},
@@ -4324,7 +4360,7 @@ def faculty_course_info(request, ta_id):
         is_mm = bool(ct_mm_enabled_lookup.get(ea_key, False))
         draft = ea.draft_data if isinstance(ea.draft_data, dict) else {}
         user_pattern = draft.get('user_pattern')
-        
+
         p = {}
         if ea_kind != 'cqi':
             qp_type_val = ea.qp_type or ea.exam or ''
@@ -4377,7 +4413,7 @@ def faculty_course_info(request, ta_id):
                         for co_num in _extract_co_list(c):
                             derived_set.add(co_num)
                 covered_cos_list = sorted(derived_set)
-                
+
                 mm_cos_config = mm_config.get('cos', {}) if isinstance(mm_config, dict) and isinstance(mm_config.get('cos'), dict) else {}
                 enabled_cos = []
                 for co_str, co_cfg in mm_cos_config.items():
@@ -4390,7 +4426,7 @@ def faculty_course_info(request, ta_id):
                 enabled_cos = sorted(set(enabled_cos))
                 if enabled_cos:
                     covered_cos_list = enabled_cos
-                
+
                 if cia_enabled:
                     if cia_weight_per_co:
                         ea_weight = sum(float(v or 0) for v in co_weights.values()) + (cia_weight * len(covered_cos_list))
@@ -4400,7 +4436,7 @@ def faculty_course_info(request, ta_id):
                     ea_weight = sum(float(v or 0) for v in co_weights.values())
             else:
                 ea_weight = float(ct_weight_lookup[ea_key])
-            
+
             ea.weight = ea_weight
             ea.save(update_fields=['weight'])
 
@@ -4408,7 +4444,7 @@ def faculty_course_info(request, ta_id):
         # Check active student profiles for this TA
         active_student_ids = {str(sp.id) for sp in active_student_profiles} if active_student_profiles else set()
         active_reg_nos = {str(getattr(sp, 'reg_no', '') or getattr(sp, 'register_number', '') or '').strip() for sp in active_student_profiles if (getattr(sp, 'reg_no', '') or getattr(sp, 'register_number', ''))}
-        
+
         if ea_kind == 'cqi':
             # Count students with entered marks in CQI (published or draft)
             cqi_entered_students = set()
@@ -4447,7 +4483,7 @@ def faculty_course_info(request, ta_id):
             db_marks_dict = {str(m.student_id): m for m in db_marks_qs}
             draft_rows_qs = AcV2DraftMark.objects.filter(exam_assignment=ea)
             draft_rows_dict = {str(m.student_id): m for m in draft_rows_qs}
-            
+
             # Count students who have marks entered across draft_data, published_data, and DB marks
             entered_students_count = 0
             all_candidate_sids = active_student_ids or set(marks.keys()) | set(pub_marks.keys()) | set(db_marks_dict.keys()) | set(draft_rows_dict.keys())
@@ -5735,8 +5771,7 @@ def faculty_exam_marks(request, exam_id):
         try:
             link = AcV2GoogleSheetLink.objects.filter(section=ea.section, is_active=True).first()
             if link and link.spreadsheet_id:
-                exam_configs = link.exam_configs if isinstance(link.exam_configs, dict) else {}
-                exam_config = exam_configs.get(str(ea.id), {}) if isinstance(exam_configs.get(str(ea.id), {}), dict) else {}
+                exam_config = _resolve_google_sheet_exam_config(ea, link)
                 sheet_name = str(exam_config.get('sheetTab') or ea.exam_display_name or ea.exam or 'Marks').strip()
                 sync_google_sheet_to_backend(
                     exam_assignment=ea,
@@ -5850,7 +5885,7 @@ def faculty_exam_marks(request, exam_id):
     ea.draft_data = draft
     ea.last_saved_at = timezone.now()
     ea.last_saved_by = request.user
-    
+
     # Auto-publish reopening logic:
     # If exam was auto-published (status=PUBLISHED, edit_window_until_publish=False)
     # and faculty saves new marks, revert to DRAFT to allow continued editing.
@@ -5861,7 +5896,7 @@ def faculty_exam_marks(request, exam_id):
         # exams must stay published and editable only within approved edit windows.
         if getattr(ea, 'published_by_id', None) is None and not bool(getattr(ea, 'edit_window_until_publish', False)):
             ea.status = 'DRAFT'
-    
+
     ea.save(update_fields=['draft_data', 'last_saved_at', 'last_saved_by', 'status'])
 
     row_filled_notification_count = 0
@@ -6257,7 +6292,7 @@ def faculty_course_co_summary(request, ta_id):
                     k = norm_exam_key(key)
                     if k:
                         ct_co_weights_map[k] = w
- 
+
             # Mark Manager conditional config (optional)
             mm_on = ea_conf.get('mm_co_weights_with_exam')
             mm_off = ea_conf.get('mm_co_weights_without_exam')
@@ -6269,7 +6304,7 @@ def faculty_course_co_summary(request, ta_id):
                 mm_exam_weight = ea_conf.get('mm_with_exam', {}).get('exam_weight', mm_exam_weight)
             if not mm_off and isinstance(ea_conf.get('mm_without_exam'), dict):
                 mm_off = ea_conf.get('mm_without_exam', {}).get('co_weights')
- 
+
             if isinstance(mm_on, dict) and mm_on:
                 w_on = {int(k): v for k, v in mm_on.items()}
                 for key in [exam_code, exam_display]:
@@ -6729,7 +6764,7 @@ def faculty_course_co_summary(request, ta_id):
         # Check for course-specific pattern from Mark Manager first
         draft = ea.draft_data if isinstance(ea.draft_data, dict) else {}
         user_pattern = draft.get('user_pattern')
-        
+
         co_max_map = {}  # {co_num: total_marks_for_that_co}
         co_weights = {}  # Effective per-CO weights
         cia_enabled = False  # Whether Mark Manager has Exam enabled
@@ -6742,7 +6777,7 @@ def faculty_course_co_summary(request, ta_id):
         qp_enabled = []
         qp_special_split = []
         qp_special_split_sources = []
-        
+
         if ea_kind == 'cqi':
             # CQI is not pattern-driven. COs come only from the CQI editor config (DB-backed),
             # and weights are computed from CQI evaluation, not from QP pattern CO mapping.
@@ -6875,7 +6910,7 @@ def faculty_course_co_summary(request, ta_id):
             else:
                 # Fall back to global non-Mark Manager ClassType configuration
                 co_weights = ct_co_weights_map.get(ea_key, {})
-            
+
 
 
         # weight_per_co: for even split fallback when no per-CO weights defined
@@ -7458,7 +7493,7 @@ def faculty_course_co_summary(request, ta_id):
                         except Exception:
                             pass
                     return float(total_local or 0.0)
-                
+
                 local_custom_vars = _normalize_cqi_custom_vars(cqi_sub.get('custom_vars', []) if isinstance(cqi_sub, dict) else [])
                 combined_custom_vars = []
                 seen_custom_codes = set()
@@ -8625,7 +8660,7 @@ def faculty_course_cqi_announce(request, ta_id: int):
             summary = summary_res.data if hasattr(summary_res, 'data') else {}
         else:
             summary = {}
-        
+
         if not isinstance(summary, dict):
             logger.error(f'Invalid summary response: {type(summary)}')
             return Response({'detail': 'Failed to compute CQI summary.'}, status=500)
@@ -8806,7 +8841,7 @@ def faculty_course_cqi_announce(request, ta_id: int):
                 pass
 
         return Response({'status': 'ok', 'sent': sent, 'matched': matched_count, 'preview': preview_rows[:20]})
-    
+
     except Exception as e:
         logger.exception('CQI announce endpoint error')
         return Response({'detail': f'Announcement failed: {str(e)}'}, status=500)

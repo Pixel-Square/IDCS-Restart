@@ -1315,7 +1315,7 @@ class ClassTypeWeights(models.Model):
     """IQAC-controlled weights per class type.
 
     Used in CO attainment and Internal Mark calculations.
-    
+
     exam_assignments stores per-exam config:
     [
       { "exam": "SSA1", "weight": 1.5, "allow_customize": true },
@@ -1342,7 +1342,7 @@ class ClassTypeWeights(models.Model):
 
 class IqacResetNotification(models.Model):
     """Notification created when IQAC resets a course assessment.
-    
+
     Staff sees this notification once when opening the course/exam page.
     After dismissal (is_read=True), won't show again until the next reset.
     """
@@ -1363,16 +1363,16 @@ class IqacResetNotification(models.Model):
 
 class CourseQuestionBank(models.Model):
     """Course Question Bank - stores questions for a course.
-    
+
     Questions are shared by all faculty members assigned to the same course.
     When any faculty finalizes the question bank, it becomes finalized for all.
     """
-    
+
     QUESTION_TYPE_CHOICES = [
         ('D', 'Descriptive'),
         ('O', 'Objective'),
     ]
-    
+
     course_code = models.CharField(max_length=64, db_index=True)
     course_name = models.CharField(max_length=255, blank=True)
     s_no = models.IntegerField()
@@ -1384,7 +1384,7 @@ class CourseQuestionBank(models.Model):
     btl = models.IntegerField(blank=True, null=True, help_text='Bloom\'s Taxonomy Level (1-6)')
     marks = models.DecimalField(max_digits=5, decimal_places=1, blank=True, null=True)
     college = models.CharField(max_length=10, blank=True, null=True, help_text='College: KRCT, KRCE, MKCE')
-    
+
     # Finalization status - if any faculty finalizes, all faculties see it as finalized
     is_finalized = models.BooleanField(default=False)
     finalized_by = models.ForeignKey(
@@ -1395,7 +1395,7 @@ class CourseQuestionBank(models.Model):
         related_name='finalized_question_banks'
     )
     finalized_at = models.DateTimeField(null=True, blank=True)
-    
+
     # Track who created/last edited
     created_by = models.ForeignKey(
         'academics.StaffProfile',
@@ -1404,10 +1404,10 @@ class CourseQuestionBank(models.Model):
         blank=True,
         related_name='created_question_banks'
     )
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         db_table = 'obe_course_question_bank'
         unique_together = ('course_code', 's_no')
@@ -1416,32 +1416,32 @@ class CourseQuestionBank(models.Model):
             models.Index(fields=['course_code', 'is_finalized']),
             models.Index(fields=['is_finalized', 'updated_at']),
         ]
-    
+
     def __str__(self):
         return f"{self.course_code} - Q{self.s_no}: {self.question_text[:50]}"
 
 
 class CourseQuestionBankLog(models.Model):
     """Audit log for Question Bank changes with faculty tracking.
-    
+
     Records who edited/finalized questions, when, and what changed.
     """
-    
+
     ACTION_CHOICES = (
         ('created', 'Created'),
         ('updated', 'Updated'),
         ('finalized', 'Finalized'),
         ('unfinalezed', 'Unfinalized'),
     )
-    
+
     question_bank = models.ForeignKey(
         CourseQuestionBank,
         on_delete=models.CASCADE,
         related_name='logs'
     )
-    
+
     action = models.CharField(max_length=20, choices=ACTION_CHOICES)
-    
+
     # Faculty who performed the action
     edited_by = models.ForeignKey(
         'academics.StaffProfile',
@@ -1450,13 +1450,13 @@ class CourseQuestionBankLog(models.Model):
         blank=True,
         related_name='question_bank_logs'
     )
-    
+
     # Store old and new values for audit trail
     old_values = models.JSONField(default=dict, blank=True)
     new_values = models.JSONField(default=dict, blank=True)
-    
+
     edited_at = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
         db_table = 'obe_course_question_bank_log'
         ordering = ('-edited_at',)
@@ -1465,6 +1465,6 @@ class CourseQuestionBankLog(models.Model):
             models.Index(fields=['edited_by', 'edited_at']),
             models.Index(fields=['action', 'edited_at']),
         ]
-    
+
     def __str__(self):
         return f"{self.question_bank.course_code} - {self.action} by {self.edited_by} @ {self.edited_at}"

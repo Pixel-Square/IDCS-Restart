@@ -18,25 +18,25 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         dry_run = options['dry_run']
-        
+
         if dry_run:
             self.stdout.write(self.style.WARNING('DRY RUN MODE - No changes will be made\n'))
-        
+
         # Find obsolete "Leave request" balances
         obsolete = StaffLeaveBalance.objects.filter(leave_type='Leave request')
         count = obsolete.count()
-        
+
         if count == 0:
             self.stdout.write(self.style.SUCCESS('No obsolete "Leave request" records found'))
             return
-        
+
         self.stdout.write(f'Found {count} obsolete "Leave request" balance records:\n')
-        
+
         for balance in obsolete:
             self.stdout.write(
                 f'  - {balance.staff.username}: balance={balance.balance}'
             )
-        
+
         if not dry_run:
             deleted_count, _ = obsolete.delete()
             self.stdout.write(

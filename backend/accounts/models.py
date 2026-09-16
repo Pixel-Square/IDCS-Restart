@@ -45,7 +45,7 @@ class User(AbstractUser):
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username']
-    
+
     roles = models.ManyToManyField(
         'Role',
         through='UserRole',
@@ -190,7 +190,7 @@ def validate_roles_for_user(user, roles):
         'DISCIPLINE COMMITTEE',
         'DISCIPLINECOMMITTEEADMIN',
     }
-    
+
     # External staff can only have EXT_STAFF role
     EXT_STAFF_ALLOWED = {'EXT_STAFF'}
 
@@ -326,10 +326,10 @@ class NotificationTemplate(models.Model):
 
 class UserQuery(models.Model):
     """User queries, doubts, errors, and bug reports.
-    
+
     Available to all users without permission requirements.
     """
-    
+
     STATUS_CHOICES = [
         ('SENT', 'Sent'),
         ('VIEWED', 'Viewed'),
@@ -340,7 +340,7 @@ class UserQuery(models.Model):
         ('LATER', 'Later'),
         ('CLOSED', 'Closed'),
     ]
-    
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -355,12 +355,12 @@ class UserQuery(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     admin_notes = models.TextField(blank=True, default='', help_text='Response or notes from admin (visible to user)')
-    
+
     class Meta:
         ordering = ['-created_at']
         verbose_name = 'User Query'
         verbose_name_plural = 'User Queries'
-    
+
     def __str__(self):
         return f"{self.user.username} - {self.status} - {self.created_at.strftime('%Y-%m-%d')}"
 

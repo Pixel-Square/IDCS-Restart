@@ -180,7 +180,7 @@ export default function ExamAssignmentAdminPage() {
         fetchWithAuth('/api/academic-v2/qp-patterns/'),
         fetchWithAuth('/api/academic-v2/cycles/').catch(() => null),
       ]);
-      
+
       if (!pRes.ok) throw new Error('Failed to load');
       const data = await pRes.json();
       const allPatterns = Array.isArray(data) ? data : (data.results || []);
@@ -310,7 +310,7 @@ export default function ExamAssignmentAdminPage() {
         default_weight: formWeight,
         pattern,
       };
-      
+
       // Add cycle if selected
       if (formCycle) {
         payload.cycle = formCycle;

@@ -673,7 +673,7 @@ export default function StudentsList() {
       alert('Please shuffle the student list before saving to DB.');
       return;
     }
-    
+
     // Calculate total students to verify
     let totalRecords = 0;
     enriched.departments.forEach(dept => {

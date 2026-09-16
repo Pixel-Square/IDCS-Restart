@@ -599,6 +599,7 @@ export interface SubjectAnalysisStudentRow {
   assessment: string;
   marks_pct: number | null;
   result: 'Pass' | 'Fail' | null;
+  remark?: string;
   total_records: number;
   attendance_pct: number | null;
 }

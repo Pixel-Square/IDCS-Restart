@@ -127,7 +127,7 @@ def _latest_pending_request(exam_assignment):
 def check_publish_control(exam_assignment) -> dict:
     """
     Check publish control settings for an exam assignment.
-    
+
     Returns:
         {
             'is_editable': bool,
@@ -143,7 +143,7 @@ def check_publish_control(exam_assignment) -> dict:
     """
     semester_config = exam_assignment.get_semester_config()
     workflow_roles = _normalize_workflow(getattr(semester_config, 'approval_workflow', None) if semester_config else None)
-    
+
     result = {
         'is_editable': True,
         'is_locked': False,
@@ -171,7 +171,7 @@ def check_publish_control(exam_assignment) -> dict:
         ],
         'pending_request': None,
     }
-    
+
     if semester_config:
         result['publish_control_enabled'] = semester_config.publish_control_enabled
         result['faculty_edit_enabled'] = bool(getattr(semester_config, 'faculty_edit_enabled', True))
@@ -184,7 +184,7 @@ def check_publish_control(exam_assignment) -> dict:
                 result['seal_image'] = semester_config.seal_image.url
         except Exception:
             result['seal_image'] = None
-        
+
         if semester_config.due_at:
             now = timezone.now()
             if now > semester_config.due_at:
@@ -192,7 +192,7 @@ def check_publish_control(exam_assignment) -> dict:
                 result['time_remaining'] = timedelta(0)
             else:
                 result['time_remaining'] = semester_config.due_at - now
-    
+
     # Determine editability
     result['is_editable'] = exam_assignment.is_editable()
     result['is_locked'] = not result['is_editable'] and result['status'] in ['PUBLISHED', 'LOCKED']
@@ -274,16 +274,16 @@ def check_publish_control(exam_assignment) -> dict:
             'user_id': str(next_user.id) if next_user else None,
             'user_name': _user_display_name(next_user),
         } if required_role else None
-    
+
     return result
 
 
 def process_auto_publish(semester_config) -> dict:
     """
     Auto-publish all unpublished exams for a semester when due date passes.
-    
+
     Called by cron job or manually.
-    
+
     Returns:
         {
             'success': bool,
@@ -294,26 +294,26 @@ def process_auto_publish(semester_config) -> dict:
     from ..models import AcV2ExamAssignment, AcV2DraftMark, AcV2StudentMark
     from .mark_calculation import compute_section_internal_marks
     from academics.models import StudentProfile
-    
+
     if not semester_config.auto_publish_on_due:
         return {'success': True, 'published_count': 0, 'errors': []}
-    
+
     if not semester_config.due_at:
         return {'success': True, 'published_count': 0, 'errors': []}
-    
+
     now = timezone.now()
     if now <= semester_config.due_at:
         return {'success': True, 'published_count': 0, 'errors': ['Due date not yet passed']}
-    
+
     # Find all DRAFT exams in this semester
     draft_exams = AcV2ExamAssignment.objects.filter(
         section__course__semester=semester_config.semester,
         status='DRAFT'
     ).select_related('section__course')
-    
+
     published_count = 0
     errors = []
-    
+
     with transaction.atomic():
         for exam in draft_exams:
             try:
@@ -382,7 +382,7 @@ def process_auto_publish(semester_config) -> dict:
                 published_count += 1
             except Exception as e:
                 errors.append(f"{exam.section.course.subject_code} - {exam.exam}: {str(e)}")
-    
+
     return {
         'success': len(errors) == 0,
         'published_count': published_count,
@@ -393,7 +393,7 @@ def process_auto_publish(semester_config) -> dict:
 def create_edit_request(exam_assignment, user, reason: str) -> dict:
     """
     Create an edit request for a published exam.
-    
+
     Returns:
         {
             'success': bool,
@@ -402,7 +402,7 @@ def create_edit_request(exam_assignment, user, reason: str) -> dict:
         }
     """
     from ..models import AcV2EditRequest
-    
+
     # Check if exam is published/locked
     if exam_assignment.status not in ['PUBLISHED', 'LOCKED']:
         return {
@@ -410,7 +410,7 @@ def create_edit_request(exam_assignment, user, reason: str) -> dict:
             'request_id': None,
             'error': 'Exam is not published. Direct editing is allowed.',
         }
-    
+
     # Check for existing pending request
     if exam_assignment.has_pending_edit_request:
         return {
@@ -418,7 +418,7 @@ def create_edit_request(exam_assignment, user, reason: str) -> dict:
             'request_id': None,
             'error': 'An edit request is already pending for this exam.',
         }
-    
+
     # Check semester config
     semester_config = exam_assignment.get_semester_config()
     if not semester_config or not semester_config.publish_control_enabled:
@@ -427,7 +427,7 @@ def create_edit_request(exam_assignment, user, reason: str) -> dict:
             'request_id': None,
             'error': 'Publish control is disabled. Direct editing is allowed.',
         }
-    
+
     workflow_roles = _normalize_workflow(getattr(semester_config, 'approval_workflow', None))
     validity_hours = None
     try:
@@ -446,10 +446,10 @@ def create_edit_request(exam_assignment, user, reason: str) -> dict:
             current_stage=1,
             expires_at=(now + timedelta(hours=validity_hours)) if (validity_hours is not None and validity_hours > 0) else None,
         )
-        
+
         exam_assignment.has_pending_edit_request = True
         exam_assignment.save(update_fields=['has_pending_edit_request'])
-    
+
     return {
         'success': True,
         'request_id': str(request.id),
@@ -460,32 +460,32 @@ def create_edit_request(exam_assignment, user, reason: str) -> dict:
 def get_approval_inbox(user, role: str) -> list:
     """
     Get pending edit requests for approval based on user's role.
-    
+
     Args:
         user: User instance
         role: Role string (HOD, IQAC, ADMIN)
-    
+
     Returns:
         List of edit requests awaiting this role's approval.
     """
     from ..models import AcV2EditRequest
-    
+
     # Determine which status to filter
     status_map = {
         'HOD': 'HOD_PENDING',
         'IQAC': 'IQAC_PENDING',
         'ADMIN': 'PENDING',
     }
-    
+
     target_status = status_map.get(role, 'PENDING')
-    
+
     requests = AcV2EditRequest.objects.filter(
         status=target_status
     ).select_related(
         'exam_assignment__section__course',
         'requested_by'
     ).order_by('-requested_at')
-    
+
     return list(requests)
 
 

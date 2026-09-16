@@ -118,7 +118,7 @@ export default function SpecialPeriodModal({ isOpen, onClose, onAllocationsUpdat
   const [selectedDepartments, setSelectedDepartments] = useState<string[]>([]);
   const [selectedSectionKeys, setSelectedSectionKeys] = useState<string[]>([]);
   const [selectedMixedSectionKeys, setSelectedMixedSectionKeys] = useState<string[]>([]);
-  
+
   // Exception Courses
   const [courseSearchQuery, setCourseSearchQuery] = useState('');
   const [availableCourses, setAvailableCourses] = useState<ExceptionCourse[]>([]);
@@ -303,7 +303,7 @@ export default function SpecialPeriodModal({ isOpen, onClose, onAllocationsUpdat
   const availableRegularSections = rawSections.filter((sec) => {
     const sem = getSectionSemester(sec);
     const d = getSectionDeptCode(sec);
-    
+
     const semMatch = selectedSemesters.length === 0 || selectedSemesters.includes(sem);
     const deptMatch = selectedDepartments.length === 0 || selectedDepartments.some((selD) => d.includes(selD.toUpperCase()) || selD.toUpperCase().includes(d));
     return semMatch && deptMatch;
@@ -550,7 +550,7 @@ export default function SpecialPeriodModal({ isOpen, onClose, onAllocationsUpdat
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl overflow-hidden border border-gray-200 flex flex-col max-h-[92vh]">
-        
+
         {/* Header */}
         <div className="px-6 py-4 bg-gradient-to-r from-teal-700 via-emerald-700 to-cyan-800 text-white flex items-center justify-between shadow-xs">
           <div className="flex items-center gap-3">
@@ -602,7 +602,7 @@ export default function SpecialPeriodModal({ isOpen, onClose, onAllocationsUpdat
         <div className="p-6 overflow-y-auto flex-1 space-y-6">
           {activeTab === 'create' ? (
             <div className="space-y-6">
-              
+
               {/* Special Period Title & Color Palette */}
               <div className="bg-teal-50/50 p-4 rounded-xl border border-teal-100">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">

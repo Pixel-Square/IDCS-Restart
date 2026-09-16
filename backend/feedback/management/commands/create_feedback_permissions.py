@@ -25,7 +25,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         self.stdout.write(self.style.WARNING('Creating/updating feedback permissions...'))
-        
+
         # Define feedback permissions with lowercase codes (following project convention)
         feedback_permissions = {
             'feedback.feedback_page': 'View feedback page',
@@ -38,7 +38,7 @@ class Command(BaseCommand):
             'feedback.principal_create': 'Principal can create institutional feedback',
             'feedback.principal_analytics': 'Principal can view feedback analytics',
         }
-        
+
         # Define role-permission mappings
         role_permission_mapping = {
             'IQAC': ['feedback.feedback_page', 'feedback.create', 'feedback.all_departments_access'],
@@ -53,13 +53,13 @@ class Command(BaseCommand):
             'STAFF': ['feedback.feedback_page', 'feedback.reply'],
             'STUDENT': ['feedback.feedback_page', 'feedback.reply'],
         }
-        
+
         with transaction.atomic():
             # Step 1: Create permissions
             self.stdout.write('Step 1: Creating permissions...')
             created_perms = []
             updated_perms = []
-            
+
             for code, description in feedback_permissions.items():
                 perm, created = Permission.objects.get_or_create(
                     code=code,
@@ -83,13 +83,13 @@ class Command(BaseCommand):
                         self.stdout.write(
                             self.style.NOTICE(f'  - Permission already exists: {code}')
                         )
-            
+
             # Step 2: Map permissions to roles
             self.stdout.write('\nStep 2: Mapping permissions to roles...')
             mapped_count = 0
             skipped_count = 0
             missing_roles = []
-            
+
             for role_name, perm_codes in role_permission_mapping.items():
                 try:
                     role = self._get_role_by_name(role_name)
@@ -111,7 +111,7 @@ class Command(BaseCommand):
                                         f'  ↻ Removed deprecated principal mappings: {removed_count}'
                                     )
                                 )
-                    
+
                     for perm_code in perm_codes:
                         try:
                             perm = Permission.objects.get(code=perm_code)
@@ -119,7 +119,7 @@ class Command(BaseCommand):
                                 role=role,
                                 permission=perm
                             )
-                            
+
                             if created:
                                 mapped_count += 1
                                 self.stdout.write(
@@ -140,7 +140,7 @@ class Command(BaseCommand):
                                     f'  ✗ Permission not found: {perm_code}'
                                 )
                             )
-                
+
                 except Role.DoesNotExist:
                     missing_roles.append(role_name)
                     self.stdout.write(
@@ -148,7 +148,7 @@ class Command(BaseCommand):
                             f'  ! Role not found: {role_name} (skipping)'
                         )
                     )
-        
+
         # Summary
         self.stdout.write('\n' + '=' * 60)
         self.stdout.write(self.style.SUCCESS('\nSummary:'))
@@ -156,7 +156,7 @@ class Command(BaseCommand):
         self.stdout.write(f'  Permissions updated: {len(updated_perms)}')
         self.stdout.write(f'  Role mappings created: {mapped_count}')
         self.stdout.write(f'  Role mappings skipped (already exist): {skipped_count}')
-        
+
         if missing_roles:
             self.stdout.write(
                 self.style.WARNING(
@@ -166,6 +166,6 @@ class Command(BaseCommand):
             self.stdout.write(
                 '  These roles need to be created before permissions can be mapped to them.'
             )
-        
+
         self.stdout.write('\n' + self.style.SUCCESS('✓ Feedback permissions setup complete!'))
         self.stdout.write('=' * 60 + '\n')

@@ -890,7 +890,7 @@ return (
 
         <div className="max-w-7xl mx-auto px-6 py-10 relative z-10">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-            
+
             {/* Title Section */}
             <div className="flex items-center gap-5 group">
               <div className="p-3.5 bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 shadow-xl group-hover:scale-105 transition-transform duration-500">
@@ -1359,8 +1359,8 @@ return (
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {(data?.dept_comparison || []).map((d) => (
-                      <tr 
-                        key={d.dept_code} 
+                      <tr
+                        key={d.dept_code}
                                                 onClick={() => {
                           openDepartmentDrilldown(d.dept_code, d.dept_name);
                         }}
@@ -1396,7 +1396,7 @@ return (
           </div>
         )}
 
-                        
+
         {/* View Mode: Faculty-Wise comparison table (drills into Faculty Analysis) */}
         {(activeTab === 'faculty' || activeTab === 'hod') && (
           <div className="space-y-6 animate-in fade-in-50">
@@ -2184,8 +2184,8 @@ return (
                                 <td className="py-3 px-4 text-center">
                                   {/* Using result field as remarks if we calculate it in backend, else fallback */}
                                   <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                                    (st.result === 'Pass' || st.result === 'Excellent' || st.result === 'Very Good' || st.result === 'Good' || st.result === 'Satisfactory') 
-                                    ? 'bg-emerald-50 text-emerald-700' 
+                                    (st.result === 'Pass' || st.result === 'Excellent' || st.result === 'Very Good' || st.result === 'Good' || st.result === 'Satisfactory')
+                                    ? 'bg-emerald-50 text-emerald-700'
                                     : 'bg-rose-50 text-rose-600'
                                   }`}>{st.result}</span>
                                 </td>
@@ -2274,7 +2274,7 @@ return (
                 </button>
               </div>
             </div>
-            
+
             <div className="p-6">
               {studentChartsLoading ? (
                 <div className="flex flex-col items-center justify-center h-64 gap-3">

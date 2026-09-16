@@ -96,21 +96,21 @@ class AcV2SemesterConfig(models.Model):
     Due date here applies to ALL courses/exams in the semester.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     semester = models.OneToOneField(
         'academics.Semester',
         on_delete=models.CASCADE,
         related_name='acv2_config'
     )
-    
+
     # ========== PUBLISH CONTROL ==========
     # Master switch: ON = lock after publish, OFF = unlimited edits
     publish_control_enabled = models.BooleanField(default=True)
-    
+
     # Approval workflow stages
     # [{"stage": 1, "role": "HOD"}, {"stage": 2, "role": "IQAC"}]
     approval_workflow = models.JSONField(default=list, blank=True)
-    
+
     # Default approval window in minutes
     approval_window_minutes = models.IntegerField(default=120)
 
@@ -120,14 +120,14 @@ class AcV2SemesterConfig(models.Model):
     # If enabled, approved edit access stays open until faculty clicks Publish again.
     # When disabled, edit access is granted only for approval_window_minutes.
     approval_until_publish = models.BooleanField(default=False)
-    
+
     # ========== DUE DATE (Semester-wide) ==========
     # Opens mark entry for all exams
     open_from = models.DateTimeField(null=True, blank=True)
-    
+
     # Due date - after this, all exams auto-publish if enabled
     due_at = models.DateTimeField(null=True, blank=True)
-    
+
     # Auto publish when due date passes
     auto_publish_on_due = models.BooleanField(default=True)
 
@@ -138,7 +138,7 @@ class AcV2SemesterConfig(models.Model):
     seal_watermark_enabled = models.BooleanField(default=False)
     # Optional seal image for UI (stored in MEDIA_ROOT)
     seal_image = models.ImageField(upload_to='academic_v2/seals/', null=True, blank=True)
-    
+
     # ========== METADATA ==========
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -319,7 +319,7 @@ class AcV2ClassType(models.Model):
     Each class type defines what exams are available and their weights.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     # Version scope
     version = models.ForeignKey(
         AcV2Version,
@@ -333,13 +333,13 @@ class AcV2ClassType(models.Model):
     name = models.CharField(max_length=50)  # e.g., "THEORY", "TCPR", "LAB"
     short_code = models.CharField(max_length=10)  # e.g., "TH", "TC", "LB"
     display_name = models.CharField(max_length=100, blank=True)
-    
+
     # Total internal marks (usually 40 or 100)
     total_internal_marks = models.DecimalField(max_digits=6, decimal_places=2, default=40)
-    
+
     # Allow faculty to customize question patterns
     allow_customize_questions = models.BooleanField(default=False)
-    
+
     # Exam assignments with weights
     # [
     #   { "exam_title": "SSA-1", "qp_type": "SSA", "weight": 5, "enabled": true,
@@ -352,10 +352,10 @@ class AcV2ClassType(models.Model):
 
     # Shared CQI custom variables available to all CQI configs in this class type.
     cqi_global_custom_vars = models.JSONField(default=list, blank=True)
-    
+
     # Default number of COs
     default_co_count = models.IntegerField(default=5)
-    
+
     # College scope (if multi-tenant)
     college = models.ForeignKey(
         'college.College',
@@ -364,9 +364,9 @@ class AcV2ClassType(models.Model):
         blank=True,
         related_name='acv2_class_types'
     )
-    
+
     is_active = models.BooleanField(default=True)
-    
+
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -446,10 +446,10 @@ class AcV2QpPattern(models.Model):
 
     # Default weight (%) when this exam is assigned to a class type
     default_weight = models.DecimalField(max_digits=5, decimal_places=2, default=0)
-    
+
     # QP type (SSA, CIA, FA, MODEL, LAB, etc.)
     qp_type = models.CharField(max_length=50)
-    
+
     # Optional: Link to specific class type
     class_type = models.ForeignKey(
         AcV2ClassType,
@@ -458,10 +458,10 @@ class AcV2QpPattern(models.Model):
         blank=True,
         related_name='qp_patterns'
     )
-    
+
     # Order/sequence for display in faculty view (within class_type + qp_type scope)
     order = models.IntegerField(default=0, db_index=True)
-    
+
     # Pattern structure
     # {
     #   "titles": ["Part A - Q1", "Part A - Q2", "Part B - Q1", ...],
@@ -471,7 +471,7 @@ class AcV2QpPattern(models.Model):
     #   "enabled": [true, true, true, true, true, true]
     # }
     pattern = models.JSONField(default=dict, blank=True)
-    
+
     # Optional: Batch-level override
     batch = models.ForeignKey(
         'academics.Batch',
@@ -489,7 +489,7 @@ class AcV2QpPattern(models.Model):
         blank=True,
         related_name='qp_patterns'
     )
-    
+
     # College scope
     college = models.ForeignKey(
         'college.College',
@@ -498,9 +498,9 @@ class AcV2QpPattern(models.Model):
         blank=True,
         related_name='acv2_qp_patterns'
     )
-    
+
     is_active = models.BooleanField(default=True)
-    
+
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -532,7 +532,7 @@ class AcV2QpPattern(models.Model):
         btls = p.get('btls', [])
         cos = p.get('cos', [])
         enabled = p.get('enabled', [True] * len(titles))
-        
+
         questions = []
         for i in range(len(titles)):
             questions.append({
@@ -553,24 +553,24 @@ class AcV2QpPattern(models.Model):
 class AcV2Course(models.Model):
     """Course in a semester with class type."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     # Link to existing Subject
     subject = models.ForeignKey(
         'academics.Subject',
         on_delete=models.CASCADE,
         related_name='acv2_courses'
     )
-    
+
     semester = models.ForeignKey(
         'academics.Semester',
         on_delete=models.CASCADE,
         related_name='acv2_courses'
     )
-    
+
     # Denormalized for quick access
     subject_code = models.CharField(max_length=64, db_index=True)
     subject_name = models.CharField(max_length=255)
-    
+
     # Class type determines exam structure
     class_type = models.ForeignKey(
         AcV2ClassType,
@@ -579,17 +579,17 @@ class AcV2Course(models.Model):
         blank=True,
         related_name='courses'
     )
-    
+
     # Fallback class type name if FK not set
     class_type_name = models.CharField(max_length=50, default='THEORY')
-    
+
     # Question paper type (e.g., QP1 FINAL, REGULAR)
     question_paper_type = models.CharField(max_length=50, null=True, blank=True)
-    
+
     # Number of COs for this course
     co_count = models.IntegerField(default=5)
     co_titles = models.JSONField(default=list, blank=True)  # ["CO1", "CO2", ...]
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -615,23 +615,23 @@ class AcV2Course(models.Model):
 class AcV2Section(models.Model):
     """Section within a Course - linked to TeachingAssignment."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     course = models.ForeignKey(
         AcV2Course,
         on_delete=models.CASCADE,
         related_name='sections'
     )
-    
+
     # Link to existing TeachingAssignment
     teaching_assignment = models.ForeignKey(
         'academics.TeachingAssignment',
         on_delete=models.CASCADE,
         related_name='acv2_sections'
     )
-    
+
     # Denormalized
     section_name = models.CharField(max_length=64)
-    
+
     # Faculty assigned
     faculty_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -640,7 +640,7 @@ class AcV2Section(models.Model):
         blank=True,
         related_name='acv2_sections'
     )
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -665,32 +665,32 @@ class AcV2ExamAssignment(models.Model):
     Inherits due date from semester config.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     section = models.ForeignKey(
         AcV2Section,
         on_delete=models.CASCADE,
         related_name='exam_assignments'
     )
-    
+
     # Exam identifier
     exam = models.CharField(max_length=50)  # SSA1, CIA1, FA1, MODEL, etc.
     exam_display_name = models.CharField(max_length=100, blank=True)
     qp_type = models.CharField(max_length=50, blank=True)  # SSA, CIA, FA, MODEL
-    
+
     # Max marks and weight
     max_marks = models.DecimalField(max_digits=6, decimal_places=2, default=50)
     weight = models.DecimalField(max_digits=5, decimal_places=2, default=0)  # Weight in %
-    
+
     # Which COs this exam covers (JSON array: [1, 2] or [1, 2, 3])
     covered_cos = models.JSONField(default=list, blank=True)
-    
+
     # QP Pattern for questions (can override class-level pattern)
     # If null, uses pattern from AcV2QpPattern based on qp_type
     qp_pattern = models.JSONField(default=dict, blank=True)
-    
+
     # Whether faculty can customize questions for this exam
     allow_customize = models.BooleanField(default=False)
-    
+
     # ========== STATE ==========
     STATUS_CHOICES = (
         ('DRAFT', 'Draft'),
@@ -698,11 +698,11 @@ class AcV2ExamAssignment(models.Model):
         ('LOCKED', 'Locked'),
     )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
-    
+
     # Draft data (marks before publish)
     # { "rows": { "student_id": { "q1": 5, "q2": 3, ... }, ... } }
     draft_data = models.JSONField(default=dict, blank=True)
-    
+
     # Published snapshot
     published_data = models.JSONField(default=dict, blank=True)
     published_at = models.DateTimeField(null=True, blank=True)
@@ -713,12 +713,12 @@ class AcV2ExamAssignment(models.Model):
         blank=True,
         related_name='acv2_published_exams'
     )
-    
+
     # ========== EDIT REQUEST STATE ==========
     has_pending_edit_request = models.BooleanField(default=False)
     edit_window_until = models.DateTimeField(null=True, blank=True)
     edit_window_until_publish = models.BooleanField(default=False)
-    
+
     # Timestamps
     last_saved_at = models.DateTimeField(null=True, blank=True)
     last_saved_by = models.ForeignKey(
@@ -728,7 +728,7 @@ class AcV2ExamAssignment(models.Model):
         blank=True,
         related_name='acv2_saved_exams'
     )
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -797,13 +797,13 @@ class AcV2ExamAssignment(models.Model):
         # Unlimited edit access until the next Publish
         if self.edit_window_until_publish:
             return True
-        
+
         # If DRAFT, check due date
         if self.status == 'DRAFT':
             if self.is_past_due():
                 return False
             return True
-        
+
         # PUBLISHED or LOCKED - not editable unless edit window
         return False
 
@@ -846,7 +846,7 @@ class AcV2ExamAssignment(models.Model):
                 if gen_p:
                     return gen_p
             return p
-        
+
         # Try to find from AcV2QpPattern
         qp_type = ''
         try:
@@ -872,7 +872,7 @@ class AcV2ExamAssignment(models.Model):
                 pattern = scoped.filter(name__iexact=exam_key).order_by('-updated_at').first()
             else:
                 pattern = scoped.order_by('-updated_at').first()
-        
+
         if not pattern:
             # Fallback to global pattern
             global_qs = base_qs.filter(class_type__isnull=True)
@@ -880,7 +880,7 @@ class AcV2ExamAssignment(models.Model):
                 pattern = global_qs.filter(name__iexact=exam_key).order_by('-updated_at').first()
             else:
                 pattern = global_qs.order_by('-updated_at').first()
-        
+
         p = pattern.pattern if pattern and isinstance(pattern.pattern, dict) else {}
         if isinstance(p, dict):
             if p.get('questions'):
@@ -965,23 +965,23 @@ class AcV2StudentMark(models.Model):
     Stores marks per CO and question-wise breakdown.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     exam_assignment = models.ForeignKey(
         AcV2ExamAssignment,
         on_delete=models.CASCADE,
         related_name='student_marks'
     )
-    
+
     student = models.ForeignKey(
         'academics.StudentProfile',
         on_delete=models.CASCADE,
         related_name='acv2_marks'
     )
-    
+
     # Denormalized for quick display
     reg_no = models.CharField(max_length=50)
     student_name = models.CharField(max_length=255)
-    
+
     # ========== CO MARKS (Columns) ==========
     # Each CO gets its own column - computed from question marks
     co1_mark = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
@@ -990,22 +990,22 @@ class AcV2StudentMark(models.Model):
     co4_mark = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     co5_mark = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     co6_mark = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
-    
+
     # Total mark for this exam (sum of all questions)
     total_mark = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
-    
+
     # Weighted mark (after applying exam weight for internal marks)
     weighted_mark = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
-    
+
     # Question-wise marks (for detailed sheets)
     # { "q1": 8, "q2": 10, "q3": 15, ... }
     question_marks = models.JSONField(default=dict, blank=True)
-    
+
     # Attendance/status
     is_absent = models.BooleanField(default=False)
     is_exempted = models.BooleanField(default=False)
     remarks = models.CharField(max_length=255, blank=True)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1030,7 +1030,7 @@ class AcV2StudentMark(models.Model):
     def calculate_total(self):
         """Sum all question marks."""
         total = sum(
-            v for v in self.question_marks.values() 
+            v for v in self.question_marks.values()
             if v is not None and isinstance(v, (int, float))
         )
         self.total_mark = total
@@ -1039,7 +1039,7 @@ class AcV2StudentMark(models.Model):
     def calculate_co_marks(self, qp_pattern):
         """Calculate CO marks based on question→CO mapping."""
         cos = qp_pattern.get('cos', [])
-        
+
         max_supported_co = 6
         co_totals = {i: 0 for i in range(1, max_supported_co + 1)}
 
@@ -1082,7 +1082,7 @@ class AcV2StudentMark(models.Model):
 
             _push(raw_co)
             return out
-        
+
         keys = set(str(k) for k in (self.question_marks or {}).keys())
         q_base = 0
         if 'q0' in keys:
@@ -1101,7 +1101,7 @@ class AcV2StudentMark(models.Model):
             split_mark = q_mark / len(co_list)
             for c in co_list:
                 co_totals[c] += split_mark
-        
+
         for co_num in range(1, max_supported_co + 1):
             setattr(self, f'co{co_num}_mark', round(co_totals[co_num], 2))
 
@@ -1165,7 +1165,7 @@ class AcV2UserPatternOverride(models.Model):
     Only created if ClassType.allow_customize_questions = True.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     # Scope
     course = models.ForeignKey(
         AcV2Course,
@@ -1173,17 +1173,17 @@ class AcV2UserPatternOverride(models.Model):
         related_name='user_pattern_overrides'
     )
     exam_type = models.CharField(max_length=50)  # CIA1, SSA1, etc.
-    
+
     # Who customized
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='acv2_pattern_overrides'
     )
-    
+
     # Same pattern structure as AcV2QpPattern
     pattern = models.JSONField(default=dict, blank=True)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1209,13 +1209,13 @@ class AcV2EditRequest(models.Model):
     Follows multi-stage approval workflow defined in semester config.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     exam_assignment = models.ForeignKey(
         AcV2ExamAssignment,
         on_delete=models.CASCADE,
         related_name='edit_requests'
     )
-    
+
     # Requester info
     requested_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -1224,7 +1224,7 @@ class AcV2EditRequest(models.Model):
     )
     requested_at = models.DateTimeField(auto_now_add=True)
     reason = models.TextField()
-    
+
     # Status
     STATUS_CHOICES = (
         ('PENDING', 'Pending'),
@@ -1236,21 +1236,21 @@ class AcV2EditRequest(models.Model):
         ('CANCELLED', 'Cancelled'),
     )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
-    
+
     # Current approval stage
     current_stage = models.IntegerField(default=1)
-    
+
     # Approval history
     # [{"stage": 1, "role": "HOD", "user_id": 123, "user_name": "...",
     #   "action": "APPROVED", "at": "...", "notes": "..."}]
     approval_history = models.JSONField(default=list, blank=True)
-    
+
     # When approved, edit window ends at
     approved_until = models.DateTimeField(null=True, blank=True)
 
     # Pending request expires at (after this, faculty can request again)
     expires_at = models.DateTimeField(null=True, blank=True)
-    
+
     # Final reviewer
     reviewed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -1282,13 +1282,13 @@ class AcV2EditRequest(models.Model):
         self.reviewed_by = user
         self.reviewed_at = now
         self.approved_until = now + timedelta(minutes=window_minutes)
-        
+
         # Update exam assignment
         self.exam_assignment.edit_window_until = self.approved_until
         self.exam_assignment.edit_window_until_publish = False
         self.exam_assignment.has_pending_edit_request = False
         self.exam_assignment.save(update_fields=['edit_window_until', 'edit_window_until_publish', 'has_pending_edit_request'])
-        
+
         # Add to history
         history = self.approval_history or []
         history.append({
@@ -1310,11 +1310,11 @@ class AcV2EditRequest(models.Model):
         self.reviewed_by = user
         self.reviewed_at = now
         self.rejection_reason = reason
-        
+
         # Update exam assignment
         self.exam_assignment.has_pending_edit_request = False
         self.exam_assignment.save(update_fields=['has_pending_edit_request'])
-        
+
         # Add to history
         history = self.approval_history or []
         history.append({
@@ -1339,27 +1339,27 @@ class AcV2InternalMark(models.Model):
     This is READ-ONLY for faculty - computed from all exam assignments.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     section = models.ForeignKey(
         AcV2Section,
         on_delete=models.CASCADE,
         related_name='internal_marks'
     )
-    
+
     student = models.ForeignKey(
         'academics.StudentProfile',
         on_delete=models.CASCADE,
         related_name='acv2_internal_marks'
     )
-    
+
     # Denormalized
     reg_no = models.CharField(max_length=50)
     student_name = models.CharField(max_length=255)
-    
+
     # ========== WEIGHTED MARKS PER (EXAM, CO) ==========
     # { "SSA1_CO1": 2.3, "SSA1_CO2": 2.4, "CIA1_CO1": 4.8, "CIA1_CO2": 4.9, ... }
     weighted_marks = models.JSONField(default=dict, blank=True)
-    
+
     # ========== TOTALS PER CO ==========
     co1_total = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     co2_total = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
@@ -1367,13 +1367,13 @@ class AcV2InternalMark(models.Model):
     co4_total = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     co5_total = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     co6_total = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
-    
+
     # Final internal mark (e.g., /40)
     final_mark = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
-    
+
     # Out of (usually 40 or 100)
     max_mark = models.DecimalField(max_digits=6, decimal_places=2, default=40)
-    
+
     # Computation metadata
     computed_at = models.DateTimeField(auto_now=True)
 
@@ -1397,10 +1397,10 @@ class AcV2InternalMark(models.Model):
     def calculate_totals(self):
         """Calculate CO totals and final mark from weighted_marks."""
         wm = self.weighted_marks or {}
-        
+
         max_supported_co = 6
         co_totals = {i: 0 for i in range(1, max_supported_co + 1)}
-        
+
         for key, value in wm.items():
             if value is None:
                 continue
@@ -1410,10 +1410,10 @@ class AcV2InternalMark(models.Model):
                 co_num = int(parts[1][2:])
                 if 1 <= co_num <= max_supported_co:
                     co_totals[co_num] += float(value)
-        
+
         for co_num in range(1, max_supported_co + 1):
             setattr(self, f'co{co_num}_total', round(co_totals[co_num], 2))
-        
+
         self.final_mark = round(sum(co_totals.values()), 2)
 
 
@@ -1428,7 +1428,7 @@ class AcV2QpType(models.Model):
     Can be global or scoped to a specific class type.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     # Version scope
     version = models.ForeignKey(
         AcV2Version,
@@ -1437,13 +1437,13 @@ class AcV2QpType(models.Model):
         blank=True,
         related_name='qp_types'
     )
-    
+
     # Type name (e.g., "SSA-1", "CIA-1", "MODEL EXAM", "LAB EXAM")
     name = models.CharField(max_length=100, unique=True, db_index=True)
-    
+
     # Type code (e.g., "SSA", "CIA", "MODEL", "LAB")
     code = models.CharField(max_length=20, unique=True, db_index=True)
-    
+
     # Optional: Link to specific class type (if null, it's global)
     class_type = models.ForeignKey(
         AcV2ClassType,
@@ -1452,13 +1452,13 @@ class AcV2QpType(models.Model):
         blank=True,
         related_name='qp_types'
     )
-    
+
     # Description
     description = models.TextField(blank=True)
-    
+
     # Is this type active and available for use?
     is_active = models.BooleanField(default=True, db_index=True)
-    
+
     # College scope (if multi-tenant)
     college = models.ForeignKey(
         'college.College',
@@ -1467,7 +1467,7 @@ class AcV2QpType(models.Model):
         blank=True,
         related_name='acv2_qp_types'
     )
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(
@@ -1477,7 +1477,7 @@ class AcV2QpType(models.Model):
         blank=True,
         related_name='acv2_qp_types_updated'
     )
-    
+
     class Meta:
         db_table = 'acv2_qp_type'
         verbose_name = 'QP Type'
@@ -1497,7 +1497,7 @@ class AcV2QpType(models.Model):
         indexes = [
             models.Index(fields=['is_active', 'college']),
         ]
-    
+
     def __str__(self):
         return f"{self.name} ({self.code})"
 
@@ -1577,34 +1577,34 @@ class AcV2Question(models.Model):
     Each question has title, max marks, BTL level, CO mapping.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     # Link to QP Pattern
     qp_pattern = models.ForeignKey(
         AcV2QpPattern,
         on_delete=models.CASCADE,
         related_name='questions'
     )
-    
+
     # Question details
     title = models.CharField(max_length=255)  # e.g., "Q1", "Part A - Q1"
     max_marks = models.DecimalField(max_digits=5, decimal_places=2)
-    
+
     # BTL (Bloom's Taxonomy Level) 1-6
     btl_level = models.IntegerField(
         null=True,
         blank=True,
         choices=[(i, f'BTL {i}') for i in range(1, 7)]
     )
-    
+
     # CO (Course Outcome) number
     co_number = models.IntegerField(null=True, blank=True)
-    
+
     # Whether this question is enabled/active
     is_enabled = models.BooleanField(default=True)
-    
+
     # Question order/sequence in the pattern
     order = models.IntegerField(default=0)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(
@@ -1614,7 +1614,7 @@ class AcV2Question(models.Model):
         blank=True,
         related_name='acv2_questions_updated'
     )
-    
+
     class Meta:
         db_table = 'acv2_question'
         verbose_name = 'Question'
@@ -1631,7 +1631,7 @@ class AcV2Question(models.Model):
             models.Index(fields=['is_enabled']),
         ]
         ordering = ['order']
-    
+
     def __str__(self):
         return f"{self.title} ({self.max_marks} marks, CO{self.co_number})"
 
@@ -1647,20 +1647,20 @@ class AcV2QpAssignment(models.Model):
     Allows linking which QP Types are used for specific exam types.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     # Links to the three tables
     class_type = models.ForeignKey(
         AcV2ClassType,
         on_delete=models.CASCADE,
         related_name='qp_assignments'
     )
-    
+
     qp_type = models.ForeignKey(
         AcV2QpType,
         on_delete=models.CASCADE,
         related_name='assignments'
     )
-    
+
     # Link to the QP Pattern that represents the exam assignment for this class type.
     # This is what the admin configures in the QP Pattern Editor flow.
     exam_assignment = models.ForeignKey(
@@ -1670,13 +1670,13 @@ class AcV2QpAssignment(models.Model):
         blank=True,
         related_name='qp_assignments'
     )
-    
+
     # Weight/percentage for this exam type within the class type
     weight = models.DecimalField(max_digits=5, decimal_places=2, default=0)
-    
+
     # Is this assignment active?
     is_active = models.BooleanField(default=True)
-    
+
     # Additional configuration
     # Can store exam-specific settings like "allow_customize", "covered_cos", etc.
     config = models.JSONField(default=dict, blank=True)
@@ -1698,7 +1698,7 @@ class AcV2QpAssignment(models.Model):
         blank=True,
         related_name='acv2_qp_assignments_updated'
     )
-    
+
     class Meta:
         db_table = 'acv2_qp_assignment'
         verbose_name = 'QP Assignment'
@@ -1713,7 +1713,7 @@ class AcV2QpAssignment(models.Model):
             models.Index(fields=['class_type', 'qp_type']),
             models.Index(fields=['is_active']),
         ]
-    
+
     def __str__(self):
         exam_id = getattr(self, 'exam_assignment_id', None)
         if not exam_id:
@@ -1802,7 +1802,7 @@ class AcV2Cycle(models.Model):
     Used to associate exam templates with a specific academic cycle.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     # Version scope
     version = models.ForeignKey(
         AcV2Version,

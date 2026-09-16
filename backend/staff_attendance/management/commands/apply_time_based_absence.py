@@ -46,13 +46,13 @@ class Command(BaseCommand):
         if not settings:
             self.stdout.write(self.style.ERROR('No AttendanceSettings found. Creating default settings...'))
             settings = AttendanceSettings.objects.create()
-        
+
         if not settings.apply_time_based_absence:
             self.stdout.write(self.style.WARNING('Time-based absence is currently disabled in settings'))
             response = input('Do you want to continue anyway? (yes/no): ')
             if response.lower() != 'yes':
                 return
-        
+
         self.stdout.write(self.style.SUCCESS(f'Using time limits:'))
         self.stdout.write(f'  - In time limit: {settings.attendance_in_time_limit}')
         self.stdout.write(f'  - Mid time split: {settings.mid_time_split}')
@@ -61,7 +61,7 @@ class Command(BaseCommand):
 
         # Build query filters
         filters = Q()
-        
+
         # Filter by staff ID if provided
         if options['staff_id']:
             try:
@@ -72,7 +72,7 @@ class Command(BaseCommand):
             except User.DoesNotExist:
                 self.stdout.write(self.style.ERROR(f"Staff with ID {options['staff_id']} not found"))
                 return
-        
+
         # Filter by date range if provided
         if options['date_from']:
             try:
@@ -82,7 +82,7 @@ class Command(BaseCommand):
             except ValueError:
                 self.stdout.write(self.style.ERROR('Invalid date-from format. Use YYYY-MM-DD'))
                 return
-        
+
         if options['date_to']:
             try:
                 to_date = datetime.strptime(options['date_to'], '%Y-%m-%d').date()
@@ -91,36 +91,36 @@ class Command(BaseCommand):
             except ValueError:
                 self.stdout.write(self.style.ERROR('Invalid date-to format. Use YYYY-MM-DD'))
                 return
-        
+
         # Only check records currently marked as 'present' or 'partial'
         # (don't re-process already absent records)
         filters &= Q(status__in=['present', 'partial'])
-        
+
         # Get attendance records
         records = AttendanceRecord.objects.filter(filters).select_related('user')
         total_records = records.count()
-        
+
         self.stdout.write(f'\nFound {total_records} records to check\n')
-        
+
         if total_records == 0:
             self.stdout.write(self.style.WARNING('No records found matching criteria'))
             return
-        
+
         # Process records
         updated_count = 0
         details = []
-        
+
         for record in records:
             old_status = record.status
             old_fn_status = record.fn_status
             old_an_status = record.an_status
-            
+
             # Apply the update_status logic which handles FN/AN split
             record.update_status()
-            
+
             # Check if anything changed
-            if (record.status != old_status or 
-                record.fn_status != old_fn_status or 
+            if (record.status != old_status or
+                record.fn_status != old_fn_status or
                 record.an_status != old_an_status):
                 updated_count += 1
                 staff_id_display = 'N/A'
@@ -129,7 +129,7 @@ class Command(BaseCommand):
                         staff_id_display = record.user.staff_profile.staff_id
                 except Exception:
                     pass
-                
+
                 detail = {
                     'staff_id': staff_id_display,
                     'username': record.user.username,
@@ -144,11 +144,11 @@ class Command(BaseCommand):
                     'evening_out': record.evening_out
                 }
                 details.append(detail)
-                
+
                 # Save if not dry-run
                 if not options['dry_run']:
                     record.save(update_fields=['status', 'fn_status', 'an_status'])
-        
+
         # Report results
         self.stdout.write('\n' + '='*80)
         if options['dry_run']:
@@ -156,7 +156,7 @@ class Command(BaseCommand):
         else:
             self.stdout.write(self.style.SUCCESS(f'Updated {updated_count} records to absent'))
         self.stdout.write('='*80 + '\n')
-        
+
         # Show details
         if details:
             self.stdout.write(self.style.WARNING('Details of records updated:'))
@@ -167,7 +167,7 @@ class Command(BaseCommand):
                 self.stdout.write(f"  FN Status: {detail['old_fn_status']} → {detail['new_fn_status']}")
                 self.stdout.write(f"  AN Status: {detail['old_an_status']} → {detail['new_an_status']}")
                 self.stdout.write(f"  Times: In={detail['morning_in']}, Out={detail['evening_out']}")
-        
+
         self.stdout.write('')
         if options['dry_run']:
             self.stdout.write(self.style.WARNING('This was a DRY RUN - no records were actually updated'))

@@ -153,7 +153,7 @@ class SpecialTimetableEntry(models.Model):
 
 class PeriodSwapRequest(models.Model):
     """Period swap request that requires approval from the other staff member.
-    
+
     When a staff wants to swap periods, they create a request which notifies
     the other staff. The swap only executes after approval.
     """
@@ -163,35 +163,35 @@ class PeriodSwapRequest(models.Model):
         ('REJECTED', 'Rejected'),
         ('CANCELLED', 'Cancelled'),
     )
-    
+
     section = models.ForeignKey('academics.Section', on_delete=models.CASCADE, related_name='period_swap_requests')
     requested_by = models.ForeignKey('academics.StaffProfile', on_delete=models.CASCADE, related_name='initiated_swap_requests')
     requested_to = models.ForeignKey('academics.StaffProfile', on_delete=models.CASCADE, related_name='received_swap_requests')
-    
+
     # From period details
     from_date = models.DateField()
     from_period = models.ForeignKey('TimetableSlot', on_delete=models.CASCADE, related_name='swap_from_requests')
     from_subject_text = models.CharField(max_length=256, blank=True)
-    
+
     # To period details
     to_date = models.DateField()
     to_period = models.ForeignKey('TimetableSlot', on_delete=models.CASCADE, related_name='swap_to_requests')
     to_subject_text = models.CharField(max_length=256, blank=True)
-    
+
     # Status and tracking
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
     reason = models.TextField(blank=True, help_text='Optional reason for the swap request')
     response_message = models.TextField(blank=True, help_text='Optional message from the approver/rejecter')
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     responded_at = models.DateTimeField(null=True, blank=True, help_text='When the request was approved/rejected')
-    
+
     class Meta:
         verbose_name = 'Period Swap Request'
         verbose_name_plural = 'Period Swap Requests'
         ordering = ('-created_at',)
-    
+
     def __str__(self):
         return f"Swap Request: {self.requested_by.staff_id} ↔ {self.requested_to.staff_id} ({self.status})"
 

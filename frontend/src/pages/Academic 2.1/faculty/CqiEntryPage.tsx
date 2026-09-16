@@ -1322,13 +1322,13 @@ export default function CqiEntryPage() {
     try {
       setAnnouncing(true);
       setMessage(null);
-      
+
       const res = await fetchWithAuth(`/api/academic-v2/faculty/courses/${effectiveTaId}/cqi-announce/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
-      
+
       let data: any = {};
       try {
         data = await res.json();
@@ -1336,12 +1336,12 @@ export default function CqiEntryPage() {
         console.error('Failed to parse response:', parseErr);
         data = {};
       }
-      
+
       if (!res.ok) {
         const errorMsg = data?.detail || data?.error || `HTTP ${res.status}`;
         throw new Error(String(errorMsg));
       }
-      
+
       const sent = Number(data?.sent ?? 0);
       const matched = Number(data?.matched ?? 0);
       const successMsg = sent > 0
@@ -1350,15 +1350,15 @@ export default function CqiEntryPage() {
         ? `Found ${matched} student${matched !== 1 ? 's' : ''} in CQI table, but no notifications were sent`
         : 'No CQI students found';
       setMessage({ type: sent > 0 || matched > 0 ? 'success' : 'error', text: successMsg });
-      
+
       // Show floating announcement notification only if students were reached
       if (sent > 0) {
         setAnnouncementNotif({ studentCount: sent, timestamp: Date.now() });
         setAnnouncementTimeLeft(6000); // 6 seconds
-        
+
         // Clear any existing timer
         if (announcementTimerRef.current) clearInterval(announcementTimerRef.current);
-        
+
         // Start countdown timer
         announcementTimerRef.current = setInterval(() => {
           setAnnouncementTimeLeft((prev) => {

@@ -30,7 +30,7 @@ def add_ps_permissions(apps, schema_editor):
             code=perm_code,
             defaults={'description': perm_desc}
         )
-        
+
         # Assign to PS role
         RolePermission.objects.get_or_create(role=ps_role, permission=perm)
 
@@ -39,7 +39,7 @@ def add_ps_permissions(apps, schema_editor):
         'accounts.view_user',
         'academics.view_staffprofile',
     ]
-    
+
     for perm_code in basic_permissions:
         try:
             perm = Permission.objects.get(code=perm_code)

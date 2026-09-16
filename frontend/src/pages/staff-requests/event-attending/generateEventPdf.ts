@@ -354,7 +354,7 @@ function buildMainContent(
   if ((form as any).budget_details) {
     const b = (form as any).budget_details;
     const eligibleText = b.is_conference ? 'Eligible Amount for Conference' : 'Eligible Amount for Events';
-    
+
     autoTable(doc, {
       startY: totalsStartY,
       body: [
@@ -399,19 +399,19 @@ function buildMainContent(
   // ── Signature block (horizontal, 2 rows) ─────────────────────────
   const H = doc.internal.pageSize.getHeight();
   const signatureHeight = 45; // Space needed for signature block
-  
+
   let availableTopY = curY;
-  
+
   if (curY + signatureHeight > H - 15) {
       doc.addPage();
       availableTopY = 20; // Top of the new page is available
   }
-  
+
   // ALWAYS place signature at the bottom of the page it lands on
   const signatureStartY = H - signatureHeight - 15;
-  
+
   const balanceLabel = form.balance >= 0 ? 'Balance Received' : 'Refunded';
-  
+
   const getSigData = (role: string) => {
       if (role === 'Faculty') {
           return { name: applicantName, date: formatDate(form.created_at) };
@@ -436,23 +436,23 @@ function buildMainContent(
     doc.setTextColor(0, 0, 0);
     doc.setDrawColor(80, 80, 80);
     doc.setLineWidth(0.4);
-    
+
     roles.forEach((role, i) => {
       const cx = 10 + i * colW + colW / 2;
       const lineHalfW = Math.min(colW * 0.7, 28) / 2;
-      
+
       const sigData = getSigData(role);
-      
+
       if (sigData) {
           doc.text(sigData.name, cx, y - 2, { align: 'center', maxWidth: colW - 4 });
       }
-      
+
       doc.line(cx - lineHalfW, y, cx + lineHalfW, y);
-      
+
       doc.setFont('helvetica', 'bold');
       doc.text(role, cx, y + 4, { align: 'center', maxWidth: colW - 4 });
       doc.setFont('helvetica', 'normal');
-      
+
       if (sigData && sigData.date) {
           doc.setFontSize(7);
           doc.setTextColor(80, 80, 80);
@@ -518,7 +518,7 @@ async function drawProofBlock(
   doc.setDrawColor(60, 60, 60);
   doc.setLineWidth(0.4);
   doc.line(startX + 10, textY + 10, startX + blockWidth - 10, textY + 10);
-  
+
   const headerSpace = textY + 13 - startY;
 
   // Fetch the proof file
@@ -552,21 +552,21 @@ async function drawProofBlock(
         const ratio = Math.min(maxImgW / imgH, maxImgH / imgW);
         dw = imgW * ratio;
         dh = imgH * ratio;
-        
+
         const boxX = startX + (blockWidth - dh) / 2;
         const boxY = startY + headerSpace + 3 + (maxImgH - dw) / 2;
-        
+
         drawX = boxX;
         drawY = boxY + dw;
       } else {
         const ratio = Math.min(maxImgW / imgW, maxImgH / imgH);
         dw = imgW * ratio;
         dh = imgH * ratio;
-        
+
         drawX = startX + (blockWidth - dw) / 2;
         drawY = startY + headerSpace + 3 + (maxImgH - dh) / 2;
       }
-      
+
       doc.addImage(fetched.data, imgType, drawX, drawY, dw, dh, undefined, 'FAST', angle);
     } catch {
       doc.addImage(fetched.data, imgType, startX + 10, startY + headerSpace + 3, maxImgW, maxImgH);
@@ -604,12 +604,12 @@ async function buildProofPages(
 
   const W = doc.internal.pageSize.getWidth();
   const H = doc.internal.pageSize.getHeight();
-  
+
   let i_portrait = 0;
   let i_landscape = 0;
-  
+
   const availableSpace = layout.signatureStartY - layout.availableTopY;
-  
+
   // Fill the remaining space on the signature page if large enough (e.g. > 60mm)
   if (availableSpace > 60) {
       if (portraitFiles.length > 0) {
@@ -621,7 +621,7 @@ async function buildProofPages(
           const blockH = Math.min(availableSpace, H / 2);
           await drawProofBlock(doc, file1, logoLeftBase64, logoRightBase64, 0, layout.availableTopY, W, blockH, true);
           i_landscape++;
-          
+
           if (availableSpace >= H / 2 + blockH - 5 && landscapeFiles.length > 1) {
               const file2 = landscapeFiles[1];
               doc.setDrawColor(200, 200, 200);
@@ -644,21 +644,21 @@ async function buildProofPages(
     doc.addPage('a4', 'portrait');
     const W = doc.internal.pageSize.getWidth();
     const H = doc.internal.pageSize.getHeight();
-    
+
     const file1 = landscapeFiles[i];
     const file2 = landscapeFiles[i + 1];
     const halfH = H / 2;
-    
+
     // Top half
     await drawProofBlock(doc, file1, logoLeftBase64, logoRightBase64, 0, 0, W, halfH);
-    
+
     // Bottom half (if there's a second file)
     if (file2) {
       // Separator line
       doc.setDrawColor(200, 200, 200);
       doc.setLineWidth(0.2);
       doc.line(10, halfH, W - 10, halfH);
-      
+
       await drawProofBlock(doc, file2, logoLeftBase64, logoRightBase64, 0, halfH, W, halfH - 14, true);
     }
   }
@@ -679,13 +679,13 @@ export async function generateEventPdf(form: EventAttendingFormDetail): Promise<
   // Page numbers and download date footer on every page
   const totalPages = (doc as any).internal.getNumberOfPages();
   const downloadDateStr = `Downloaded: ${new Date().toLocaleString('en-IN')}`;
-  
+
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7);
     doc.setTextColor(120, 120, 120);
-    
+
     // Left footer
     doc.text(
       downloadDateStr,
@@ -693,7 +693,7 @@ export async function generateEventPdf(form: EventAttendingFormDetail): Promise<
       doc.internal.pageSize.getHeight() - 5,
       { align: 'left' }
     );
-    
+
     // Center footer
     doc.text(
       `Page ${i} of ${totalPages}  |  ${INSTITUTION}`,

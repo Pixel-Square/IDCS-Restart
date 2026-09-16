@@ -8,7 +8,7 @@ class AttendanceRecord(models.Model):
     """Records daily attendance for staff members"""
     # No choices constraint - accepts any status code from leave templates
     # Common values: 'present', 'absent', 'half_day', 'partial', 'OD', 'LEAVE', 'CL', 'ML', 'COL', etc.
-    
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -18,14 +18,14 @@ class AttendanceRecord(models.Model):
     morning_in = models.TimeField(null=True, blank=True)
     evening_out = models.TimeField(null=True, blank=True)
     status = models.CharField(max_length=20, default='absent', help_text='Attendance status code - can be any value from leave templates')
-    
+
     # Split attendance for FN (Forenoon) and AN (Afternoon)
     # null=True allows recording only one session (e.g., FN COL on holiday without AN status)
     fn_status = models.CharField(max_length=20, null=True, blank=True, help_text='Forenoon attendance status')
     an_status = models.CharField(max_length=20, null=True, blank=True, help_text='Afternoon attendance status')
-    
+
     notes = models.TextField(blank=True)
-    
+
     # Audit fields
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -35,7 +35,7 @@ class AttendanceRecord(models.Model):
     )
     uploaded_at = models.DateTimeField(default=timezone.now)
     source_file = models.CharField(max_length=255, blank=True)
-    
+
     class Meta:
         db_table = 'staff_attendance_record'
         unique_together = [['user', 'date']]
@@ -44,18 +44,18 @@ class AttendanceRecord(models.Model):
             models.Index(fields=['user', 'date']),
             models.Index(fields=['date', 'status']),
         ]
-    
+
     def __str__(self):
         return f"{self.user.username} - {self.date} - {self.status}"
-    
+
     def update_status(self, defer_an_until_out: bool = False):
         """Auto-determine status based on morning_in, evening_out, and time limits.
         Preserves leave statuses (CL, OD, ML, COL, etc.) - only updates biometric statuses.
-        
+
         FN/AN Split Logic:
         - FN (Forenoon): Based on morning_in time vs in_time_limit (default 08:45)
         - AN (Afternoon): Based on morning_in vs mid_split (1 PM) and evening_out vs out_time_limit
-        
+
         Priority for time limits:
         1. Department-specific settings (if user belongs to a department with configured settings)
         2. Global AttendanceSettings
@@ -73,7 +73,7 @@ class AttendanceRecord(models.Model):
         # In both cases we must NOT touch a leave status (CL, OD, COL, etc.).
         def _needs_biometric_calc(session_status):
             return session_status in BIOMETRIC_STATUSES or (session_status is None and has_biometric)
-        
+
         try:
             # Get time limits with fallback order: staff override -> special date -> department -> global
             in_limit = '08:45:00'
@@ -92,8 +92,8 @@ class AttendanceRecord(models.Model):
                 out_limit = staff_override.attendance_out_time_limit
                 mid_split = staff_override.mid_time_split
                 apply_absence = staff_override.apply_time_based_absence
-            
-            
+
+
             # Try to get special date-range settings first, then department-specific settings
             department_settings = None
             special_settings = None
@@ -134,7 +134,7 @@ class AttendanceRecord(models.Model):
                         departments=user_department,
                         enabled=True
                     ).first()
-            
+
             if department_settings and not staff_override:
                 # Use department-specific settings
                 in_limit = department_settings.attendance_in_time_limit
@@ -149,7 +149,7 @@ class AttendanceRecord(models.Model):
                     out_limit = global_settings.attendance_out_time_limit
                     mid_split = global_settings.mid_time_split
                     apply_absence = global_settings.apply_time_based_absence
-            
+
             if apply_absence:
 
                 fn_no_record_mode = in_limit == mid_split
@@ -171,7 +171,7 @@ class AttendanceRecord(models.Model):
                             # No morning_in time - FN absent
                             self.fn_status = 'absent'
                 # else: Preserve leave status (CL, OD, ML, COL, etc.)
-                
+
                 # === Calculate AN status ===
                 if _needs_biometric_calc(self.an_status):
                     if an_no_record_mode:
@@ -207,7 +207,7 @@ class AttendanceRecord(models.Model):
                         # No times at all
                         self.an_status = 'absent'
                 # else: Preserve leave status (CL, OD, ML, COL, etc.)
-                
+
             else:
                 # No settings OR time-based absence is disabled — simple present/absent logic
                 fn_no_record_mode = in_limit == mid_split
@@ -218,13 +218,13 @@ class AttendanceRecord(models.Model):
                         self.fn_status = None
                     else:
                         self.fn_status = 'present' if self.morning_in else 'absent'
-                
+
                 if _needs_biometric_calc(self.an_status):
                     if an_no_record_mode:
                         self.an_status = None
                     else:
                         self.an_status = 'present' if self.evening_out else 'absent'
-            
+
             # === Calculate overall status based on FN and AN ===
             # Overall status logic:
             # - If both FN and AN are null → absent (no data)
@@ -232,7 +232,7 @@ class AttendanceRecord(models.Model):
             # - If both FN and AN have same status → use that status
             # - If one is non-absent → half_day
             # - If both absent → absent
-            
+
             if self.fn_status is None and self.an_status is None:
                 # Both sessions null (no data)
                 self.status = 'absent'
@@ -251,19 +251,19 @@ class AttendanceRecord(models.Model):
             else:
                 # Both absent
                 self.status = 'absent'
-                
+
         except Exception as e:
             # Fallback on any error - preserve leave statuses
             import logging
             logger = logging.getLogger(__name__)
             logger.exception(f'Error in update_status for {self.user} on {self.date}: {e}')
-            
+
             # Simple fallback - only update if statuses are biometric
             if self.fn_status in BIOMETRIC_STATUSES:
                 self.fn_status = 'present' if self.morning_in else 'absent'
             if self.an_status in BIOMETRIC_STATUSES:
                 self.an_status = 'present' if self.evening_out else 'absent'
-            
+
             # Recalculate overall (with null handling)
             if self.fn_status is None and self.an_status is None:
                 self.status = 'absent'
@@ -289,20 +289,20 @@ class UploadLog(models.Model):
     filename = models.CharField(max_length=255)
     uploaded_at = models.DateTimeField(auto_now_add=True)
     target_date = models.DateField(help_text="Upload date used to determine columns")
-    
+
     # Processing results
     processed_rows = models.IntegerField(default=0)
     success_count = models.IntegerField(default=0)
     error_count = models.IntegerField(default=0)
     errors = models.JSONField(default=list, blank=True)
-    
+
     # Store original file
     file = models.FileField(upload_to='attendance_uploads/%Y/%m/', null=True, blank=True)
-    
+
     class Meta:
         db_table = 'staff_attendance_upload_log'
         ordering = ['-uploaded_at']
-    
+
     def __str__(self):
         return f"{self.filename} - {self.uploaded_at.strftime('%Y-%m-%d %H:%M')}"
 
@@ -314,22 +314,22 @@ class HalfDayRequest(models.Model):
         ('approved', 'Approved'),
         ('rejected', 'Rejected'),
     ]
-    
+
     # Staff requesting access
     staff_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='attendance_access_requests'
     )
-    
+
     # Date for which access is requested
     attendance_date = models.DateField(help_text="Date for which period attendance access is requested")
-    
+
     # Request details
     requested_at = models.DateTimeField(auto_now_add=True)
     reason = models.TextField(help_text="Staff reason for requesting period attendance access")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    
+
     # HOD/AHOD approval
     reviewed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -340,15 +340,15 @@ class HalfDayRequest(models.Model):
     )
     reviewed_at = models.DateTimeField(null=True, blank=True)
     review_notes = models.TextField(blank=True, help_text="HOD/AHOD review comments")
-    
+
     class Meta:
         db_table = 'staff_attendance_halfday_request'
         unique_together = [['staff_user', 'attendance_date']]
         ordering = ['-requested_at']
-    
+
     def __str__(self):
         return f"{self.staff_user.username} - {self.attendance_date} - {self.status}"
-    
+
     @property
     def can_mark_attendance(self):
         """Check if staff can mark period attendance for this date"""
@@ -380,14 +380,14 @@ class Holiday(models.Model):
         related_name='created_holidays'
     )
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
         db_table = 'staff_attendance_holiday'
         ordering = ['-date']
         indexes = [
             models.Index(fields=['date']),
         ]
-    
+
     def __str__(self):
         return f"{self.date} - {self.name}"
 
@@ -432,12 +432,12 @@ class AttendanceSettings(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         db_table = 'staff_attendance_settings'
         verbose_name = 'Attendance Settings'
         verbose_name_plural = 'Attendance Settings'
-    
+
     def __str__(self):
         return f"Attendance Settings (Updated: {self.updated_at.strftime('%Y-%m-%d %H:%M')})"
 
@@ -503,13 +503,13 @@ class DepartmentAttendanceSettings(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         db_table = 'staff_attendance_dept_settings'
         verbose_name = 'Department Attendance Settings'
         verbose_name_plural = 'Department Attendance Settings'
         ordering = ['name']
-    
+
     def __str__(self):
         dept_count = self.departments.count()
         return f"{self.name} ({dept_count} dept{'s' if dept_count != 1 else ''})"

@@ -125,7 +125,7 @@ def _resolve_department_info(ta: TeachingAssignment) -> Tuple[Optional[int], str
     sec = getattr(ta, 'section', None)
     cr = getattr(ta, 'curriculum_row', None)
     es = getattr(ta, 'elective_subject', None)
-    
+
     code = (getattr(cr, 'course_code', '') or getattr(es, 'course_code', '') or getattr(getattr(ta, 'subject', None), 'code', '') or '').upper()
     name = (getattr(cr, 'course_name', '') or getattr(es, 'course_name', '') or getattr(getattr(ta, 'subject', None), 'name', '') or '').lower()
 
@@ -134,7 +134,7 @@ def _resolve_department_info(ta: TeachingAssignment) -> Tuple[Optional[int], str
     managing_dept = getattr(sec, 'managing_department', None) if sec else None
     if managing_dept and (managing_dept.code in ('S&H', 'SH') or 'humanities' in managing_dept.name.lower()):
         return managing_dept.id, "S_H"
-        
+
     if (sem in (1, 2) or code.startswith('GEA') or code.startswith('FLC') or 'physics' in name or 'chemistry' in name or 'tamil' in name) and managing_dept:
         return managing_dept.id, "S_H"
 
@@ -187,7 +187,7 @@ def _resolve_section_name(ta: TeachingAssignment) -> str:
     sec_name = getattr(sec, 'name', None)
     if sec_name:
         return _safe_text(sec_name)
-    
+
     # Fallback to elective category label if any
     category = None
     if getattr(ta, 'elective_subject', None):
@@ -264,7 +264,7 @@ def _get_students_for_ta(ta: TeachingAssignment) -> List[Dict[str, Any]]:
             ]).strip() if u else ''
             if not name:
                 name = _safe_text(getattr(u, 'username', '')) if u else ''
-            
+
             sid = int(sp.id)
             existing_ids.add(sid)
             students.append({
@@ -311,7 +311,7 @@ def _get_students_for_ta(ta: TeachingAssignment) -> List[Dict[str, Any]]:
                 for d in drafts:
                     data = d.data if isinstance(d.data, dict) else {}
                     sheet = data.get('sheet', data) if isinstance(data, dict) else {}
-                    
+
                     # rowsByStudentId
                     rows_by = sheet.get('rowsByStudentId') if isinstance(sheet, dict) else None
                     if isinstance(rows_by, dict):
@@ -319,7 +319,7 @@ def _get_students_for_ta(ta: TeachingAssignment) -> List[Dict[str, Any]]:
                             k_clean = str(k).replace('id:', '').strip()
                             if k_clean.isdigit():
                                 draft_student_ids.add(int(k_clean))
-                    
+
                     # rows list
                     rows = sheet.get('rows') if isinstance(sheet, dict) else None
                     if isinstance(rows, list):
@@ -329,7 +329,7 @@ def _get_students_for_ta(ta: TeachingAssignment) -> List[Dict[str, Any]]:
                                     draft_student_ids.add(int(r['studentId']))
                                 except Exception:
                                     pass
-                    
+
                     # theorySheet / tcplSheet
                     for sub_key in ('theorySheet', 'tcplSheet'):
                         sub_s = data.get(sub_key) or (sheet.get(sub_key) if isinstance(sheet, dict) else None)
@@ -393,7 +393,7 @@ def _resolve_class_type(ta: TeachingAssignment) -> str:
 
 def _get_applicable_assessments(class_type: str, draft_assessments: Set[str]) -> List[str]:
     ct = str(class_type or 'THEORY').upper().strip()
-    
+
     if ct == 'TCPR':
         # TCPR strictly uses Review 1 & Review 2 (NO Formative 1 or Formative 2 under any circumstance)
         return ['ssa1', 'cia1', 'review1', 'ssa2', 'cia2', 'review2', 'model']
@@ -549,7 +549,7 @@ def _extract_assessment_data_for_ta(
             for item in items:
                 if item.get('absent'):
                     rec['status'] = 'Absent'
-                
+
                 # Question map (Theory CIA)
                 q_map = item.get('q') if isinstance(item.get('q'), dict) else {}
                 for qk, qv in q_map.items():
@@ -582,7 +582,7 @@ def _extract_assessment_data_for_ta(
                 cia_exam = _safe_float(item.get('ciaExam') or item.get('mark') or item.get('total'))
                 if cia_exam is not None:
                     rec['mark'] = cia_exam
-            
+
             if rec['mark'] is None and rec['breakdown']:
                 num_vals = [v for v in rec['breakdown'].values() if v is not None]
                 if num_vals:
@@ -709,7 +709,7 @@ def _extract_assessment_data_for_ta(
                         rec['breakdown'][col_name] = val
                         if col_name not in question_cols:
                             question_cols.append(col_name)
-            
+
             qmarks = r.get('qMarks')
             if isinstance(qmarks, list) and qmarks:
                 for idx, qv in enumerate(qmarks, 1):
@@ -757,7 +757,7 @@ def _extract_assessment_data_for_ta(
             for item in items:
                 if item.get('absent'):
                     rec['status'] = 'Absent'
-                
+
                 rev_marks = item.get('reviewComponentMarks') if isinstance(item.get('reviewComponentMarks'), dict) else {}
                 for rk, rv in rev_marks.items():
                     val = _safe_float(rv)
@@ -766,7 +766,7 @@ def _extract_assessment_data_for_ta(
                         rec['breakdown'][col_name] = val
                         if col_name not in question_cols:
                             question_cols.append(col_name)
-                
+
                 cia_exam = _safe_float(item.get('ciaExam'))
                 tot = _safe_float(item.get('total') or item.get('mark'))
                 if cia_exam is not None:
@@ -823,7 +823,7 @@ def _extract_assessment_data_for_ta(
             for item in items:
                 if item.get('absent'):
                     rec['status'] = 'Absent'
-                
+
                 # 1. Questions Q1 to Q16 (only store if numeric value exists)
                 q_map = item.get('q') if isinstance(item.get('q'), dict) else {}
                 for qk, qv in q_map.items():
@@ -924,7 +924,7 @@ def _extract_assessment_data_for_ta(
                     qs = qs.filter(subject_id=subject_id)
                 if ta_id and ('teaching_assignment' in field_names or 'teaching_assignment_id' in field_names):
                     qs = qs.filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
-                
+
                 if mark_f in field_names:
                     for row in qs.values('student_id', mark_f):
                         sid = row.get('student_id')
@@ -982,7 +982,7 @@ def _build_final_internal_sheet_data(
             )
             if ta_id:
                 fim_qs = fim_qs.filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
-            
+
             for fim in fim_qs.select_related('student'):
                 sid = fim.student_id
                 if sid in student_records:
@@ -1101,9 +1101,9 @@ def _create_styled_course_workbook(
             curr_row = 4 + s_idx
             ws.row_dimensions[curr_row].height = 20
             rec = records.get(st['id'], {})
-            
+
             row_fill = zebra_fill if s_idx % 2 == 0 else PatternFill(fill_type=None)
-            
+
             # S.No
             c1 = ws.cell(row=curr_row, column=1, value=s_idx)
             c1.alignment = align_center
@@ -1267,7 +1267,7 @@ def generate_semester_courses_marks_zip(
     regulation: Optional[str] = None,
 ) -> Tuple[io.BytesIO, int]:
     """Generate structured ZIP archive containing Excel workbooks organized by Semesters & Departments.
-    
+
     Structure:
       Semester {N}/
         {Department}/
@@ -1358,7 +1358,7 @@ def generate_semester_courses_marks_zip(
         for group_key, group_tas in grouped.items():
             sem_no, dept_name, course_code, course_name, section_name = group_key
             primary_ta = group_tas[0]
-            
+
             # Resolve students
             students = _get_students_for_ta(primary_ta)
             if not students:

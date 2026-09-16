@@ -5,7 +5,7 @@ from django.db import migrations
 def clear_autogen_form_names(apps, schema_editor):
     """Clear any auto-generated form_name values (Subject Feedback (ID: X))"""
     FeedbackForm = apps.get_model('feedback', 'FeedbackForm')
-    
+
     # Find and clear any form_name that looks auto-generated
     for form in FeedbackForm.objects.all():
         if form.form_name and ('Subject Feedback (ID:' in form.form_name or 'Common Feedback (ID:' in form.form_name):

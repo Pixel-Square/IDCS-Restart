@@ -1,21 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  CheckCircle2, 
-  Clock, 
+import {
+  CheckCircle2,
+  Clock,
   Calendar,
-  ArrowRight, 
-  Check, 
-  User, 
-  Building2, 
-  GraduationCap, 
-  FileText, 
-  IndianRupee, 
-  Eye, 
-  RefreshCw, 
-  Search, 
-  Filter, 
-  X, 
-  AlertCircle, 
+  ArrowRight,
+  Check,
+  User,
+  Building2,
+  GraduationCap,
+  FileText,
+  IndianRupee,
+  Eye,
+  RefreshCw,
+  Search,
+  Filter,
+  X,
+  AlertCircle,
   AlertTriangle,
   Lock,
   ExternalLink,
@@ -28,12 +28,12 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { getApiBase } from '../../../services/apiBase';
-import { 
-  DisciplineLog, 
-  fetchDisciplineApprovals, 
-  fixDisciplineFine, 
-  forwardDisciplineIncident, 
-  approveDisciplineIncident 
+import {
+  DisciplineLog,
+  fetchDisciplineApprovals,
+  fixDisciplineFine,
+  forwardDisciplineIncident,
+  approveDisciplineIncident
 } from '../../../services/discipline';
 
 function resolveMediaUrl(url?: string | null): string | null {

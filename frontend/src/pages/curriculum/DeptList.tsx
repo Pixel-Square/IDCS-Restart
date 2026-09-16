@@ -199,16 +199,16 @@ export default function DeptList() {
   // Helper: filter QP types by class type (null = global, applied to all)
   const getQpTypesForClassType = (classTypeCode: string | null) => {
     if (!classTypeCode) return [];
-    
+
     // Find the class type ID from the selected code (case-insensitive)
     const norm = String(classTypeCode).toUpperCase().trim();
-    const selectedClassType = adminClassTypes.find(ct => 
-      ct.code?.toUpperCase() === norm || 
-      ct.name?.toUpperCase() === norm || 
+    const selectedClassType = adminClassTypes.find(ct =>
+      ct.code?.toUpperCase() === norm ||
+      ct.name?.toUpperCase() === norm ||
       ct.short_code?.toUpperCase() === norm
     );
     const classTypeId = selectedClassType?.id;
-    
+
     // Show QP types that are:
     // 1. Global (class_type_id is null/undefined)
     // 2. OR specifically mapped to this class type
@@ -219,9 +219,9 @@ export default function DeptList() {
   const getClassTypeLabel = (code: string | null | undefined) => {
     if (!code) return '-';
     const norm = String(code).toUpperCase().trim();
-    const adminCt = adminClassTypes.find(ct => 
-      ct.code?.toUpperCase() === norm || 
-      ct.name?.toUpperCase() === norm || 
+    const adminCt = adminClassTypes.find(ct =>
+      ct.code?.toUpperCase() === norm ||
+      ct.name?.toUpperCase() === norm ||
       ct.short_code?.toUpperCase() === norm
     );
     if (adminCt) return adminCt.label;
@@ -615,7 +615,7 @@ export default function DeptList() {
             )}
           </div>
         )}
-        
+
         {/* Department Filters */}
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
           <h3 className="text-lg font-medium text-gray-900 mb-4">Filter by Department</h3>
@@ -872,7 +872,7 @@ export default function DeptList() {
                             <Copy className="w-4 h-4" />
                           </button>
                         )}
-                        
+
                         {canApprove && r.approval_status === 'PENDING' ? (
                           <>
                             <button
@@ -919,18 +919,18 @@ export default function DeptList() {
             {electives.map(parent => {
               // Get subjects that belong directly to this parent
               const ownSubjects = electiveSubjects.filter(es => es.parent === parent.id);
-              
+
               // Get cross-department subjects with matching parent names
               const parentName = parent.course_name || parent.course_code || '';
-              const crossDeptMatches = electiveSubjects.filter(es => 
-                es.is_cross_department && 
-                es.parent_name && 
+              const crossDeptMatches = electiveSubjects.filter(es =>
+                es.is_cross_department &&
+                es.parent_name &&
                 (es.parent_name === parentName || es.parent_name.toLowerCase() === parentName.toLowerCase())
               );
-              
+
               // Combine both lists
               const allOptions = [...ownSubjects, ...crossDeptMatches];
-              
+
               return (
                 <div key={parent.id} className="bg-white rounded-lg shadow-md p-4">
                   <div className="flex items-center justify-between mb-4">
@@ -942,8 +942,8 @@ export default function DeptList() {
                         </span>
                       )}
                     </div>
-                    <button 
-                      onClick={() => openAddModal(parent)} 
+                    <button
+                      onClick={() => openAddModal(parent)}
                       className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors"
                     >
                       Add Subject
@@ -1023,23 +1023,23 @@ export default function DeptList() {
                 </div>
               );
             })}
-            
+
             {/* Show unmatched cross-department electives (those without a matching parent slot in this dept) */}
             {(() => {
               const crossDeptElectives = electiveSubjects.filter(es => es.is_cross_department);
               if (crossDeptElectives.length === 0) return null;
-              
+
               // Get all parent names from this department's electives
               const deptParentNames = electives.map(p => (p.course_name || p.course_code || '').toLowerCase());
-              
+
               // Find cross-dept electives that don't match any of the department's parent names
               const unmatchedCrossDept = crossDeptElectives.filter(es => {
                 const parentName = (es.parent_name || '').toLowerCase();
                 return !deptParentNames.includes(parentName);
               });
-              
+
               if (unmatchedCrossDept.length === 0) return null;
-              
+
               // Group unmatched by parent name
               const groupedByParent = unmatchedCrossDept.reduce((acc: any, elective: any) => {
                 const parentName = elective.parent_name || 'Unknown Elective';
@@ -1049,7 +1049,7 @@ export default function DeptList() {
                 acc[parentName].push(elective);
                 return acc;
               }, {});
-              
+
               return (
                 <div className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-lg shadow-md p-4 border-2 border-amber-200">
                   <div className="mb-4">
@@ -1141,18 +1141,18 @@ export default function DeptList() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Course Name</label>
-                <input 
-                  value={addForm.course_name || ''} 
-                  onChange={e => setAddForm(f => ({ ...f, course_name: e.target.value }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  value={addForm.course_name || ''}
+                  onChange={e => setAddForm(f => ({ ...f, course_name: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Course Code</label>
-                <input 
-                  value={addForm.course_code || ''} 
-                  onChange={e => setAddForm(f => ({ ...f, course_code: e.target.value }))} 
-                  className="w-full min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  value={addForm.course_code || ''}
+                  onChange={e => setAddForm(f => ({ ...f, course_code: e.target.value }))}
+                  className="w-full min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
@@ -1170,9 +1170,9 @@ export default function DeptList() {
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
                   Department Group <span className="text-xs text-gray-500">(optional)</span>
                 </label>
-                <select 
-                  value={addForm.department_group_id || ''} 
-                  onChange={e => setAddForm(f => ({ ...f, department_group_id: e.target.value ? Number(e.target.value) : null }))} 
+                <select
+                  value={addForm.department_group_id || ''}
+                  onChange={e => setAddForm(f => ({ ...f, department_group_id: e.target.value ? Number(e.target.value) : null }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
                   <option value="">None</option>
@@ -1184,9 +1184,9 @@ export default function DeptList() {
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Class Type</label>
-                <select 
-                  value={addForm.class_type} 
-                  onChange={e => setAddForm(f => ({ ...f, class_type: e.target.value }))} 
+                <select
+                  value={addForm.class_type}
+                  onChange={e => setAddForm(f => ({ ...f, class_type: e.target.value }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
                   {renderClassTypeOptions(addForm.class_type)}
@@ -1194,91 +1194,91 @@ export default function DeptList() {
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Category</label>
-                <input 
-                  value={addForm.category || ''} 
-                  onChange={e => setAddForm(f => ({ ...f, category: e.target.value }))} 
-                  className="w-full min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  value={addForm.category || ''}
+                  onChange={e => setAddForm(f => ({ ...f, category: e.target.value }))}
+                  className="w-full min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">L</label>
-                <input 
-                  type="number" 
-                  value={addForm.l ?? 0} 
-                  onChange={e => setAddForm(f => ({ ...f, l: Number(e.target.value) }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={addForm.l ?? 0}
+                  onChange={e => setAddForm(f => ({ ...f, l: Number(e.target.value) }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">T</label>
-                <input 
-                  type="number" 
-                  value={addForm.t ?? 0} 
-                  onChange={e => setAddForm(f => ({ ...f, t: Number(e.target.value) }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={addForm.t ?? 0}
+                  onChange={e => setAddForm(f => ({ ...f, t: Number(e.target.value) }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">P</label>
-                <input 
-                  type="number" 
-                  value={addForm.p ?? 0} 
-                  onChange={e => setAddForm(f => ({ ...f, p: Number(e.target.value) }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={addForm.p ?? 0}
+                  onChange={e => setAddForm(f => ({ ...f, p: Number(e.target.value) }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">S</label>
-                <input 
-                  type="number" 
-                  value={addForm.s ?? 0} 
-                  onChange={e => setAddForm(f => ({ ...f, s: Number(e.target.value) }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={addForm.s ?? 0}
+                  onChange={e => setAddForm(f => ({ ...f, s: Number(e.target.value) }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">C</label>
-                <input 
-                  type="number" 
-                  value={addForm.c ?? 0} 
-                  onChange={e => setAddForm(f => ({ ...f, c: Number(e.target.value) }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={addForm.c ?? 0}
+                  onChange={e => setAddForm(f => ({ ...f, c: Number(e.target.value) }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Internal Mark</label>
-                <input 
-                  type="number" 
-                  value={addForm.internal_mark ?? ''} 
-                  onChange={e => setAddForm(f => ({ ...f, internal_mark: e.target.value ? Number(e.target.value) : null }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={addForm.internal_mark ?? ''}
+                  onChange={e => setAddForm(f => ({ ...f, internal_mark: e.target.value ? Number(e.target.value) : null }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">External Mark</label>
-                <input 
-                  type="number" 
-                  value={addForm.external_mark ?? ''} 
-                  onChange={e => setAddForm(f => ({ ...f, external_mark: e.target.value ? Number(e.target.value) : null }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={addForm.external_mark ?? ''}
+                  onChange={e => setAddForm(f => ({ ...f, external_mark: e.target.value ? Number(e.target.value) : null }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Total Mark</label>
-                <input 
-                  type="number" 
-                  value={addForm.total_mark ?? ''} 
-                  onChange={e => setAddForm(f => ({ ...f, total_mark: e.target.value ? Number(e.target.value) : null }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={addForm.total_mark ?? ''}
+                  onChange={e => setAddForm(f => ({ ...f, total_mark: e.target.value ? Number(e.target.value) : null }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Total Hours</label>
-                <input 
-                  type="number" 
-                  value={addForm.total_hours ?? ''} 
-                  onChange={e => setAddForm(f => ({ ...f, total_hours: e.target.value ? Number(e.target.value) : null }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={addForm.total_hours ?? ''}
+                  onChange={e => setAddForm(f => ({ ...f, total_hours: e.target.value ? Number(e.target.value) : null }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div className="col-span-2">
@@ -1297,25 +1297,25 @@ export default function DeptList() {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <input 
-                  id="add-editable" 
-                  type="checkbox" 
-                  checked={!!addForm.editable} 
-                  onChange={e => setAddForm(f => ({ ...f, editable: e.target.checked }))} 
-                  className="w-4 h-4" 
+                <input
+                  id="add-editable"
+                  type="checkbox"
+                  checked={!!addForm.editable}
+                  onChange={e => setAddForm(f => ({ ...f, editable: e.target.checked }))}
+                  className="w-4 h-4"
                 />
                 <label htmlFor="add-editable" className="text-sm font-medium text-gray-700">Editable</label>
               </div>
             </div>
             <div className="flex justify-end gap-3 mt-6">
-              <button 
-                onClick={() => setAddModalOpen(false)} 
+              <button
+                onClick={() => setAddModalOpen(false)}
                 className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-700 hover:bg-gray-50 font-medium transition-colors"
               >
                 Cancel
               </button>
-              <button 
-                onClick={saveAddForm} 
+              <button
+                onClick={saveAddForm}
                 className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors"
               >
                 Save
@@ -1331,18 +1331,18 @@ export default function DeptList() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Course Name</label>
-                <input 
-                  value={editElectiveForm.course_name || ''} 
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, course_name: e.target.value }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  value={editElectiveForm.course_name || ''}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, course_name: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Course Code</label>
-                <input 
-                  value={editElectiveForm.course_code || ''} 
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, course_code: e.target.value }))} 
-                  className="w-full min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  value={editElectiveForm.course_code || ''}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, course_code: e.target.value }))}
+                  className="w-full min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
@@ -1360,9 +1360,9 @@ export default function DeptList() {
                 <label className="block text-sm font-semibold text-gray-700 mb-1">
                   Department Group <span className="text-xs text-gray-500">(optional)</span>
                 </label>
-                <select 
-                  value={editElectiveForm.department_group_id || ''} 
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, department_group_id: e.target.value ? Number(e.target.value) : null }))} 
+                <select
+                  value={editElectiveForm.department_group_id || ''}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, department_group_id: e.target.value ? Number(e.target.value) : null }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
                   <option value="">None</option>
@@ -1374,9 +1374,9 @@ export default function DeptList() {
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Class Type</label>
-                <select 
-                  value={editElectiveForm.class_type || 'THEORY'} 
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, class_type: e.target.value }))} 
+                <select
+                  value={editElectiveForm.class_type || 'THEORY'}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, class_type: e.target.value }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
                   {renderClassTypeOptions(editElectiveForm.class_type)}
@@ -1384,91 +1384,91 @@ export default function DeptList() {
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Category</label>
-                <input 
-                  value={editElectiveForm.category || ''} 
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, category: e.target.value }))} 
-                  className="w-full min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  value={editElectiveForm.category || ''}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, category: e.target.value }))}
+                  className="w-full min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">L</label>
-                <input 
-                  type="number" 
-                  value={editElectiveForm.l ?? 0} 
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, l: Number(e.target.value) }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={editElectiveForm.l ?? 0}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, l: Number(e.target.value) }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">T</label>
-                <input 
-                  type="number" 
-                  value={editElectiveForm.t ?? 0} 
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, t: Number(e.target.value) }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={editElectiveForm.t ?? 0}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, t: Number(e.target.value) }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">P</label>
-                <input 
-                  type="number" 
-                  value={editElectiveForm.p ?? 0} 
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, p: Number(e.target.value) }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={editElectiveForm.p ?? 0}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, p: Number(e.target.value) }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">S</label>
-                <input 
-                  type="number" 
-                  value={editElectiveForm.s ?? 0} 
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, s: Number(e.target.value) }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={editElectiveForm.s ?? 0}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, s: Number(e.target.value) }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">C</label>
-                <input 
-                  type="number" 
-                  value={editElectiveForm.c ?? 0} 
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, c: Number(e.target.value) }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={editElectiveForm.c ?? 0}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, c: Number(e.target.value) }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Internal Mark</label>
-                <input 
-                  type="number" 
-                  value={editElectiveForm.internal_mark ?? ''} 
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, internal_mark: e.target.value ? Number(e.target.value) : null }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={editElectiveForm.internal_mark ?? ''}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, internal_mark: e.target.value ? Number(e.target.value) : null }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">External Mark</label>
-                <input 
-                  type="number" 
-                  value={editElectiveForm.external_mark ?? ''} 
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, external_mark: e.target.value ? Number(e.target.value) : null }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={editElectiveForm.external_mark ?? ''}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, external_mark: e.target.value ? Number(e.target.value) : null }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Total Mark</label>
-                <input 
-                  type="number" 
-                  value={editElectiveForm.total_mark ?? ''} 
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, total_mark: e.target.value ? Number(e.target.value) : null }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={editElectiveForm.total_mark ?? ''}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, total_mark: e.target.value ? Number(e.target.value) : null }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Total Hours</label>
-                <input 
-                  type="number" 
-                  value={editElectiveForm.total_hours ?? ''} 
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, total_hours: e.target.value ? Number(e.target.value) : null }))} 
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                <input
+                  type="number"
+                  value={editElectiveForm.total_hours ?? ''}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, total_hours: e.target.value ? Number(e.target.value) : null }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               <div className="col-span-2">
@@ -1483,25 +1483,25 @@ export default function DeptList() {
                 </select>
               </div>
               <div className="flex items-center gap-2">
-                <input 
-                  id="edit-editable" 
-                  type="checkbox" 
-                  checked={!!editElectiveForm.editable} 
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, editable: e.target.checked }))} 
-                  className="w-4 h-4" 
+                <input
+                  id="edit-editable"
+                  type="checkbox"
+                  checked={!!editElectiveForm.editable}
+                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, editable: e.target.checked }))}
+                  className="w-4 h-4"
                 />
                 <label htmlFor="edit-editable" className="text-sm font-medium text-gray-700">Editable</label>
               </div>
             </div>
             <div className="flex justify-end gap-3 mt-6">
-              <button 
-                onClick={() => setEditElectiveOpen(false)} 
+              <button
+                onClick={() => setEditElectiveOpen(false)}
                 className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-700 hover:bg-gray-50 font-medium transition-colors"
               >
                 Cancel
               </button>
-              <button 
-                onClick={saveEditElective} 
+              <button
+                onClick={saveEditElective}
                 className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors"
               >
                 Save

@@ -62,7 +62,7 @@ function TimingSelector({ timing, onChange }: { timing: string, onChange: (val: 
     setStart(val);
     onChange(`${val} - ${end}`);
   };
-  
+
   const handleEndChange = (val: string) => {
     setEnd(val);
     onChange(`${start} - ${val}`);
@@ -140,7 +140,7 @@ const sortColumnsByPeriod = (columns: Column[]): Column[] => {
 const getUniquePeriods = (columns: Column[]): Column[] => {
   const seen = new Set<number>();
   const unique: Column[] = [];
-  
+
   for (const col of sortColumnsByPeriod(columns)) {
     const periodNum = getPeriodNumber(col.period);
     if (!seen.has(periodNum)) {
@@ -148,7 +148,7 @@ const getUniquePeriods = (columns: Column[]): Column[] => {
       unique.push(col);
     }
   }
-  
+
   return unique;
 };
 
@@ -396,8 +396,8 @@ export default function TimetableConfig({ templates, onSaveTemplate, onDeleteTem
         ) : (
           <div className="space-y-4 mb-4">
             {columns.map((column, index) => (
-              <div 
-                key={column.id} 
+              <div
+                key={column.id}
                 className={`p-4 rounded-lg border ${
                   column.period === 'Break'
                     ? 'bg-red-50 border-red-200'
@@ -443,7 +443,7 @@ export default function TimetableConfig({ templates, onSaveTemplate, onDeleteTem
                     <Trash2 size={16} />
                   </button>
                 </div>
-                
+
                 <div className="ml-12 flex gap-2 items-center">
                   <label className="text-sm font-medium text-gray-600 w-20">Timing:</label>
                   <TimingSelector
@@ -530,8 +530,8 @@ export default function TimetableConfig({ templates, onSaveTemplate, onDeleteTem
                 <tr>
                   <th className="border border-gray-300 bg-gray-200 px-3 py-2 font-bold text-sm">Day</th>
                   {columns.map((col) => (
-                    <th 
-                      key={col.id} 
+                    <th
+                      key={col.id}
                       className={`border border-gray-300 px-3 py-2 font-bold text-sm ${
                         col.period === 'Break'
                           ? 'bg-red-200 text-red-900'
@@ -550,8 +550,8 @@ export default function TimetableConfig({ templates, onSaveTemplate, onDeleteTem
                   <tr key={row.id}>
                     <td className="border border-gray-300 bg-gray-100 px-3 py-2 font-bold text-sm">{row.day}</td>
                     {columns.map((col) => (
-                      <td 
-                        key={col.id} 
+                      <td
+                        key={col.id}
                         className={`border border-gray-300 px-3 py-2 h-12 ${
                           col.period === 'Break'
                             ? 'bg-red-50'

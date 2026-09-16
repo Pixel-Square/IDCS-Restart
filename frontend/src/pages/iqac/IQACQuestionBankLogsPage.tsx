@@ -6,7 +6,7 @@ import { getQuestionBankLogs, QuestionBankLog } from '../../services/questionBan
 export default function IQACQuestionBankLogsPage(): JSX.Element {
   const { courseCode } = useParams<{ courseCode: string }>();
   const code = useMemo(() => decodeURIComponent(String(courseCode || '')).trim(), [courseCode]);
-  
+
   const [logs, setLogs] = useState<QuestionBankLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +40,7 @@ export default function IQACQuestionBankLogsPage(): JSX.Element {
       const changes: string[] = [];
       const oldVals = log.old_values || {};
       const newVals = log.new_values || {};
-      
+
       const fieldLabels: Record<string, string> = {
         question_text: 'Question',
         course_outcome: 'CO',
@@ -57,7 +57,7 @@ export default function IQACQuestionBankLogsPage(): JSX.Element {
           changes.push(`${label}: ${oldVal !== null && oldVal !== undefined ? oldVal : '-'} → ${newVal !== null && newVal !== undefined ? newVal : '-'}`);
         }
       }
-      
+
       return changes.length > 0 ? changes.join(', ') : 'Updated';
     }
     return '';

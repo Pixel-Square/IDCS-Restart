@@ -35,7 +35,7 @@ export default function BarScan() {
   const [lastScanned, setLastScanned] = useState<string | null>(null);
   const [activeEntryCode, setActiveEntryCode] = useState<string | null>(null);
   const [activeEntryStudent, setActiveEntryStudent] = useState<StudentDetails | null>(null);
-  
+
   // This input captures the barcode scanner output
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -50,7 +50,7 @@ export default function BarScan() {
     const processScanCode = async (codeToProcess: string) => {
 
     if (!codeToProcess) return;
-    
+
     setScannedCode(''); // Clear input for next scan immediately here as well
     setLoading(true);
     setError(null);
@@ -58,7 +58,7 @@ export default function BarScan() {
     setActiveEntryStudent(null);
     const code = codeToProcess.trim();
 
-    
+
     // Open the mark entry page dynamically over the page
     setActiveEntryCode(code);
 
@@ -99,13 +99,13 @@ export default function BarScan() {
     <div className="p-4 sm:p-6 w-full max-w-[100%] mx-auto">
       {!activeEntryCode ? (
         <div className="flex flex-col md:flex-row gap-6 h-[calc(100vh-140px)]">
-        
+
         {/* Left Panel: Scanner Input & Status */}
         <div className="w-full md:w-1/3 bg-white rounded-xl shadow-sm border border-gray-200 p-6 flex flex-col items-center">
           <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mb-4">
             <ScanLine className="w-8 h-8 text-blue-600" />
           </div>
-          
+
           <h2 className="text-xl font-bold text-gray-800 mb-2">Barcode Scanner</h2>
           <p className="text-sm text-gray-500 text-center mb-8">
             Ensure the scanner is connected. Click anywhere on this page to activate scan mode.
@@ -129,7 +129,7 @@ export default function BarScan() {
                 </div>
               )}
             </div>
-            
+
             {/* Hidden submit button to allow Enter key to submit */}
             <button type="submit" className="hidden" />
           </form>
@@ -151,7 +151,7 @@ export default function BarScan() {
                <div className="font-mono text-gray-600 font-medium">{lastScanned}</div>
             </div>
           )}
-          
+
           {error && (
             <div className="mt-6 p-4 bg-red-50 text-red-700 rounded-lg text-sm text-center w-full animate-fade-in">
               {error}
@@ -207,7 +207,7 @@ export default function BarScan() {
                                <p className="font-medium text-gray-800">{student.batch} / {student.section}</p>
                              </div>
                           </div>
-                          
+
                           {/* Additional fields can be added here */}
                        </div>
                     </div>

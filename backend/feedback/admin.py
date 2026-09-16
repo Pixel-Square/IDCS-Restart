@@ -13,7 +13,7 @@ class FeedbackQuestionInline(admin.TabularInline):
 @admin.register(FeedbackForm)
 class FeedbackFormAdmin(admin.ModelAdmin):
     """Admin interface for Feedback Forms."""
-    
+
     list_display = (
         'id',
         'get_form_type',
@@ -42,7 +42,7 @@ class FeedbackFormAdmin(admin.ModelAdmin):
     readonly_fields = ('created_at', 'updated_at')
     date_hierarchy = 'created_at'
     ordering = ('-created_at',)
-    
+
     fieldsets = (
         ('Basic Information', {
             'fields': (
@@ -84,15 +84,15 @@ class FeedbackFormAdmin(admin.ModelAdmin):
             'classes': ('collapse',),
         }),
     )
-    
+
     inlines = [FeedbackQuestionInline]
-    
+
     def get_form_type(self, obj):
         """Display form type in a readable format."""
         return obj.get_type_display()
     get_form_type.short_description = 'Form Type'
     get_form_type.admin_order_field = 'type'
-    
+
     def get_queryset(self, request):
         """Optimize queryset with select_related."""
         qs = super().get_queryset(request)
@@ -102,7 +102,7 @@ class FeedbackFormAdmin(admin.ModelAdmin):
 @admin.register(FeedbackQuestion)
 class FeedbackQuestionAdmin(admin.ModelAdmin):
     """Admin interface for Feedback Questions."""
-    
+
     list_display = (
         'id',
         'feedback_form',
@@ -124,7 +124,7 @@ class FeedbackQuestionAdmin(admin.ModelAdmin):
     )
     readonly_fields = ('created_at', 'updated_at')
     ordering = ('feedback_form', 'order')
-    
+
     fieldsets = (
         ('Question Details', {
             'fields': (
@@ -142,7 +142,7 @@ class FeedbackQuestionAdmin(admin.ModelAdmin):
             'classes': ('collapse',),
         }),
     )
-    
+
     def get_question_preview(self, obj):
         """Display truncated question text."""
         max_length = 60
@@ -150,7 +150,7 @@ class FeedbackQuestionAdmin(admin.ModelAdmin):
             return f"{obj.question[:max_length]}..."
         return obj.question
     get_question_preview.short_description = 'Question'
-    
+
     def get_queryset(self, request):
         """Optimize queryset with select_related."""
         qs = super().get_queryset(request)
@@ -160,7 +160,7 @@ class FeedbackQuestionAdmin(admin.ModelAdmin):
 @admin.register(FeedbackResponse)
 class FeedbackResponseAdmin(admin.ModelAdmin):
     """Admin interface for Feedback Responses."""
-    
+
     list_display = (
         'id',
         'feedback_form',
@@ -187,7 +187,7 @@ class FeedbackResponseAdmin(admin.ModelAdmin):
     readonly_fields = ('created_at', 'updated_at')
     date_hierarchy = 'created_at'
     ordering = ('-created_at',)
-    
+
     fieldsets = (
         ('Response Details', {
             'fields': (
@@ -210,7 +210,7 @@ class FeedbackResponseAdmin(admin.ModelAdmin):
             'classes': ('collapse',),
         }),
     )
-    
+
     def get_question_preview(self, obj):
         """Display truncated question text."""
         max_length = 40
@@ -219,7 +219,7 @@ class FeedbackResponseAdmin(admin.ModelAdmin):
             return f"{question[:max_length]}..."
         return question
     get_question_preview.short_description = 'Question'
-    
+
     def get_answer_text_preview(self, obj):
         """Display truncated answer text."""
         if not obj.answer_text:
@@ -229,7 +229,7 @@ class FeedbackResponseAdmin(admin.ModelAdmin):
             return f"{obj.answer_text[:max_length]}..."
         return obj.answer_text
     get_answer_text_preview.short_description = 'Text Answer'
-    
+
     def get_queryset(self, request):
         """Optimize queryset with select_related."""
         qs = super().get_queryset(request)

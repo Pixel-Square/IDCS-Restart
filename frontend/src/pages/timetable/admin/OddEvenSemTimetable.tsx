@@ -62,7 +62,7 @@ function TimingSelector({ timing, onChange }: { timing: string, onChange: (val: 
     setStart(val);
     onChange(`${val} - ${end}`);
   };
-  
+
   const handleEndChange = (val: string) => {
     setEnd(val);
     onChange(`${start} - ${val}`);
@@ -540,8 +540,8 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
                 <tr>
                   <th className="border border-gray-300 bg-gray-200 px-3 py-2 font-bold text-sm text-left w-32">Day</th>
                   {columns.map((col) => (
-                    <th 
-                      key={col.id} 
+                    <th
+                      key={col.id}
                       className={`border border-gray-300 px-3 py-2 font-bold text-sm text-center ${
                         col.period === 'Break'
                           ? 'bg-red-200 text-red-900'
@@ -561,8 +561,8 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
                   <tr key={row.id}>
                     <td className="border border-gray-300 bg-gray-100 px-3 py-2 font-bold text-sm text-left">{row.day}</td>
                     {columns.map((col) => (
-                      <td 
-                        key={col.id} 
+                      <td
+                        key={col.id}
                         className={`border border-gray-300 px-3 py-2 h-12 ${
                           col.period === 'Break'
                             ? 'bg-red-50'

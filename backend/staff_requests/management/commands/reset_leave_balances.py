@@ -49,39 +49,39 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         from staff_requests.models import RequestTemplate, StaffLeaveBalance
-        
+
         dry_run = options['dry_run']
         force_reset = options['force']
         template_name = options.get('template')
-        
+
         if dry_run:
             self.stdout.write(self.style.WARNING('DRY RUN MODE - No changes will be made'))
-        
+
         # Get all active templates with leave_policy
         templates = RequestTemplate.objects.filter(
             is_active=True
         ).exclude(leave_policy={})
-        
+
         if template_name:
             templates = templates.filter(name=template_name)
-        
+
         today = date.today()
         total_reset = 0
-        
+
         for template in templates:
             leave_policy = template.leave_policy
-            
+
             if not leave_policy or 'action' not in leave_policy:
                 continue
-            
+
             action = leave_policy.get('action')
             from_date_str = leave_policy.get('from_date')
             to_date_str = leave_policy.get('to_date')
-            
+
             # Skip if no reset period defined
             if not from_date_str or not to_date_str:
                 continue
-            
+
             try:
                 from_date = datetime.strptime(from_date_str, '%Y-%m-%d').date()
                 to_date = datetime.strptime(to_date_str, '%Y-%m-%d').date()
@@ -92,30 +92,30 @@ class Command(BaseCommand):
                     )
                 )
                 continue
-            
+
             # Check if reset period has ended
             period_ended = today > to_date
-            
+
             if not period_ended and not force_reset:
                 continue
-            
+
             # Get all balances for this leave type
             balances = StaffLeaveBalance.objects.filter(leave_type=template.name)
-            
+
             if balances.count() == 0:
                 continue
-            
+
             self.stdout.write(f'\n{template.name} (Action: {action})')
             self.stdout.write(f'  Reset period: {from_date} to {to_date}')
             self.stdout.write(f'  Period ended: {period_ended}')
             self.stdout.write(f'  Balances to reset: {balances.count()}')
-            
+
             # Reset based on action type
             if action == 'earn':
                 # COL and other earn types: Reset to 0
                 reset_value = 0.0
                 self.stdout.write(f'  Resetting COL/Earn balances to {reset_value}')
-                
+
                 for balance in balances:
                     old_value = balance.balance
                     if old_value != reset_value:
@@ -128,14 +128,14 @@ class Command(BaseCommand):
                             )
                         )
                         total_reset += 1
-            
+
             elif action == 'deduct':
                 # Deduct forms: Reset to allotment_per_role for new period
                 allotment = leave_policy.get('allotment_per_role', {})
                 overdraft_name = leave_policy.get('overdraft_name', 'LOP')
                 lop_non_reset = leave_policy.get('lop_non_reset', False)
                 split_date_str = leave_policy.get('split_date')
-                
+
                 # Check if we should apply split logic
                 use_split = False
                 if split_date_str:
@@ -150,19 +150,19 @@ class Command(BaseCommand):
                                 f'  Invalid split_date format: {split_date_str}. Using full allotment.'
                             )
                         )
-                
+
                 if allotment:
                     self.stdout.write(f'  Resetting deduct balances to allotment_per_role' + (' (halved for split)' if use_split else ''))
-                    
+
                     for balance in balances:
                         # Get user's primary role
                         user_role = self._get_primary_role(balance.staff)
                         full_allotment = allotment.get(user_role, 0.0)
-                        
+
                         # Apply split logic if configured
                         reset_value = (full_allotment / 2) if use_split else full_allotment
                         old_value = balance.balance
-                        
+
                         if old_value != reset_value:
                             if not dry_run:
                                 balance.balance = reset_value
@@ -173,14 +173,14 @@ class Command(BaseCommand):
                                 )
                             )
                             total_reset += 1
-                
+
                 # Also reset LOP for this template (if not marked as non-resetting)
                 if not lop_non_reset:
                     lop_balances = StaffLeaveBalance.objects.filter(leave_type=overdraft_name)
-                    
+
                     if lop_balances.count() > 0:
                         self.stdout.write(f'  Resetting {overdraft_name} to 0 (lop_non_reset={lop_non_reset})')
-                        
+
                         for lop_balance in lop_balances:
                             old_lop = lop_balance.balance
                             if old_lop != 0.0:
@@ -199,12 +199,12 @@ class Command(BaseCommand):
                             f'  Skipping {overdraft_name} reset (lop_non_reset=True)'
                         )
                     )
-            
+
             elif action == 'neutral':
                 # Neutral forms: Reset to allotment_per_role if configured (similar to deduct)
                 allotment = leave_policy.get('allotment_per_role', {})
                 split_date_str = leave_policy.get('split_date')
-                
+
                 if not allotment:
                     # No allotment configured - no reset needed
                     self.stdout.write(
@@ -213,7 +213,7 @@ class Command(BaseCommand):
                         )
                     )
                     continue
-                
+
                 # Check if we should apply split logic
                 use_split = False
                 if split_date_str:
@@ -227,18 +227,18 @@ class Command(BaseCommand):
                                 f'  Invalid split_date format: {split_date_str}. Using full allotment.'
                             )
                         )
-                
+
                 self.stdout.write(f'  Resetting neutral balances to allotment_per_role' + (' (halved for split)' if use_split else ''))
-                
+
                 for balance in balances:
                     # Get user's primary role
                     user_role = self._get_primary_role(balance.staff)
                     full_allotment = allotment.get(user_role, 0.0)
-                    
+
                     # Apply split logic if configured
                     reset_value = (full_allotment / 2) if use_split else full_allotment
                     old_value = balance.balance
-                    
+
                     if old_value != reset_value:
                         if not dry_run:
                             balance.balance = reset_value
@@ -249,7 +249,7 @@ class Command(BaseCommand):
                             )
                         )
                         total_reset += 1
-        
+
         if total_reset == 0:
             self.stdout.write(
                 self.style.WARNING(
@@ -262,7 +262,7 @@ class Command(BaseCommand):
                     f'\nSuccessfully reset {total_reset} balance(s)'
                 )
             )
-    
+
     def _get_primary_role(self, user):
         """Get the primary role for a user.
         SPL roles take priority over generic STAFF/FACULTY."""

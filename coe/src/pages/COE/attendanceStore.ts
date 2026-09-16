@@ -82,7 +82,7 @@ export function writeAttendanceLock(sessionKey: string, isLocked: boolean) {
     } else {
       delete map[sessionKey];
     }
-    
+
     if (Object.keys(map).length === 0) {
       kvSave(ATTENDANCE_LOCK_KEY, null);
     } else {
@@ -120,13 +120,13 @@ export function readCourseAbsenteesMap(filterKey: string): Map<string, Set<strin
       if (!courseAbsentees.has(courseKey)) {
         courseAbsentees.set(courseKey, new Set<string>());
       }
-      
+
       const courseSet = courseAbsentees.get(courseKey)!;
       Object.entries(regMap || {}).forEach(([regNo, status]) => {
         if (status === 'absent') {
           courseSet.add(regNo);
         } else {
-          // If a student is marked present in another session for the same course, 
+          // If a student is marked present in another session for the same course,
           // we might remove them from absentees? No, there's only one attendance per course right now.
           courseSet.delete(regNo);
         }

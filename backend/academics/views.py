@@ -2328,15 +2328,15 @@ class SectionAdvisorViewSet(viewsets.ModelViewSet):
 class MixedSectionViewSet(viewsets.ModelViewSet):
     """
     ViewSet for Mixed Sections (groups of regular sections).
-    
+
     Mixed sections are used to group multiple regular sections for cross-section activities
     (e.g., common lab, common project work). This ViewSet provides CRUD operations for
     mixed sections and retrieves the curriculum available for them based on their
     constituent sections' departments and semester.
     """
     queryset = MixedSection.objects.select_related(
-        'batch__course__department', 
-        'batch__department', 
+        'batch__course__department',
+        'batch__department',
         'semester'
     ).prefetch_related('sections__batch__course__department', 'sections__batch__department')
     serializer_class = MixedSectionSerializer
@@ -2346,7 +2346,7 @@ class MixedSectionViewSet(viewsets.ModelViewSet):
         """Filter mixed sections by department and academic year if provided."""
         user = self.request.user
         queryset = self.queryset
-        
+
         # Filter by batch department if user is HOD
         if not user.is_superuser:
             staff_profile = getattr(user, 'staff_profile', None)
@@ -2357,7 +2357,7 @@ class MixedSectionViewSet(viewsets.ModelViewSet):
                         Q(batch__department_id__in=allowed_depts) |
                         Q(batch__course__department_id__in=allowed_depts)
                     ).distinct()
-        
+
         # Filter by academic year if provided
         academic_year = self.request.query_params.get('academic_year')
         if academic_year:
@@ -2365,7 +2365,7 @@ class MixedSectionViewSet(viewsets.ModelViewSet):
                 queryset = queryset.filter(academic_year_id=int(academic_year))
             except (ValueError, TypeError):
                 pass
-        
+
         # Filter by batch if provided
         batch = self.request.query_params.get('batch')
         if batch:
@@ -2373,7 +2373,7 @@ class MixedSectionViewSet(viewsets.ModelViewSet):
                 queryset = queryset.filter(batch_id=int(batch))
             except (ValueError, TypeError):
                 pass
-        
+
         return queryset
 
     def perform_create(self, serializer):
@@ -2692,7 +2692,7 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
                     role__iexact='HOD',
                     academic_year__is_active=True
                 ).values_list('department_id', flat=True))
-                
+
                 if hod_depts:
                     # Get all sections from HOD's department(s)
                     from academics.models import Section
@@ -2702,7 +2702,7 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
                         Q(managing_department_id__in=hod_depts),
                         semester__isnull=False
                     ).values_list('id', flat=True)
-                    
+
                     # S&H shared sections containing students from HOD's department(s)
                     from django.db.models import Exists, OuterRef
                     from academics.models import StudentSectionAssignment as _SSA
@@ -2714,7 +2714,7 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
                     student_sections = Section.objects.filter(
                         Exists(has_student_from_dept)
                     ).values_list('id', flat=True)
-                    
+
                     hod_department_section_ids = list(set(own_sections) | set(student_sections))
             except Exception:
                 pass
@@ -2849,17 +2849,17 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
                 if is_shared:
                     from django.db.models import Q
                     from curriculum.models import CurriculumDepartment
-                    
+
                     target_code = getattr(cr, 'course_code', None)
                     target_name = (getattr(cr, 'course_name', None) or '').strip().lower()
-                    
+
                     EQUIVALENT_GROUPS = [
                         {"ADI1151", "AMB1121"},
                         {"ADI1153", "AMB1131"},
                         {"CGA1101-CSE", "CGA1101-IT"},
                         {"CGA1111-CSE", "CGA1111-IT"},
                     ]
-                    
+
                     target_codes = {str(target_code).strip().upper()} if target_code else set()
                     if target_code:
                         tc_upper = str(target_code).strip().upper()
@@ -2867,24 +2867,24 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
                             if tc_upper in group:
                                 target_codes = group
                                 break
-                    
+
                     # Query other curriculum rows in the same semester and regulation
                     other_rows_qs = CurriculumDepartment.objects.filter(
                         semester=cr.semester,
                         regulation=cr.regulation
                     ).exclude(id=cr.id)
-                    
+
                     other_rows = []
                     for r in other_rows_qs:
                         r_code = getattr(r, 'course_code', None)
                         r_name = (getattr(r, 'course_name', None) or '').strip().lower()
-                        
+
                         matched = False
                         if target_codes and r_code and str(r_code).strip().upper() in target_codes:
                             matched = True
                         elif target_name and r_name and target_name == r_name:
                             matched = True
-                            
+
                         if matched:
                             other_rows.append(r)
 
@@ -3927,7 +3927,7 @@ class HODSectionsView(APIView):
             reg = getattr(batch, 'regulation', None) if batch else None
             sem_obj = getattr(s, 'semester', None)
             sem_val = getattr(sem_obj, 'number', None) if sem_obj else None
-            
+
             student_year = None
             if batch and getattr(batch, 'start_year', None) and current_acad_year:
                 try:
@@ -3935,7 +3935,7 @@ class HODSectionsView(APIView):
                     student_year = delta + 1
                 except Exception:
                     student_year = None
-                    
+
             results.append({
                 'id': s.id,
                 'name': s.name,
@@ -3949,10 +3949,10 @@ class HODSectionsView(APIView):
                 'semester': sem_val,
                 'year': student_year,
             })
-        
+
         # Also include Mixed Sections that the HOD can access
         from .models import MixedSection
-        
+
         # Determine which mixed sections to include
         if global_access:
             mixed_sections = MixedSection.objects.filter(is_active=True).select_related(
@@ -3969,7 +3969,7 @@ class HODSectionsView(APIView):
             ).select_related(
                 'batch__course__department', 'batch__department', 'batch__regulation', 'semester'
             ).order_by('batch__name', 'name')
-        
+
         for ms in mixed_sections:
             batch = getattr(ms, 'batch', None)
             course = getattr(batch, 'course', None) if batch else None
@@ -3981,7 +3981,7 @@ class HODSectionsView(APIView):
             reg = getattr(batch, 'regulation', None) if batch else None
             sem_obj = getattr(ms, 'semester', None)
             sem_val = getattr(sem_obj, 'number', None) if sem_obj else None
-            
+
             student_year = None
             if batch and getattr(batch, 'start_year', None) and current_acad_year:
                 try:
@@ -3989,7 +3989,7 @@ class HODSectionsView(APIView):
                     student_year = delta + 1
                 except Exception:
                     student_year = None
-            
+
             results.append({
                 'id': ms.id,
                 'name': ms.name,
@@ -4005,7 +4005,7 @@ class HODSectionsView(APIView):
                 'mixed_section_id': ms.id,
                 'is_mixed_section': True,
             })
-        
+
         return Response({'results': results})
 
 
@@ -4100,7 +4100,7 @@ class SectionsByDeptYearView(APIView):
                 label_parts.append(f"Year {student_year}")
             # Use plain ASCII hyphens to avoid escaped unicode sequences like "\\u2013" in responses
             label = " - ".join(label_parts)
-            
+
             sem_obj = getattr(sec, 'semester', None)
             sem_number = getattr(sem_obj, 'number', None) if sem_obj else None
 
@@ -4179,9 +4179,9 @@ class HODStaffListView(APIView):
             if s.user:
                 full_name = s.user.get_full_name() or s.user.username
             results.append({
-                'id': s.id, 
+                'id': s.id,
                 'user': full_name,  # Full name instead of just username
-                'staff_id': s.staff_id, 
+                'staff_id': s.staff_id,
                 'department': getattr(s.department, 'id', None)
             })
         return Response({'results': results})
@@ -4299,7 +4299,7 @@ class StaffsPageView(APIView):
 
         # Check if user can edit staff
         can_edit = user.is_superuser or has_ps_role or 'academics.edit_staff' in perms
-        
+
         # Check if user can view all staff (determines if role filter should be shown)
         can_view_all = user.is_superuser or has_ps_role or 'academics.view_all_staff' in perms
 
@@ -4315,12 +4315,12 @@ class StaffsPageView(APIView):
             # HODs and other staff: show departments they are affiliated with
             # This includes their primary department AND any HOD/AHOD mapped departments
             from academics.utils import get_user_effective_departments
-            
+
             dept_ids = get_user_effective_departments(user)
             if not dept_ids:
                 logger.info(f"StaffsPage - No effective departments found, returning empty")
                 return Response({'results': []})
-            
+
             logger.info(f"StaffsPage - Showing departments: {dept_ids} (includes primary + HOD mappings)")
             dept_qs = Department.objects.filter(id__in=dept_ids)
 
@@ -4352,17 +4352,17 @@ class StaffsPageView(APIView):
                         user_roles = [r.name for r in s.user.roles.all()]
                     except Exception:
                         user_roles = []
-                
+
                 # Get department roles (HOD, AHOD, etc.)
                 department_roles = []
                 dept_role_mappings = []
                 try:
                     from .models import DepartmentRole
                     dept_roles = DepartmentRole.objects.filter(
-                        staff=s, 
+                        staff=s,
                         is_active=True
                     ).select_related('department', 'academic_year')
-                    
+
                     for dept_role in dept_roles:
                         role_display = dept_role.get_role_display()
                         department_roles.append(role_display)
@@ -4380,10 +4380,10 @@ class StaffsPageView(APIView):
                 except Exception:
                     department_roles = []
                     dept_role_mappings = []
-                
+
                 # Combine all roles for filtering
                 all_roles = user_roles + department_roles
-                
+
                 staffs.append({
                     'id': s.id,
                     'staff_id': s.staff_id,
@@ -4429,32 +4429,32 @@ class StaffsPageView(APIView):
 
 class DepartmentStaffListView(APIView):
     """Return staff from the same department for attendance swap purposes.
-    
+
     Returns staff members from the requesting user's department who can be assigned to take attendance.
     """
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
         user = request.user
-        
+
         # Get the staff profile of the requesting user
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             return Response({'detail': 'You must be a staff member to access this endpoint.'}, status=403)
-        
+
         # Get the user's department
         current_dept = staff_profile.get_current_department()
         if not current_dept:
             return Response({'results': []})
-        
+
         from .models import StaffProfile
-        
+
         # Get all active staff from the same department, excluding the requesting user
         staff_qs = StaffProfile.objects.filter(
             department=current_dept,
             status='ACTIVE'
         ).exclude(id=staff_profile.id).select_related('user').order_by('user__first_name', 'user__last_name')
-        
+
         results = []
         for s in staff_qs:
             results.append({
@@ -4464,13 +4464,13 @@ class DepartmentStaffListView(APIView):
                 'username': s.user.username,
                 'designation': s.designation or '',
             })
-        
+
         return Response({'results': results})
 
 
 class BatchStaffListView(APIView):
     """Return all staff members from all departments for batch creation.
-    
+
     Used when creating student batches - allows selecting staff from any department.
     Supports optional department filtering via ?department_id=<id> parameter.
     """
@@ -4479,20 +4479,20 @@ class BatchStaffListView(APIView):
     def get(self, request):
         from .models import StaffProfile
         from django.db.models import Q
-        
+
         user = request.user
-        
+
         # Require staff profile
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             return Response({'detail': 'You must be a staff member to access this endpoint.'}, status=403)
-        
+
         # Optional department filter
         dept_id = request.query_params.get('department_id')
-        
+
         # Start with all active staff
         staff_qs = StaffProfile.objects.filter(status='ACTIVE').select_related('user', 'department').order_by('user__first_name', 'user__last_name')
-        
+
         # Apply department filter if provided
         if dept_id:
             try:
@@ -4503,7 +4503,7 @@ class BatchStaffListView(APIView):
                 ).distinct()
             except (ValueError, TypeError):
                 pass
-        
+
         results = []
         for s in staff_qs:
             user_info = None
@@ -4513,7 +4513,7 @@ class BatchStaffListView(APIView):
                     'first_name': getattr(s.user, 'first_name', ''),
                     'last_name': getattr(s.user, 'last_name', ''),
                 }
-            
+
             dept_info = None
             if s.department:
                 dept_info = {
@@ -4522,7 +4522,7 @@ class BatchStaffListView(APIView):
                     'code': getattr(s.department, 'code', ''),
                     'short_name': getattr(s.department, 'short_name', ''),
                 }
-            
+
             results.append({
                 'id': s.id,
                 'staff_id': s.staff_id,
@@ -4532,7 +4532,7 @@ class BatchStaffListView(APIView):
                 'designation': s.designation or '',
                 'department': dept_info
             })
-        
+
         return Response({'results': results})
 
 
@@ -4543,23 +4543,23 @@ class StaffProfileCreateView(APIView):
     def post(self, request):
         from .serializers import StaffProfileSerializer
         from accounts.utils import get_user_permissions
-        
+
         user = request.user
         perms = get_user_permissions(user)
         has_ps_role = user.roles.filter(name__iexact='PS').exists()
-        
+
         # Check permission - require edit_staff or superuser to create staff
         if not (user.is_superuser or has_ps_role or 'academics.edit_staff' in perms):
             return Response(
                 {'detail': 'You do not have permission to create staff profiles.'},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
+
         # Validate department scope for non-superusers
         if not user.is_superuser and not has_ps_role and 'academics.view_all_staff' not in perms:
             # HODs can only create staff in departments they are mapped to
             from academics.utils import get_user_effective_departments
-            
+
             allowed_dept_ids = get_user_effective_departments(user)
             if allowed_dept_ids:
                 requested_dept = request.data.get('department')
@@ -4573,7 +4573,7 @@ class StaffProfileCreateView(APIView):
                     {'detail': 'You are not mapped to any departments.'},
                     status=status.HTTP_403_FORBIDDEN
                 )
-        
+
         serializer = StaffProfileSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -4588,18 +4588,18 @@ class StaffProfileUpdateView(APIView):
     def put(self, request, pk):
         from .serializers import StaffProfileSerializer
         from accounts.utils import get_user_permissions
-        
+
         user = request.user
         perms = get_user_permissions(user)
         has_ps_role = user.roles.filter(name__iexact='PS').exists()
-        
+
         # Check permission - require edit_staff or superuser to edit staff
         if not (user.is_superuser or has_ps_role or 'academics.edit_staff' in perms):
             return Response(
                 {'detail': 'You do not have permission to edit staff profiles.'},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
+
         try:
             staff_profile = StaffProfile.objects.get(pk=pk)
         except StaffProfile.DoesNotExist:
@@ -4607,12 +4607,12 @@ class StaffProfileUpdateView(APIView):
                 {'detail': 'Staff profile not found.'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
+
         # Validate department scope for non-superusers without view_all_staff
         if not user.is_superuser and not has_ps_role and 'academics.view_all_staff' not in perms:
             # HODs can only edit staff in departments they are mapped to
             from academics.utils import get_user_effective_departments
-            
+
             allowed_dept_ids = get_user_effective_departments(user)
             if allowed_dept_ids:
                 # Check current department of staff being edited
@@ -4633,7 +4633,7 @@ class StaffProfileUpdateView(APIView):
                     {'detail': 'You are not mapped to any departments.'},
                     status=status.HTTP_403_FORBIDDEN
                 )
-        
+
         serializer = StaffProfileSerializer(staff_profile, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -4651,18 +4651,18 @@ class StaffProfileDeleteView(APIView):
 
     def delete(self, request, pk):
         from accounts.utils import get_user_permissions
-        
+
         user = request.user
         perms = get_user_permissions(user)
         has_ps_role = user.roles.filter(name__iexact='PS').exists()
-        
+
         # Check permission - require edit_staff or superuser to delete staff
         if not (user.is_superuser or has_ps_role or 'academics.edit_staff' in perms):
             return Response(
                 {'detail': 'You do not have permission to delete staff profiles.'},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
+
         try:
             staff_profile = StaffProfile.objects.get(pk=pk)
         except StaffProfile.DoesNotExist:
@@ -4670,12 +4670,12 @@ class StaffProfileDeleteView(APIView):
                 {'detail': 'Staff profile not found.'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
+
         # Validate department scope for non-superusers without view_all_staff
         if not user.is_superuser and not has_ps_role and 'academics.view_all_staff' not in perms:
             # HODs can only delete staff in departments they are mapped to
             from academics.utils import get_user_effective_departments
-            
+
             allowed_dept_ids = get_user_effective_departments(user)
             if allowed_dept_ids:
                 if staff_profile.department_id not in allowed_dept_ids:
@@ -4688,10 +4688,10 @@ class StaffProfileDeleteView(APIView):
                     {'detail': 'You are not mapped to any departments.'},
                     status=status.HTTP_403_FORBIDDEN
                 )
-        
+
         # Delete the user (cascade will delete staff profile)
         staff_profile.user.delete()
-        
+
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 class StaffStatusUpdateView(APIView):
@@ -4749,7 +4749,7 @@ class StaffStatusUpdateView(APIView):
         staff_profile.save(update_fields=['status'])
 
         return Response({'id': staff_profile.pk, 'status': staff_profile.status})
-    
+
 class StaffImportView(APIView):
     """Import staff members from an uploaded Excel (.xlsx) or CSV file.
 
@@ -5037,9 +5037,9 @@ class AdvisorStaffListView(APIView):
                     'last_name': getattr(s.user, 'last_name', '')
                 }
             results.append({
-                'id': s.id, 
-                'user': user_data, 
-                'staff_id': s.staff_id, 
+                'id': s.id,
+                'user': user_data,
+                'staff_id': s.staff_id,
                 'department': getattr(s.department, 'id', None)
             })
         return Response({'results': results})
@@ -5564,7 +5564,7 @@ class SubjectBatchViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(curriculum_row_id=cr_id)
             except Exception:
                 pass
-        
+
         # allow filtering by student_id to find batches containing a specific student
         student_id = self.request.query_params.get('student_id')
         if student_id:
@@ -5573,7 +5573,7 @@ class SubjectBatchViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(students__id=student_id).distinct()
             except Exception:
                 pass
-        
+
         return qs
 
     def perform_create(self, serializer):
@@ -5592,21 +5592,21 @@ class SubjectBatchViewSet(viewsets.ModelViewSet):
         user = self.request.user
         staff_profile = getattr(user, 'staff_profile', None)
         instance = self.get_object()
-        
+
         # Only the creator can edit the batch
         if instance.created_by and instance.created_by != staff_profile and not user.is_superuser:
             raise PermissionDenied('Only the batch creator can edit this batch')
-        
+
         serializer.save()
 
     def perform_destroy(self, instance):
         user = self.request.user
         staff_profile = getattr(user, 'staff_profile', None)
-        
+
         # Only the creator can delete the batch
         if instance.created_by and instance.created_by != staff_profile and not user.is_superuser:
             raise PermissionDenied('Only the batch creator can delete this batch')
-        
+
         instance.delete()
 
 
@@ -5621,7 +5621,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset()
         user = self.request.user
         staff_profile = getattr(user, 'staff_profile', None)
-        
+
         # Filter by staff assignment if staff user
         if staff_profile and not user.is_superuser:
             perms = get_user_permissions(user)
@@ -5636,40 +5636,40 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 # 6. Teaching assignment matches for the curriculum_row (actual subject teacher)
                 from timetable.models import TimetableAssignment
                 from .models import TeachingAssignment
-                
+
                 # Build the base filter
                 base_filter = Q(created_by=staff_profile) | \
                               Q(assigned_to=staff_profile) | \
                               Q(timetable_assignment__staff=staff_profile) | \
                               Q(subject_batch__staff=staff_profile) | \
                               Q(subject_batch__created_by=staff_profile)
-                
+
                 # Add filter for teaching assignment match - when staff is the teaching staff
                 # for a curriculum_row assigned in the timetable
                 teaching_filter = Q(
                     teaching_assignment__staff=staff_profile
                 )
-                
+
                 queryset = queryset.filter(base_filter | teaching_filter).distinct()
-        
+
         # Support date filtering for bulk attendance checking
         date_after = self.request.query_params.get('date_after')
         date_before = self.request.query_params.get('date_before')
-        
+
         if date_after:
             try:
                 import datetime
                 queryset = queryset.filter(date__gte=datetime.date.fromisoformat(date_after))
             except Exception:
                 pass
-        
+
         if date_before:
             try:
                 import datetime
                 queryset = queryset.filter(date__lte=datetime.date.fromisoformat(date_before))
             except Exception:
                 pass
-        
+
         return queryset
 
     def perform_create(self, serializer):
@@ -5707,7 +5707,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 batch_assignments = TimetableAssignment.objects.filter(
                     section=section, period=period, day=day, subject_batch__isnull=False
                 )
-                
+
                 if batch_assignments.exists():
                     # Batch assignments exist - ONLY batch staff can access, block default staff
                     for ta_candidate in batch_assignments:
@@ -5726,7 +5726,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                     ta = TimetableAssignment.objects.filter(
                         section=section, period=period, day=day, staff=staff_profile
                     ).first()
-                
+
                 # If no explicit timetable assignment with this staff, check if they are the teaching staff
                 # for any curriculum_row assigned to this period (handles advisor assignment case)
                 if ta is None and not batch_assignments.exists():
@@ -5803,7 +5803,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 teach_assign = None
 
         perms = get_user_permissions(user)
-        
+
         # Check if there are batch assignments for this period
         try:
             from timetable.models import TimetableAssignment
@@ -5812,7 +5812,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
             ) if section and period and day else TimetableAssignment.objects.none()
         except Exception:
             batch_assignments = TimetableAssignment.objects.none()
-        
+
         # If batch assignments exist, ONLY batch staff can access - block everyone else
         if batch_assignments.exists() and not (user.is_superuser or 'academics.mark_attendance' in perms):
             # Check if staff has access to any of the batches
@@ -5825,7 +5825,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 )
                 if is_batch_staff:
                     has_batch_access = True
-            
+
             if not has_batch_access:
                 # Get batch name for error message
                 try:
@@ -5836,7 +5836,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                     raise
                 except Exception:
                     raise PermissionDenied('This period is assigned to a batch. Only staff assigned to that batch can mark attendance.')
-        
+
         # Regular permission check for non-batch periods
         if not batch_assignments.exists():
             if not (ta or 'academics.mark_attendance' in perms or user.is_superuser):
@@ -5844,7 +5844,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
 
         # Extract subject_batch from timetable assignment if present
         subject_batch = getattr(ta, 'subject_batch', None) if ta else None
-        
+
         if ta or teach_assign:
             serializer.save(timetable_assignment=ta, teaching_assignment=teach_assign, subject_batch=subject_batch, created_by=staff_profile)
         else:
@@ -5943,7 +5943,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
 
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
-        
+
         # Check if staff can mark attendance based on their daily attendance
         if date:
             from .utils import can_staff_mark_period_attendance
@@ -5957,7 +5957,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                         'status': attendance_record.status if attendance_record else None
                     } if attendance_record else None
                 }, status=status.HTTP_403_FORBIDDEN)
-        
+
         day = None
         try:
             if date is not None:
@@ -5977,7 +5977,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 batch_assignments = TimetableAssignment.objects.filter(
                     section=section, period=period, day=day, subject_batch__isnull=False
                 )
-                
+
                 if batch_assignments.exists():
                     # Batch assignments exist - ONLY batch staff can access, block default staff
                     for ta_candidate in batch_assignments:
@@ -5995,7 +5995,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                     ta = TimetableAssignment.objects.filter(
                         section=section, period=period, day=day, staff=staff_profile
                     ).first()
-                
+
                 if ta is None and not batch_assignments.exists():
                     assign = TimetableAssignment.objects.filter(section=section, period=period, day=day).first()
                     if assign and not getattr(assign, 'staff', None):
@@ -6097,7 +6097,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 teach_assign = None
 
         perms = get_user_permissions(user)
-        
+
         # Check if there are batch assignments for this period
         try:
             from timetable.models import TimetableAssignment as _TimetableAssignment
@@ -6106,7 +6106,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
             ) if section and period and day else _TimetableAssignment.objects.none()
         except Exception:
             batch_assignments = _TimetableAssignment.objects.none()
-        
+
         # If batch assignments exist, ONLY batch staff can access - block everyone else
         if batch_assignments.exists() and not (user.is_superuser or 'academics.mark_attendance' in perms):
             # Check if staff has access to any of the batches
@@ -6119,7 +6119,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                 )
                 if is_batch_staff:
                     has_batch_access = True
-            
+
             if not has_batch_access:
                 # Get batch name for error message
                 try:
@@ -6133,7 +6133,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                     return Response({
                         'error': 'This period is assigned to a batch. Only staff assigned to that batch can mark attendance.'
                     }, status=403)
-        
+
         # Regular permission check for non-batch periods
         if not batch_assignments.exists():
             if not (ta or teach_assign or 'academics.mark_attendance' in perms or user.is_superuser):
@@ -6303,7 +6303,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                         if _daily_session.is_locked:
                             # Skip this record - daily attendance is locked, cannot modify period records
                             continue
-                        
+
                         _daily_rec = _DAR.objects.filter(session=_daily_session, student=stu).first()
                         if _daily_rec:
                             if _daily_rec.status in ('OD', 'LEAVE'):
@@ -6921,39 +6921,39 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
         session = self.get_object()
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
-        
+
         # Check permissions
         perms = get_user_permissions(user)
         is_creator = session.created_by == staff_profile if staff_profile else False
         is_assigned = False
-        
+
         if session.timetable_assignment and staff_profile:
             is_assigned = session.timetable_assignment.staff == staff_profile
-        
+
         if not (is_creator or is_assigned or 'academics.mark_attendance' in perms or user.is_superuser):
             raise PermissionDenied('You do not have permission to lock this attendance session')
-        
+
         session.is_locked = True
         session.save(update_fields=['is_locked'])
-        
+
         serializer = self.get_serializer(session)
         return Response(serializer.data)
-    
+
     @action(detail=True, methods=['post'], url_path='unlock')
     def unlock_session(self, request, pk=None):
         """Unlock an attendance session to allow edits."""
         session = self.get_object()
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
-        
+
         # Check permissions - stricter for unlocking
         perms = get_user_permissions(user)
         if not ('academics.mark_attendance' in perms or user.is_superuser):
             raise PermissionDenied('You do not have permission to unlock this attendance session')
-        
+
         session.is_locked = False
         session.save(update_fields=['is_locked'])
-        
+
         serializer = self.get_serializer(session)
         return Response(serializer.data)
 
@@ -7018,7 +7018,7 @@ class AttendanceUnlockRequestViewSet(viewsets.ModelViewSet):
             session=session,
             status__in=['PENDING', 'HOD_APPROVED']
         ).first()
-        
+
         if existing_pending:
             # Return existing request instead of creating duplicate
             ser = AttendanceUnlockRequestSerializer(existing_pending, context={'request': request})
@@ -7043,30 +7043,30 @@ class AttendanceUnlockRequestViewSet(viewsets.ModelViewSet):
         perms = get_user_permissions(user)
         if not ('analytics.view_all_analytics' in perms or user.is_superuser):
             return Response({'detail': 'Permission denied'}, status=403)
-        
+
         # Use direct model lookup instead of get_object() to bypass queryset filtering
         try:
             req = AttendanceUnlockRequest.objects.get(pk=pk)
         except AttendanceUnlockRequest.DoesNotExist:
             return Response({'detail': f'Request with ID {pk} not found'}, status=404)
-        
+
         self.logger.info(f"User {user.username} approving request #{req.id} (status: {req.status}, hod_status: {req.hod_status}, requested_by: {req.requested_by_id})")
-        
+
         # Allow approval if status is PENDING (direct approval) or HOD_APPROVED (final approval)
         if req.status not in ['PENDING', 'HOD_APPROVED']:
             return Response({'detail': f'Request already processed (status: {req.status})'}, status=400)
-        
+
         req.status = 'APPROVED'
         req.reviewed_by = getattr(user, 'staff_profile', None)
         import django.utils.timezone as tz
         req.reviewed_at = tz.now()
-        
+
         # If bypassing HOD approval (superuser direct approval), also update hod_status
         if req.hod_status == 'PENDING':
             req.hod_status = 'APPROVED'
             req.hod_reviewed_by = getattr(user, 'staff_profile', None)
             req.hod_reviewed_at = tz.now()
-        
+
         req.save()
         self.logger.info(f"Request #{req.id} approved successfully")
 
@@ -7089,30 +7089,30 @@ class AttendanceUnlockRequestViewSet(viewsets.ModelViewSet):
         perms = get_user_permissions(user)
         if not ('analytics.view_all_analytics' in perms or user.is_superuser):
             return Response({'detail': 'Permission denied'}, status=403)
-        
+
         # Use direct model lookup instead of get_object() to bypass queryset filtering
         try:
             req = AttendanceUnlockRequest.objects.get(pk=pk)
         except AttendanceUnlockRequest.DoesNotExist:
             return Response({'detail': f'Request with ID {pk} not found'}, status=404)
-        
+
         self.logger.info(f"User {user.username} rejecting request #{req.id} (status: {req.status}, hod_status: {req.hod_status}, requested_by: {req.requested_by_id})")
-        
+
         # Can reject if not already processed as APPROVED or REJECTED
         if req.status in ['APPROVED', 'REJECTED']:
             return Response({'detail': f'Request already {req.status.lower()}'}, status=400)
-        
+
         req.status = 'REJECTED'
         req.reviewed_by = getattr(user, 'staff_profile', None)
         import django.utils.timezone as tz
         req.reviewed_at = tz.now()
-        
+
         # Also update hod_status if it's still pending
         if req.hod_status == 'PENDING':
             req.hod_status = 'REJECTED'
             req.hod_reviewed_by = getattr(user, 'staff_profile', None)
             req.hod_reviewed_at = tz.now()
-        
+
         req.save()
         self.logger.info(f"Request #{req.id} rejected successfully, new status: {req.status}")
         ser = AttendanceUnlockRequestSerializer(req, context={'request': request})
@@ -9143,25 +9143,25 @@ class StudentSectionSubjectsView(APIView):
 
 class DepartmentStudentsView(APIView):
     """Return students from the same department as the current user.
-    
+
     Requires 'students.view_department_students' permission.
 
     Without ?section_id  → returns section list (metadata, no students)
     With    ?section_id=X → returns students for that one section only
     """
     permission_classes = (IsAuthenticated,)
-    
+
     def get(self, request):
         import traceback, logging
         try:
             user = request.user
-            
+
             from accounts.utils import get_user_permissions
             perms = get_user_permissions(user)
-            
+
             if not ('students.view_department_students' in perms or user.has_perm('students.view_department_students')):
                 return Response({'error': 'Permission denied'}, status=403)
-                
+
             staff_profile = getattr(user, 'staff_profile', None)
             if not staff_profile:
                 return Response({'sections': [], 'results': []})
@@ -9330,7 +9330,7 @@ class DepartmentStudentsView(APIView):
                 'is_shared_section': is_shared,
                 'students': sorted(students_out, key=lambda x: x['reg_no'] or ''),
             })
-            
+
         except Exception as e:
             logging.getLogger(__name__).exception('DepartmentStudentsView error: %s', e)
             return Response({'error': 'Server error', 'detail': str(e)}, status=500)
@@ -9338,27 +9338,27 @@ class DepartmentStudentsView(APIView):
 
 class AllStudentsView(APIView):
     """Return students from all departments.
-    
+
     Requires 'students.view_all_students' permission.
 
     Without ?section_id  → returns section list (metadata, no students)
     With    ?section_id=X → returns students for that one section only
     """
     permission_classes = (IsAuthenticated,)
-    
+
     def get(self, request):
         import logging
         try:
             user = request.user
-            
+
             from accounts.utils import get_user_permissions
             perms = get_user_permissions(user)
-            
+
             if not ('students.view_all_students' in perms or user.has_perm('students.view_all_students')):
                 return Response({'error': 'Permission denied'}, status=403)
-                
+
             from .models import Section, StudentSectionAssignment, StudentProfile
-            
+
             sections = Section.objects.filter(
                 Q(batch__course__department__isnull=False) | Q(batch__department__isnull=False)
             ).select_related(
@@ -9442,7 +9442,7 @@ class AllStudentsView(APIView):
                 'department_name': getattr(dept, 'name', None) if dept else None,
                 'students': sorted(students_out, key=lambda x: x['reg_no'] or ''),
             })
-            
+
         except Exception as e:
             logging.getLogger(__name__).exception('AllStudentsView error: %s', e)
             return Response({'error': 'Server error', 'detail': str(e)}, status=500)
@@ -9610,7 +9610,7 @@ class BatchListView(APIView):
 
 class AllStaffListView(APIView):
     """Return all staff members from the database (not department-filtered).
-    
+
     Used for listing all available staff to add to a department.
     Requires academics.view_staffs_page permission.
     """
@@ -9810,14 +9810,14 @@ class StaffInternalIdShuffleView(APIView):
 
 class StaffDepartmentAssignView(APIView):
     """Assign a staff member to a department with a specific role.
-    
+
     POST /api/academics/staff-department-assign/
-    Body: { 
-        staff_id: <int>, 
+    Body: {
+        staff_id: <int>,
         department_id: <int>,
         role: 'STAFF' | 'HOD' | 'AHOD' (default: 'STAFF')
     }
-    
+
     Requires academics.edit_staff permission.
     """
     permission_classes = (IsAuthenticated,)
@@ -9871,7 +9871,7 @@ class StaffDepartmentAssignView(APIView):
         # Validate department scope for non-superusers
         if not user.is_superuser and not has_ps_role and 'academics.view_all_staff' not in perms:
             from academics.utils import get_user_effective_departments
-            
+
             allowed_dept_ids = get_user_effective_departments(user)
             if allowed_dept_ids:
                 if department_id not in allowed_dept_ids:
@@ -9965,14 +9965,14 @@ class StaffDepartmentAssignView(APIView):
 
 class StaffDepartmentRoleRemoveView(APIView):
     """Remove a staff member's department role (HOD/AHOD) or primary STAFF assignment.
-    
+
     POST /api/academics/staff-department-role-remove/
-    Body: { 
-        staff_id: <int>, 
+    Body: {
+        staff_id: <int>,
         department_id: <int>,
         role: 'STAFF' | 'HOD' | 'AHOD'
     }
-    
+
     Requires academics.edit_staff permission.
     """
     permission_classes = (IsAuthenticated,)
@@ -10026,7 +10026,7 @@ class StaffDepartmentRoleRemoveView(APIView):
         # Validate department scope for non-superusers
         if not user.is_superuser and not has_ps_role and 'academics.view_all_staff' not in perms:
             from academics.utils import get_user_effective_departments
-            
+
             allowed_dept_ids = get_user_effective_departments(user)
             if allowed_dept_ids:
                 if department_id not in allowed_dept_ids:
@@ -10605,7 +10605,7 @@ class ExtStaffProfileBulkImportView(APIView):
 
             # ── Check for existing user by email - UPDATE instead of error ──
             existing_user = User.objects.filter(email__iexact=email).first()
-            
+
             if existing_user:
                 # Update existing user and their ExtStaffProfile
                 try:
@@ -10614,10 +10614,10 @@ class ExtStaffProfileBulkImportView(APIView):
                     if password:
                         existing_user.set_password(password)
                     existing_user.save()
-                    
+
                     # Add to Ext_staff group if not already
                     existing_user.groups.add(ext_staff_group)
-                    
+
                     # Update or create ExtStaffProfile
                     profile, created = ExtStaffProfile.objects.update_or_create(
                         user=existing_user,
@@ -10728,10 +10728,10 @@ class ExtStaffFormSettingsView(APIView):
         self._check_permission(request)
         from .models import ExtStaffFormSettings
         settings_obj = ExtStaffFormSettings.get_or_create_settings()
-        
+
         # Build the share URL
         share_url = request.build_absolute_uri(f'/ext-register/{settings_obj.form_code}/')
-        
+
         return Response({
             'form_code': settings_obj.form_code,
             'form_title': settings_obj.form_title,
@@ -10747,7 +10747,7 @@ class ExtStaffFormSettingsView(APIView):
         self._check_permission(request)
         from .models import ExtStaffFormSettings
         settings_obj = ExtStaffFormSettings.get_or_create_settings()
-        
+
         data = request.data
         if 'form_title' in data:
             settings_obj.form_title = data['form_title']
@@ -10757,12 +10757,12 @@ class ExtStaffFormSettingsView(APIView):
             settings_obj.is_accepting_responses = data['is_accepting_responses']
         if 'field_config' in data:
             settings_obj.field_config = data['field_config']
-        
+
         settings_obj.updated_by = request.user
         settings_obj.save()
-        
+
         share_url = request.build_absolute_uri(f'/ext-register/{settings_obj.form_code}/')
-        
+
         return Response({
             'form_code': settings_obj.form_code,
             'form_title': settings_obj.form_title,
@@ -10788,7 +10788,7 @@ class ExtStaffPublicFormView(APIView):
             settings_obj = ExtStaffFormSettings.objects.get(form_code=form_code)
         except ExtStaffFormSettings.DoesNotExist:
             return Response({'detail': 'Form not found.'}, status=status.HTTP_404_NOT_FOUND)
-        
+
         if not settings_obj.is_accepting_responses:
             return Response({
                 'form_code': form_code,
@@ -10796,11 +10796,11 @@ class ExtStaffPublicFormView(APIView):
                 'is_accepting_responses': False,
                 'message': 'This form is currently not accepting responses.',
             })
-        
+
         # Return only enabled fields
         enabled_fields = [f for f in settings_obj.field_config if f.get('enabled', False)]
         enabled_fields.sort(key=lambda x: x.get('order', 999))
-        
+
         return Response({
             'form_code': form_code,
             'form_title': settings_obj.form_title,
@@ -10812,23 +10812,23 @@ class ExtStaffPublicFormView(APIView):
     def post(self, request, form_code):
         from .models import ExtStaffFormSettings, ExtStaffProfile
         from django.contrib.auth import get_user_model
-        
+
         User = get_user_model()
-        
+
         try:
             settings_obj = ExtStaffFormSettings.objects.get(form_code=form_code)
         except ExtStaffFormSettings.DoesNotExist:
             return Response({'detail': 'Form not found.'}, status=status.HTTP_404_NOT_FOUND)
-        
+
         if not settings_obj.is_accepting_responses:
             return Response(
                 {'detail': 'This form is not accepting responses.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         data = request.data
         errors = {}
-        
+
         # Get user_id from signup step
         user_id = data.get('user_id')
         if not user_id:
@@ -10836,7 +10836,7 @@ class ExtStaffPublicFormView(APIView):
                 {'detail': 'User ID is required. Please complete signup first.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         try:
             user = User.objects.get(pk=user_id)
         except User.DoesNotExist:
@@ -10844,10 +10844,10 @@ class ExtStaffPublicFormView(APIView):
                 {'detail': 'Invalid user. Please signup again.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         # Get enabled fields for validation
         enabled_fields = [f for f in settings_obj.field_config if f.get('enabled', False)]
-        
+
         # Validate required fields (exclude email since already captured in signup)
         for field in enabled_fields:
             field_name = field['field']
@@ -10857,22 +10857,22 @@ class ExtStaffPublicFormView(APIView):
                 value = data.get(field_name, '')
                 if not value or (isinstance(value, str) and not value.strip()):
                     errors[field_name] = f"{field.get('label', field_name)} is required."
-        
+
         # Validate full_name
         full_name = data.get('full_name', '').strip()
         if not full_name:
             errors['full_name'] = 'Full Name is required.'
-        
+
         if errors:
             return Response({'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         # Update user's name
         salutation = data.get('salutation', '').strip()
         if salutation and full_name:
             username = f"{salutation} {full_name}"
         else:
             username = full_name
-        
+
         # Parse date_of_birth
         dob = data.get('date_of_birth', '')
         parsed_dob = None
@@ -10884,19 +10884,19 @@ class ExtStaffPublicFormView(APIView):
                     break
                 except ValueError:
                     continue
-        
+
         try:
             # Update user info
             user.username = username
             user.first_name = full_name
             user.save()
-            
+
             # Handle file upload for passbook_proof
             passbook_file = request.FILES.get('passbook_proof')
-            
+
             # Get or create ExtStaffProfile
             profile, _ = ExtStaffProfile.objects.get_or_create(user=user)
-            
+
             # Update profile fields
             profile.salutation = salutation
             profile.designation = data.get('designation', '')
@@ -10918,12 +10918,12 @@ class ExtStaffPublicFormView(APIView):
             profile.bank_branch_name = data.get('bank_branch_name', '')
             profile.ifsc_code = data.get('ifsc_code', '')
             profile.is_active = True
-            
+
             if passbook_file:
                 profile.passbook_proof = passbook_file
-            
+
             profile.save()
-            
+
             return Response({
                 'success': True,
                 'message': 'Registration successful! Your profile has been saved.',
@@ -10931,7 +10931,7 @@ class ExtStaffPublicFormView(APIView):
                 'username': username,
                 'email': user.email,
             }, status=status.HTTP_201_CREATED)
-            
+
         except Exception as exc:
             return Response(
                 {'detail': f'Registration failed: {str(exc)}'},
@@ -10950,28 +10950,28 @@ class ExtStaffCheckEmailView(APIView):
     def post(self, request, form_code):
         from .models import ExtStaffFormSettings
         from django.contrib.auth import get_user_model
-        
+
         User = get_user_model()
-        
+
         # Verify form exists and is accepting responses
         try:
             settings_obj = ExtStaffFormSettings.objects.get(form_code=form_code)
         except ExtStaffFormSettings.DoesNotExist:
             return Response({'detail': 'Form not found.'}, status=status.HTTP_404_NOT_FOUND)
-        
+
         if not settings_obj.is_accepting_responses:
             return Response(
                 {'detail': 'This form is not accepting responses.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         email = request.data.get('email', '').strip().lower()
         if not email:
             return Response({'error': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         # Check if email exists
         exists = User.objects.filter(email__iexact=email).exists()
-        
+
         return Response({
             'email': email,
             'exists': exists,
@@ -10992,29 +10992,29 @@ class ExtStaffSignupView(APIView):
         from django.contrib.auth import get_user_model
         from django.contrib.auth.models import Group
         import uuid
-        
+
         User = get_user_model()
-        
+
         # Verify form exists and is accepting responses
         try:
             settings_obj = ExtStaffFormSettings.objects.get(form_code=form_code)
         except ExtStaffFormSettings.DoesNotExist:
             return Response({'detail': 'Form not found.'}, status=status.HTTP_404_NOT_FOUND)
-        
+
         if not settings_obj.is_accepting_responses:
             return Response(
                 {'detail': 'This form is not accepting responses.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         email = request.data.get('email', '').strip().lower()
         password = request.data.get('password', '')
         confirm_password = request.data.get('confirm_password', '')
         full_name = request.data.get('full_name', '').strip()
         skip_email = request.data.get('skip_email', False)
-        
+
         errors = {}
-        
+
         if skip_email:
             # Signup without email - require full_name
             if not full_name:
@@ -11025,20 +11025,20 @@ class ExtStaffSignupView(APIView):
                 errors['email'] = 'Email is required.'
             elif User.objects.filter(email__iexact=email).exists():
                 errors['email'] = 'Email already registered.'
-        
+
         # Validate password
         if not password:
             errors['password'] = 'Password is required.'
         elif len(password) < 6:
             errors['password'] = 'Password must be at least 6 characters.'
-        
+
         # Validate confirm password
         if password != confirm_password:
             errors['confirm_password'] = 'Passwords do not match.'
-        
+
         if errors:
             return Response({'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         try:
             if skip_email:
                 # Generate a unique username from full_name
@@ -11050,7 +11050,7 @@ class ExtStaffSignupView(APIView):
                 while User.objects.filter(username=username).exists():
                     username = f"{base_username}{suffix}"
                     suffix += 1
-                
+
                 # Create user without email
                 new_user = User.objects.create_user(
                     username=username,
@@ -11066,17 +11066,17 @@ class ExtStaffSignupView(APIView):
                     email=email,
                     password=password,
                 )
-            
+
             # Add to Ext_staff group
             ext_staff_group, _ = Group.objects.get_or_create(name='EXT_STAFF')
             new_user.groups.add(ext_staff_group)
-            
+
             # Create empty ExtStaffProfile
             profile = ExtStaffProfile.objects.create(
                 user=new_user,
                 is_active=True,
             )
-            
+
             return Response({
                 'success': True,
                 'message': 'Account created successfully. Please complete your profile.',
@@ -11085,7 +11085,7 @@ class ExtStaffSignupView(APIView):
                 'email': email or None,
                 'ext_uid': profile.external_id,
             }, status=status.HTTP_201_CREATED)
-            
+
         except Exception as exc:
             return Response(
                 {'detail': f'Signup failed: {str(exc)}'},

@@ -61,7 +61,7 @@ const sortColumnsByPeriod = (columns: Column[]): Column[] => {
 const getUniquePeriods = (columns: Column[]): Column[] => {
   const seen = new Set<number>();
   const unique: Column[] = [];
-  
+
   for (const col of sortColumnsByPeriod(columns)) {
     const periodNum = getPeriodNumber(col.period);
     if (!seen.has(periodNum)) {
@@ -69,7 +69,7 @@ const getUniquePeriods = (columns: Column[]): Column[] => {
       unique.push(col);
     }
   }
-  
+
   return unique;
 };
 
@@ -113,7 +113,7 @@ export default function TimetableCreator({ templates }: TimetableCreatorProps) {
 
     console.log('Saving timetable:', timetable);
     alert(`Timetable "${timetableName}" saved successfully!`);
-    
+
     // Reset form
     setSelectedTemplate(null);
     setTimetableData({});
@@ -231,10 +231,10 @@ export default function TimetableCreator({ templates }: TimetableCreatorProps) {
                   <svg className="absolute inset-0 w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
                     <line x1="0" y1="0" x2="100" y2="100" stroke="white" strokeWidth="1.5" opacity="0.5" />
                   </svg>
-                  
+
                   {/* Period text - top right */}
                   <div className="absolute top-2 right-3 text-xs font-bold text-white">Period</div>
-                  
+
                   {/* Day text - bottom left */}
                   <div className="absolute bottom-2 left-2 text-xs font-bold text-white">Day</div>
                 </th>

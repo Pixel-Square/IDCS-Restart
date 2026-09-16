@@ -5,7 +5,7 @@ from django.db import migrations
 def populate_form_names(apps, schema_editor):
     """Populate form_name for existing feedback forms that have empty values"""
     FeedbackForm = apps.get_model('feedback', 'FeedbackForm')
-    
+
     for form in FeedbackForm.objects.all():
         # If form_name is empty, generate a default based on type
         if not form.form_name or not form.form_name.strip():

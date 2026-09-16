@@ -42,10 +42,10 @@ export default function StudentIDE() {
 
   // Virtual filesystem tree
   const [vfsTree, setVfsTree] = useState<TreeNode[]>([])
-  
+
   // Cache map for fast lookup of files by ID
   const [rawFilesMap, setRawFilesMap] = useState<Record<number, FileState>>({})
-  
+
   // Tab management for opened files
   const [openTabs, setOpenTabs] = useState<number[]>([]) // array of file IDs
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null)
@@ -140,12 +140,12 @@ export default function StudentIDE() {
       .then(async r => {
         setAssessment(r.data)
         const projectFiles: FileState[] = r.data.project_files || []
-        
+
         // Cache files map
         const fMap: Record<number, FileState> = {}
         const contents: Record<number, string> = {}
-        projectFiles.forEach((f: FileState) => { 
-          fMap[f.id] = f 
+        projectFiles.forEach((f: FileState) => {
+          fMap[f.id] = f
           contents[f.id] = f.content
         })
         setRawFilesMap(fMap)
@@ -217,7 +217,7 @@ export default function StudentIDE() {
       const language = getLanguage()
       const res = await assessmentsApi.runCode(id, snapshot, language)
       const data = res.data
-      
+
       const results: any[] = data.results || []
       if (results.length === 0) {
         // No public test cases — show raw stdout/stderr
@@ -444,7 +444,7 @@ export default function StudentIDE() {
 
   const timerDanger = timeLeft !== null && timeLeft < 300
   const previewUrl = execSession?.preview_url
-  
+
   // Current active file info
   const activeFile = selectedFileId !== null ? rawFilesMap[selectedFileId] : null
 
@@ -544,7 +544,7 @@ export default function StudentIDE() {
         <div className="ide-body" style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
           {/* VFS Explorer Panel */}
           <div className="ide-explorer" style={{ display: 'flex', flexDirection: 'column', width: fileTreeWidth, flexShrink: 0 }}>
-            <FileTree 
+            <FileTree
               tree={vfsTree}
               selectedFileId={selectedFileId}
               onSelectFile={handleOpenTab}
@@ -586,7 +586,7 @@ export default function StudentIDE() {
                     >
                       {f.is_locked && <Lock size={10} color="var(--accent-yellow)" />}
                       <span>{f.name}</span>
-                      <button 
+                      <button
                         style={{ background: 'none', border: 'none', padding: 2, display: 'flex', alignItems: 'center', color: 'inherit', cursor: 'pointer' }}
                         onClick={(e) => handleCloseTab(e, tabId)}
                       >

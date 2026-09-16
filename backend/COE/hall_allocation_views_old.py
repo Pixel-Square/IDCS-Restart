@@ -15,7 +15,7 @@ def allocate_seats_simple(students_list, rows, cols):
     """Simple seat allocation: distribute students in column-major order."""
     seats = []
     student_idx = 0
-    
+
     for col_idx in range(cols):
         for row_idx in range(rows):
             seat_label = f"{chr(65 + col_idx)}{row_idx + 1}"  # A1, A2, ..., B1, B2, ...
@@ -31,7 +31,7 @@ def allocate_seats_simple(students_list, rows, cols):
                     "seat_label": seat_label,
                     "student_id": "",
                 })
-    
+
     return seats
 
 

@@ -49,7 +49,7 @@ class Command(BaseCommand):
         with transaction.atomic():
             for sec in sections:
                 old_sem = sec.semester.number if sec.semester else None
-                
+
                 # Calculate natural semester number
                 start_year = getattr(sec.batch, 'start_year', None)
                 if start_year is None and sec.batch:
@@ -88,7 +88,7 @@ class Command(BaseCommand):
                     sec.save()
 
                 new_sem = sec.semester.number if sec.semester else None
-                
+
                 if old_sem != new_sem:
                     self.stdout.write(f'  {sec}: Sem {old_sem} -> {new_sem}')
                     updated += 1

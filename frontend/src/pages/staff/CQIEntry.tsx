@@ -5,12 +5,12 @@ import { lsGet } from '../../utils/localStorage';
 import { exportCqiPdf } from '../../utils/cqiExportPdf';
 import { getCachedMe } from '../../services/auth';
 import { fetchWithAuth } from '../../services/fetchAuth';
-import { 
+import {
   createEditRequest,
   createPublishRequest,
-  fetchPublishedSsa1, 
-  fetchPublishedSsa2, 
-  fetchPublishedFormative1, 
+  fetchPublishedSsa1,
+  fetchPublishedSsa2,
+  fetchPublishedFormative1,
   fetchPublishedFormative,
   fetchPublishedCia1Sheet,
   fetchPublishedCiaSheet,
@@ -338,9 +338,9 @@ function effectiveCia2Weights(questions: any[], idx: number): { co3: number; co4
   return parsed === 4 ? { co3: 0, co4: 1 } : { co3: 1, co4: 0 };
 }
 
-export default function CQIEntry({ 
-  subjectId, 
-  teachingAssignmentId, 
+export default function CQIEntry({
+  subjectId,
+  teachingAssignmentId,
   classType,
   questionPaperType,
   enabledAssessments,
@@ -353,7 +353,7 @@ export default function CQIEntry({
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
+
   const [coTotals, setCoTotals] = useState<Record<number, Record<string, { value: number; max: number } | null>>>({});
   const [cqiEntries, setCqiEntries] = useState<Record<number, CQIEntry>>({});
   const [cqiErrors, setCqiErrors] = useState<Record<string, string>>({});
@@ -513,13 +513,13 @@ export default function CQIEntry({
     options: { poll: true },
   });
   const isPublished = Boolean(localPublished || markLock?.is_published || publishedLog?.published_at);
-  
+
   const entryOpen = !isPublished
     ? true
     : Boolean(markLock?.entry_open) || Boolean(markEntryEditWindow?.allowed_by_approval);
 
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
-  
+
   const publishButtonIsRequestEdit = Boolean(publishedEditLocked && editRequestsEnabled);
   const editRequestsBlocked = Boolean(publishedEditLocked && !editRequestsEnabled);
   const readOnly = publishedEditLocked;
@@ -731,7 +731,7 @@ export default function CQIEntry({
                   setTaMeta(null);
                 }
         if (!mounted) return;
-        
+
         const roster = (resp.students || [])
           .map((s: TeachingAssignmentRosterStudent) => ({
             id: Number(s.id),
@@ -741,7 +741,7 @@ export default function CQIEntry({
           }))
           .filter((s) => Number.isFinite(s.id))
           .sort(compareStudentName);
-        
+
         setStudents(roster);
       } catch (e: any) {
         if (!mounted) return;
@@ -946,7 +946,7 @@ export default function CQIEntry({
           }
           return null;
         })();
-        
+
         // QP1 FINAL YEAR detection: theory + QP1FINAL type.
         const isQp1FinalCqi = ct === 'THEORY' && /QP1\s*FINAL/i.test(qpTypeKey);
 
@@ -1668,7 +1668,7 @@ export default function CQIEntry({
                 if (meMark != null && meMax > 0) components.push({ key: 'me', mark: round2((meMark / (meMax || 1)) * 4), max: 4, w: 4 });
               } else if (coNum === 2) {
                 // CO2: Cycle1(SSA1_co2→1, CIA1_CO2→2, FA1_co2→2) + Cycle2(SSA2_first→1, CIA2_CO2→2, FA2_first→2) + Model(co2→4)
-                
+
                 // SSA
                 let ssaConv = 0; const ssaMax = 2; // w = 1 + 1
                 const s1 = readSsaCo(ssa1Res, student.id, 'co2');
@@ -1692,7 +1692,7 @@ export default function CQIEntry({
                 const f2 = readFaCo(f2Res, student.id, 'skill1', 'att1');
                 if (f2 != null) { faConv += (f2 / (maxes.f2.co3 || 1)) * 2; }
                 if (f1 != null || f2 != null) components.push({ key: 'fa', mark: round2(faConv), max: faMax, w: faMax });
-                
+
                 // ME
                 if (meMark != null && meMax > 0) components.push({ key: 'me', mark: round2((meMark / (meMax || 1)) * 4), max: 4, w: 4 });
               } else if (coNum === 3) {
@@ -2235,10 +2235,10 @@ export default function CQIEntry({
 
   return (
     <div style={{ padding: 12 }}>
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'center', 
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
         marginBottom: 16,
         padding: 16,
         background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
@@ -2253,7 +2253,7 @@ export default function CQIEntry({
             Students below {THRESHOLD_PERCENT}% threshold require CQI intervention
           </div>
         </div>
-        
+
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <button
                       type="button"
@@ -2271,9 +2271,9 @@ export default function CQIEntry({
           >
             {debugMode ? 'DEBUG ON' : 'DEBUG'}
           </button>
-          
 
-          
+
+
 
           {!publishedEditLocked ? (
             <button
@@ -2562,28 +2562,28 @@ export default function CQIEntry({
               <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 100 }}>
                 BEFORE CQI
                 <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
-                  
+
                 </div>
               </th>
               <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 100 }}>
                 AFTER CQI
                 <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
-                
+
                 </div>
               </th>
               <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 120 }}>
                 TOTAL
                 <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
-              
+
                 </div>
               </th>
                   {coNumbers.map(coNum => (
-                <th 
-                  key={coNum} 
-                  style={{ 
-                    padding: '12px 8px', 
-                    textAlign: 'center', 
-                    fontWeight: 700, 
+                <th
+                  key={coNum}
+                  style={{
+                    padding: '12px 8px',
+                    textAlign: 'center',
+                    fontWeight: 700,
                     color: priorPublishedCos.has(coNum) ? '#1d4ed8' : '#475569',
                     minWidth: 150,
                     backgroundColor: priorPublishedCos.has(coNum) ? '#eff6ff' : undefined,
@@ -2596,7 +2596,7 @@ export default function CQIEntry({
                         </div>
                       )}
                       <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
-                        
+
                       </div>
                 </th>
               ))}
@@ -2605,7 +2605,7 @@ export default function CQIEntry({
           <tbody>
             {students.map((student, idx) => {
               const studentTotals = coTotals[student.id] || {};
-              
+
               // Calculate BEFORE CQI (sum of all CO values)
               let beforeCqiValue = 0;
               let beforeCqiMax = 0;
@@ -2621,7 +2621,7 @@ export default function CQIEntry({
               const totalValue = beforeCqiValue;
               const totalMax = beforeCqiMax;
               const totalPct = totalMax ? (totalValue / totalMax) * 100 : 0;
-              
+
               const beforePercentage = beforeCqiMax ? (beforeCqiValue / beforeCqiMax) * 100 : 0;
 
               // Calculate AFTER CQI using per-CO rules:
@@ -2684,11 +2684,11 @@ export default function CQIEntry({
                 afterCqiValue = Math.min(afterCqiValue, totalCap);
               }
               const afterPercentage = afterCqiMax ? (afterCqiValue / afterCqiMax) * 100 : 0;
-              
+
               return (
-                <tr 
+                <tr
                   key={student.id}
-                  style={{ 
+                  style={{
                     borderBottom: '1px solid #e5e7eb',
                     backgroundColor: idx % 2 === 0 ? 'white' : '#f9fafb',
                   }}
@@ -2702,8 +2702,8 @@ export default function CQIEntry({
                   <td style={{ padding: '10px 8px', color: '#0f172a' }}>
                     {student.name}
                   </td>
-                  <td style={{ 
-                    padding: '10px 8px', 
+                  <td style={{
+                    padding: '10px 8px',
                     textAlign: 'center',
                     fontWeight: 600,
                   }}>
@@ -2720,8 +2720,8 @@ export default function CQIEntry({
                       <span style={{ color: '#94a3b8' }}>—</span>
                     )}
                   </td>
-                  <td style={{ 
-                    padding: '10px 8px', 
+                  <td style={{
+                    padding: '10px 8px',
                     textAlign: 'center',
                     fontWeight: 600,
                     backgroundColor: afterCqiValue > beforeCqiValue ? '#f0fdf4' : 'transparent',
@@ -2762,13 +2762,13 @@ export default function CQIEntry({
                   {coNumbers.map(coNum => {
                     const coKey = `co${coNum}`;
                     const coData = studentTotals[coKey];
-                    
+
                     if (!coData) {
                       return (
-                        <td 
+                        <td
                           key={coNum}
-                          style={{ 
-                            padding: '10px 8px', 
+                          style={{
+                            padding: '10px 8px',
                             textAlign: 'center',
                             color: '#94a3b8',
                           }}
@@ -2788,16 +2788,16 @@ export default function CQIEntry({
                     const priorValue = isAlreadyAttained ? (priorEntry[coKey] ?? null) : null;
 
                     return (
-                      <td 
+                      <td
                         key={coNum}
-                        style={{ 
-                          padding: '10px 8px', 
+                        style={{
+                          padding: '10px 8px',
                           textAlign: 'center',
                           backgroundColor: isAlreadyAttained ? '#eff6ff' : (isBelowThreshold ? (isOverallBelowThreshold ? '#fef2f2' : '#f0f9ff') : '#f0fdf4'),
                         }}
                       >
-                        <div style={{ 
-                          fontSize: 13, 
+                        <div style={{
+                          fontSize: 13,
                           color: '#64748b',
                           marginBottom: 6,
                         }}>
@@ -2853,9 +2853,9 @@ export default function CQIEntry({
                           </div>
                         ) : isBelowThreshold ? (
                           <div>
-                            <div style={{ 
-                              fontSize: 11, 
-                              color: isOverallBelowThreshold ? '#dc2626' : '#0369a1', 
+                            <div style={{
+                              fontSize: 11,
+                              color: isOverallBelowThreshold ? '#dc2626' : '#0369a1',
                               fontWeight: 600,
                               marginBottom: 4,
                             }}>
@@ -2882,8 +2882,8 @@ export default function CQIEntry({
                             )}
                           </div>
                         ) : (
-                          <div style={{ 
-                            fontSize: 12, 
+                          <div style={{
+                            fontSize: 12,
                             color: '#16a34a',
                             fontWeight: 600,
                           }}>
@@ -2901,8 +2901,8 @@ export default function CQIEntry({
       </div>
 
       {students.length === 0 && (
-        <div style={{ 
-          textAlign: 'center', 
+        <div style={{
+          textAlign: 'center',
           padding: 32,
           color: '#94a3b8',
         }}>

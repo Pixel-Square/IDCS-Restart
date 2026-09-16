@@ -10,11 +10,11 @@ def add_engineering_physics(apps, schema_editor):
     CurriculumMaster = apps.get_model('curriculum', 'CurriculumMaster')
     Semester = apps.get_model('academics', 'Semester')
     Department = apps.get_model('academics', 'Department')
-    
+
     try:
         # Get or create semester 1
         semester, _ = Semester.objects.get_or_create(number=1)
-        
+
         # Find all regulations that have GEA1102 (Engineering Physics Lab) to determine which regulations need GEA1101
         regulations_with_gea1102 = set(
             CurriculumMaster.objects.filter(
@@ -22,7 +22,7 @@ def add_engineering_physics(apps, schema_editor):
                 course_code='GEA1102'
             ).values_list('regulation', flat=True)
         )
-        
+
         if not regulations_with_gea1102:
             # If no GEA1102, try to get regulations from any subject in semester 1
             regulations_with_gea1102 = set(
@@ -31,11 +31,11 @@ def add_engineering_physics(apps, schema_editor):
                     course_code__startswith='GEA'
                 ).values_list('regulation', flat=True)
             )
-        
+
         if not regulations_with_gea1102:
             # Fallback: use R2023 if no matching regulations found
             regulations_with_gea1102 = {'R2023'}
-        
+
         # For each regulation that has GEA1102, add GEA1101 if it doesn't exist
         for regulation in regulations_with_gea1102:
             existing = CurriculumMaster.objects.filter(
@@ -43,11 +43,11 @@ def add_engineering_physics(apps, schema_editor):
                 semester=semester,
                 course_code='GEA1101'
             ).exists()
-            
+
             if existing:
                 print(f'GEA1101 already exists for regulation {regulation}')
                 continue
-            
+
             # Create Engineering Physics (Theory) entry
             gea1101, created = CurriculumMaster.objects.get_or_create(
                 regulation=regulation,
@@ -69,10 +69,10 @@ def add_engineering_physics(apps, schema_editor):
                     'editable': False,
                 }
             )
-            
+
             if created:
                 print(f'Created GEA1101 - Engineering Physics (Theory) for regulation {regulation}')
-                
+
                 # Try to add to all teaching departments
                 departments = Department.objects.filter(is_teaching=True)
                 if departments.exists():
@@ -80,7 +80,7 @@ def add_engineering_physics(apps, schema_editor):
                     print(f'Associated GEA1101 with {departments.count()} departments')
             else:
                 print(f'GEA1101 already exists for regulation {regulation}')
-            
+
     except Exception as e:
         print(f'Error adding Engineering Physics: {e}')
 
@@ -88,7 +88,7 @@ def add_engineering_physics(apps, schema_editor):
 def reverse_add_engineering_physics(apps, schema_editor):
     """Remove GEA1101 from CurriculumMaster"""
     CurriculumMaster = apps.get_model('curriculum', 'CurriculumMaster')
-    
+
     try:
         # Remove all GEA1101 entries regardless of regulation
         deleted_count, _ = CurriculumMaster.objects.filter(

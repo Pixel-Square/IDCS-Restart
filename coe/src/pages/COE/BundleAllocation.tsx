@@ -195,7 +195,7 @@ export default function BundleAllocation() {
             .map((row) => [row.dummy, row])
         );
         const selectionMap = await fetchCourseSelectionMapFromApi(department, semester);
-        
+
         // Also read persisted shuffles from local storage (same as StudentsList)
         const filterKey = `${department}::${semester}`;
         const persistedByDummy = getPersistedShuffledForFilter(filterKey);
@@ -323,7 +323,7 @@ export default function BundleAllocation() {
   useEffect(() => {
     const bundleStore = readCourseBundleDummyStore();
     const shuffledLists = readShuffledLists();
-    
+
     const additionalByCourseKey: Record<string, { bundleName: string; students: BundleStudent[] }[]> = {};
 
     // Iterate all bundle store entries; match by semester so "ALL" dept works too
@@ -337,7 +337,7 @@ export default function BundleAllocation() {
 
       Object.entries(courseBundleMap).forEach(([courseKey, courseData]) => {
         const bundles: { bundleName: string; students: BundleStudent[] }[] = [];
-        
+
         Object.entries(courseData.bundles || {}).forEach(([bundleName, dummies]) => {
           const students: BundleStudent[] = (dummies || []).map((dummy) => {
             const studentInfo = shuffledForFilter[dummy] || { reg_no: 'Unknown', name: 'Unknown' };
@@ -348,18 +348,18 @@ export default function BundleAllocation() {
               isShuffled: true,
             };
           });
-          
+
           if (students.length > 0) {
             bundles.push({ bundleName, students });
           }
         });
-        
+
         if (bundles.length > 0) {
           additionalByCourseKey[courseKey] = bundles;
         }
       });
     });
-    
+
     setAdditionalBundles(additionalByCourseKey);
   }, [department, semester, additionalRefreshTick]);
 
@@ -418,18 +418,18 @@ export default function BundleAllocation() {
 
     Object.entries(additionalBundles).forEach(([courseKey, bundles]) => {
       if (existingCourseKeys.has(courseKey)) return; // Already included above
-      
+
       // Parse courseKey: "DEPT::SEM::CODE::NAME"
       const parts = courseKey.split('::');
       const courseDept = parts[0] || department;
       const courseCode = parts[2] || 'UNKNOWN';
       const courseName = parts[3] || 'Additional Students';
-      
+
       const bundleList = bundles.map((b) => ({
         name: b.bundleName + ' (Additional)',
         students: b.students,
       }));
-      
+
       courseBundleList.push({
         department: courseDept,
         course_code: courseCode,

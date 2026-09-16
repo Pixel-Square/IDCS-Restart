@@ -892,7 +892,7 @@ export default function LabCourseMarksEntry({
       mounted = false;
     };
   }, [teachingAssignmentId, rosterRefreshKey]);
-  
+
 
   // Local mirror (for dashboard counts)
   useEffect(() => {
@@ -3964,8 +3964,8 @@ export default function LabCourseMarksEntry({
                   <div style={{ fontSize: 13, color: '#6b7280' }}>Confirm the Mark Manager</div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-                  
-                  
+
+
                 </div>
               </div>
             ) : null}

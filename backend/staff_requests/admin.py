@@ -17,7 +17,7 @@ class RequestTemplateAdmin(admin.ModelAdmin):
     list_filter = ['is_active', 'created_at']
     search_fields = ['name', 'description']
     inlines = [ApprovalStepInline]
-    
+
     fieldsets = (
         ('Basic Information', {
             'fields': ('name', 'description', 'is_active')
@@ -36,9 +36,9 @@ class RequestTemplateAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
-    
+
     readonly_fields = ['created_at', 'updated_at']
-    
+
     def total_approval_steps(self, obj):
         """Display the number of approval steps"""
         return obj.approval_steps.count()
@@ -52,7 +52,7 @@ class ApprovalStepAdmin(admin.ModelAdmin):
     list_filter = ['template', 'approver_role']
     search_fields = ['template__name', 'approver_role']
     ordering = ['template', 'step_order']
-    
+
     fieldsets = (
         ('Step Configuration', {
             'fields': ('template', 'step_order', 'approver_role')
@@ -62,7 +62,7 @@ class ApprovalStepAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
-    
+
     readonly_fields = ['created_at', 'updated_at']
 
 
@@ -73,7 +73,7 @@ class ApprovalLogInline(admin.TabularInline):
     fields = ['step_order', 'approver', 'action', 'comments', 'action_date']
     readonly_fields = ['step_order', 'approver', 'action', 'comments', 'action_date']
     can_delete = False
-    
+
     def has_add_permission(self, request, obj=None):
         return False
 
@@ -82,18 +82,18 @@ class ApprovalLogInline(admin.TabularInline):
 class StaffRequestAdmin(admin.ModelAdmin):
     """Admin interface for StaffRequest"""
     list_display = [
-        'id', 'applicant', 'template', 'status', 
+        'id', 'applicant', 'template', 'status',
         'current_step', 'created_at'
     ]
     list_filter = ['status', 'template', 'created_at']
     search_fields = [
-        'applicant__username', 
-        'applicant__first_name', 
+        'applicant__username',
+        'applicant__first_name',
         'applicant__last_name',
         'template__name'
     ]
     inlines = [ApprovalLogInline]
-    
+
     fieldsets = (
         ('Request Information', {
             'fields': ('applicant', 'template', 'form_data')
@@ -106,9 +106,9 @@ class StaffRequestAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
-    
+
     readonly_fields = ['created_at', 'updated_at']
-    
+
     def get_readonly_fields(self, request, obj=None):
         """Make certain fields readonly after creation"""
         if obj:  # Editing existing object
@@ -120,7 +120,7 @@ class StaffRequestAdmin(admin.ModelAdmin):
 class ApprovalLogAdmin(admin.ModelAdmin):
     """Admin interface for ApprovalLog"""
     list_display = [
-        'id', 'request', 'step_order', 'approver', 
+        'id', 'request', 'step_order', 'approver',
         'action', 'action_date'
     ]
     list_filter = ['action', 'action_date']
@@ -129,7 +129,7 @@ class ApprovalLogAdmin(admin.ModelAdmin):
         'approver__username',
         'comments'
     ]
-    
+
     fieldsets = (
         ('Approval Information', {
             'fields': ('request', 'step_order', 'approver', 'action')
@@ -138,15 +138,15 @@ class ApprovalLogAdmin(admin.ModelAdmin):
             'fields': ('comments', 'action_date')
         }),
     )
-    
+
     readonly_fields = ['action_date']
-    
+
     def get_readonly_fields(self, request, obj=None):
         """Make all fields readonly after creation (audit trail)"""
         if obj:
             return [f.name for f in self.model._meta.fields]
         return self.readonly_fields
-    
+
     def has_delete_permission(self, request, obj=None):
         """Prevent deletion of approval logs (audit trail)"""
         return False
@@ -159,7 +159,7 @@ class StaffLeaveBalanceAdmin(admin.ModelAdmin):
     list_filter = ['leave_type', 'updated_at']
     search_fields = ['staff__username', 'staff__first_name', 'staff__last_name', 'leave_type']
     ordering = ['staff', 'leave_type']
-    
+
     fieldsets = (
         ('Balance Information', {
             'fields': ('staff', 'leave_type', 'balance')
@@ -169,9 +169,9 @@ class StaffLeaveBalanceAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
-    
+
     readonly_fields = ['created_at', 'updated_at']
-    
+
     def get_readonly_fields(self, request, obj=None):
         """Make staff and leave_type readonly after creation"""
         if obj:  # Editing existing object
@@ -186,7 +186,7 @@ class StaffFormUsageAdmin(admin.ModelAdmin):
     list_filter = ['template', 'reset_period_start', 'reset_period_end']
     search_fields = ['staff__username', 'staff__first_name', 'staff__last_name', 'template__name']
     ordering = ['staff', 'template', '-reset_period_start']
-    
+
     fieldsets = (
         ('Usage Information', {
             'fields': ('staff', 'template', 'usage_count', 'last_used')
@@ -199,9 +199,9 @@ class StaffFormUsageAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
-    
+
     readonly_fields = ['created_at', 'updated_at', 'last_used']
-    
+
     def get_readonly_fields(self, request, obj=None):
         """Make staff, template, and reset period readonly after creation"""
         if obj:  # Editing existing object

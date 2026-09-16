@@ -6,7 +6,7 @@ from django.db import migrations, models
 def seed_class_types(apps, schema_editor):
     """Seed initial class types from hardcoded constants."""
     ClassType = apps.get_model('curriculum', 'ClassType')
-    
+
     initial_types = [
         ('THEORY', 'Theory', 1),
         ('THEORY_PMBL', 'Theory (PMBL)', 2),
@@ -20,7 +20,7 @@ def seed_class_types(apps, schema_editor):
         ('AUDIT', 'Audit', 10),
         ('SPECIAL', 'Special', 11),
     ]
-    
+
     for code, label, sort_order in initial_types:
         ClassType.objects.get_or_create(
             code=code,

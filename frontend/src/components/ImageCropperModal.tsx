@@ -13,7 +13,7 @@ interface ImageCropperModalProps {
 export default function ImageCropperModal({ file, isOpen, onClose, onSave }: ImageCropperModalProps) {
   const cropperRef = useRef<ReactCropperElement>(null);
   const [imageSrc, setImageSrc] = useState<string | null>(null);
-  
+
   // Aspect ratio: NaN = free crop, 1/1.414 = portrait A4, 1.414/1 = landscape A4
   const [aspect, setAspect] = useState<number>(1 / 1.414);
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('portrait');
@@ -48,7 +48,7 @@ export default function ImageCropperModal({ file, isOpen, onClose, onSave }: Ima
       onSave(file, orientation);
       return;
     }
-    
+
     const cropper = cropperRef.current?.cropper;
     if (cropper) {
       cropper.getCroppedCanvas().toBlob((blob) => {
@@ -96,7 +96,7 @@ export default function ImageCropperModal({ file, isOpen, onClose, onSave }: Ima
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl flex flex-col h-[90vh] overflow-hidden">
-        
+
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b">
           <h2 className="text-lg font-bold text-gray-800">Preview & Adjust File</h2>
@@ -107,13 +107,13 @@ export default function ImageCropperModal({ file, isOpen, onClose, onSave }: Ima
 
         {/* Main Content Area */}
         <div className="flex flex-1 overflow-hidden flex-col md:flex-row">
-          
+
           {/* Left: Cropper / Preview */}
           <div className="flex-1 bg-gray-100 relative min-h-[50vh]">
             {isPdf ? (
-              <iframe 
-                src={`${imageSrc}#toolbar=0&navpanes=0`} 
-                className="w-full h-full border-0" 
+              <iframe
+                src={`${imageSrc}#toolbar=0&navpanes=0`}
+                className="w-full h-full border-0"
                 title="PDF Preview"
               />
             ) : (
@@ -139,7 +139,7 @@ export default function ImageCropperModal({ file, isOpen, onClose, onSave }: Ima
           <div className="w-full md:w-80 bg-white p-6 flex flex-col border-l overflow-y-auto">
             <h3 className="font-semibold text-gray-800 mb-4">PDF Orientation</h3>
             <p className="text-sm text-gray-500 mb-4">Select how this file should be placed in the generated PDF report.</p>
-            
+
             <div className="grid grid-cols-3 gap-2 mb-8">
               <button
                 onClick={setPortrait}
@@ -150,7 +150,7 @@ export default function ImageCropperModal({ file, isOpen, onClose, onSave }: Ima
                 <div className="w-6 h-8 border-2 border-current rounded-sm"></div>
                 <span className="text-[11px] font-medium text-center leading-tight mt-1">Portrait</span>
               </button>
-              
+
               <button
                 onClick={setLandscape}
                 className={`py-3 px-1 border rounded-lg flex flex-col items-center justify-center gap-1 transition-colors ${
@@ -175,7 +175,7 @@ export default function ImageCropperModal({ file, isOpen, onClose, onSave }: Ima
             {!isPdf && (
               <>
                 <h3 className="font-semibold text-gray-800 mb-4">Image Adjustments</h3>
-                
+
                 <div className="space-y-3 mb-8">
                   <button
                     onClick={handleRotate}
@@ -204,7 +204,7 @@ export default function ImageCropperModal({ file, isOpen, onClose, onSave }: Ima
                 </div>
               </>
             )}
-            
+
             <div className="mt-auto pt-4 flex gap-2">
               <button
                 onClick={onClose}

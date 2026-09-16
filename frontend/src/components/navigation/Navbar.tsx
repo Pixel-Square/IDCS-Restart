@@ -27,17 +27,17 @@ export default function Navbar({ user }: NavbarProps) {
   // Get role-specific ID display
   const getUserDisplayId = () => {
     if (!user) return null;
-    
+
     const profileType = (user.profile_type || '').toUpperCase();
-    
+
     if (profileType === 'STUDENT' && user.profile?.reg_no) {
       return user.profile.reg_no;
     }
-    
+
     if (profileType === 'STAFF' && user.profile?.staff_id) {
       return user.profile.staff_id;
     }
-    
+
     return user.username;
   };
 

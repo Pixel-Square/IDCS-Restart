@@ -358,7 +358,7 @@ export default function ArticulationMatrix({ subjectId, matrix }: { subjectId: s
         );
       })()}
 
-      
+
 
       {summary?.rows?.length ? (
         <section>

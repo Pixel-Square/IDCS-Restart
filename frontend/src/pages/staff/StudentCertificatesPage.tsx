@@ -7,7 +7,7 @@ export default function StudentCertificatesPage() {
   const { studentId } = useParams<{ studentId: string }>()
   const location = useLocation()
   const navigate = useNavigate()
-  
+
   const student = location.state?.student
   const viewMode = location.state?.viewMode
 
@@ -33,7 +33,7 @@ export default function StudentCertificatesPage() {
         } else {
           throw new Error('Invalid view mode for accessing certificates')
         }
-        
+
         setAchievements(res.results || [])
       } catch (err: any) {
         setError(err.message || 'Failed to load certificates')
@@ -49,7 +49,7 @@ export default function StudentCertificatesPage() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
-      <button 
+      <button
         onClick={() => navigate('/staff/students')}
         className="flex items-center gap-2 text-slate-600 hover:text-indigo-600 transition-colors text-sm font-medium"
       >

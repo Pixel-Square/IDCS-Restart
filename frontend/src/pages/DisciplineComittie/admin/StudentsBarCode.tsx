@@ -1,16 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import Barcode from 'react-barcode';
 import JsBarcode from 'jsbarcode';
-import { 
-  Search, 
-  Filter, 
-  QrCode, 
-  Printer, 
-  Download, 
-  Users, 
-  GraduationCap, 
-  Building2, 
-  Layers, 
+import {
+  Search,
+  Filter,
+  QrCode,
+  Printer,
+  Download,
+  Users,
+  GraduationCap,
+  Building2,
+  Layers,
   RefreshCw,
   User,
   ExternalLink,
@@ -28,11 +28,11 @@ import {
 } from 'lucide-react';
 import { getApiBase } from '../../../services/apiBase';
 import { getCachedMe } from '../../../services/auth';
-import { 
-  DisciplineStudent, 
+import {
+  DisciplineStudent,
   fetchDisciplineStudents,
   exportDisciplineStudentsExcel,
-  exportDisciplineStudentsBarcodeZip 
+  exportDisciplineStudentsBarcodeZip
 } from '../../../services/discipline';
 
 function resolveProfileImageUrl(url?: string | null): string | null {

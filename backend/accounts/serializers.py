@@ -425,20 +425,20 @@ class UserQuerySerializer(serializers.ModelSerializer):
     dept_serial_number = serializers.SerializerMethodField()
     mobile_number = serializers.SerializerMethodField()
     mobile_verified = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = UserQuery
         fields = ('id', 'serial_number', 'user', 'username', 'user_roles', 'user_department', 'dept_serial_number', 'mobile_number', 'mobile_verified', 'query_text', 'status', 'created_at', 'updated_at', 'admin_notes')
         read_only_fields = ('id', 'serial_number', 'user', 'username', 'user_roles', 'user_department', 'dept_serial_number', 'mobile_number', 'mobile_verified', 'created_at', 'updated_at', 'admin_notes', 'status')
-    
+
     def get_serial_number(self, obj):
         """Calculate serial number based on creation order (oldest = 1)."""
         return UserQuery.objects.filter(created_at__lt=obj.created_at).count() + 1
-    
+
     def get_user_roles(self, obj):
         """Get user's roles as a list of role names."""
         return [ur.role.name for ur in obj.user.user_roles.select_related('role').all()]
-    
+
     def get_user_department(self, obj):
         """Get user's department information if available."""
         try:
@@ -457,7 +457,7 @@ class UserQuerySerializer(serializers.ModelSerializer):
         except Exception:
             pass
         return None
-    
+
     def get_dept_serial_number(self, obj):
         """Calculate department-wise serial number for the token."""
         try:
@@ -473,12 +473,12 @@ class UserQuerySerializer(serializers.ModelSerializer):
                     dept = section.batch.course.department
                     if dept:
                         dept_id = dept.id
-            
+
             if dept_id:
                 # Count tokens from same department created before this one
                 from django.db.models import Q
                 count = UserQuery.objects.filter(
-                    Q(user__staff_profile__current_department_id=dept_id) | 
+                    Q(user__staff_profile__current_department_id=dept_id) |
                     Q(user__student_profile__section__batch__course__department_id=dept_id),
                     created_at__lt=obj.created_at
                 ).count()
@@ -486,7 +486,7 @@ class UserQuerySerializer(serializers.ModelSerializer):
         except Exception:
             pass
         return None
-    
+
     def get_mobile_number(self, obj):
         """Get user's mobile number from their profile."""
         try:
@@ -497,7 +497,7 @@ class UserQuerySerializer(serializers.ModelSerializer):
         except Exception:
             pass
         return None
-    
+
     def get_mobile_verified(self, obj):
         """Get user's mobile verification status from their profile."""
         try:
@@ -508,7 +508,7 @@ class UserQuerySerializer(serializers.ModelSerializer):
         except Exception:
             pass
         return False
-    
+
     def create(self, validated_data):
         # Set the user from context
         validated_data['user'] = self.context['request'].user
@@ -520,15 +520,15 @@ class UserQueryListSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username', read_only=True)
     query_preview = serializers.SerializerMethodField()
     serial_number = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = UserQuery
         fields = ('id', 'serial_number', 'username', 'query_preview', 'status', 'admin_notes', 'created_at', 'updated_at')
-    
+
     def get_query_preview(self, obj):
         """Return first 100 characters of query text."""
         return obj.query_text[:100] + '...' if len(obj.query_text) > 100 else obj.query_text
-    
+
     def get_serial_number(self, obj):
         """Calculate serial number based on creation order (oldest = 1)."""
         return UserQuery.objects.filter(created_at__lt=obj.created_at).count() + 1

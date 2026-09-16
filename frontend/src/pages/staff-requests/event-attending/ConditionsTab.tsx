@@ -84,7 +84,7 @@ export default function ConditionsTab() {
     setSaving(true);
     setMsg('');
     setError('');
-    
+
     // Validate
     for (let i = 0; i < conditions.length; i++) {
       const c = conditions[i];
@@ -123,14 +123,14 @@ export default function ConditionsTab() {
         <h4 className="text-sm font-semibold text-gray-800">
           {type === 'normal' ? 'Normal Events Conditions' : 'Conference Events Conditions'}
         </h4>
-        <button 
-          onClick={() => addCondition(type)} 
+        <button
+          onClick={() => addCondition(type)}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-50 transition-colors shadow-sm"
         >
           <Plus size={14} /> Add Condition for {type === 'normal' ? 'Normal Events' : 'Conference Events'}
         </button>
       </div>
-      
+
       {condsList.length === 0 ? (
         <div className="p-8 text-center text-gray-400 text-sm">
           No conditions added yet.
@@ -174,7 +174,7 @@ export default function ConditionsTab() {
                     {/* From Exp (lower bound, inclusive) */}
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-1">
-                        <input 
+                        <input
                           type="number" step="0.1" min="0"
                           value={c.exp_from ?? ''}
                           placeholder="0"
@@ -191,8 +191,8 @@ export default function ConditionsTab() {
 
                     {/* Operator — applies to the upper/exact bound (To Exp) */}
                     <td className="px-3 py-2">
-                      <select 
-                        value={c.exp_condition} 
+                      <select
+                        value={c.exp_condition}
                         onChange={e => updateCondition(idx, { exp_condition: e.target.value as ExpCondition })}
                         className="w-full px-2 py-1.5 border border-gray-200 rounded-md text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none"
                       >
@@ -202,40 +202,40 @@ export default function ConditionsTab() {
 
                     {/* To Exp (upper / exact bound) */}
                     <td className="px-3 py-2">
-                      <input 
+                      <input
                         type="number" step="0.1" min="0"
-                        value={c.exp_value} 
+                        value={c.exp_value}
                         onChange={e => updateCondition(idx, { exp_value: Number(e.target.value) || 0 })}
                         className="w-full px-2 py-1.5 border border-gray-200 rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                         title="Upper-bound / exact experience (e.g. 5 for '< 5 yrs', 2.2 for 2 yrs 2 months)"
                       />
                     </td>
                     <td className="px-3 py-2">
-                      <input 
-                        type="number" 
-                        value={c.amount} 
+                      <input
+                        type="number"
+                        value={c.amount}
                         onChange={e => updateCondition(idx, { amount: Number(e.target.value) || 0 })}
                         className="w-full px-2 py-1.5 border border-gray-200 rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                       />
                     </td>
                     <td className="px-3 py-2">
-                      <input 
-                        type="date" 
-                        value={c.from_date} 
+                      <input
+                        type="date"
+                        value={c.from_date}
                         onChange={e => updateCondition(idx, { from_date: e.target.value })}
                         className="w-full px-2 py-1.5 border border-gray-200 rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                       />
                     </td>
                     <td className="px-3 py-2">
-                      <input 
-                        type="date" 
-                        value={c.to_date} 
+                      <input
+                        type="date"
+                        value={c.to_date}
                         onChange={e => updateCondition(idx, { to_date: e.target.value })}
                         className="w-full px-2 py-1.5 border border-gray-200 rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                       />
                     </td>
                     <td className="px-3 py-2 text-center">
-                      <button 
+                      <button
                         onClick={() => removeCondition(idx)}
                         className="p-1.5 text-red-500 hover:bg-red-50 rounded-md transition-colors"
                         title="Remove condition"
@@ -258,23 +258,23 @@ export default function ConditionsTab() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h3 className="text-base font-semibold text-gray-800 flex items-center gap-2">
-            <AlertCircle size={18} className="text-blue-600" /> 
+            <AlertCircle size={18} className="text-blue-600" />
             Rule-Based Budget Conditions
           </h3>
           <p className="text-xs text-gray-500 mt-1">
-            Define experience <strong>ranges</strong> using <em>From Exp</em> · <em>Operator</em> · <em>To Exp</em>. 
-            Example: <code className="bg-gray-100 px-1 rounded">0 ≤ exp &lt; 5</code> → ₹5,000 &nbsp;|&nbsp; 
-            <code className="bg-gray-100 px-1 rounded">5 ≤ exp &lt; 8</code> → ₹8,000 &nbsp;|&nbsp; 
+            Define experience <strong>ranges</strong> using <em>From Exp</em> · <em>Operator</em> · <em>To Exp</em>.
+            Example: <code className="bg-gray-100 px-1 rounded">0 ≤ exp &lt; 5</code> → ₹5,000 &nbsp;|&nbsp;
+            <code className="bg-gray-100 px-1 rounded">5 ≤ exp &lt; 8</code> → ₹8,000 &nbsp;|&nbsp;
             <code className="bg-gray-100 px-1 rounded">exp &gt; 8</code> → ₹10,000. Leave <em>From Exp</em> blank for open-ended conditions.
           </p>
         </div>
-        
-        <button 
-          onClick={handleSave} 
-          disabled={saving} 
+
+        <button
+          onClick={handleSave}
+          disabled={saving}
           className="flex items-center justify-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors shadow-sm"
         >
-          {saving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />} 
+          {saving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
           Save & Apply to Staff Declaration
         </button>
       </div>
@@ -291,7 +291,7 @@ export default function ConditionsTab() {
           <AlertCircle size={16} /> {error}
         </div>
       )}
-      
+
       {msg && (
         <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm text-center font-medium">
           {msg}
@@ -300,7 +300,7 @@ export default function ConditionsTab() {
 
       {renderTable('normal', normalConds)}
       {renderTable('conference', confConds)}
-      
+
     </div>
   );
 }

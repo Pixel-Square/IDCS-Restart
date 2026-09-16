@@ -508,14 +508,14 @@ class CurriculumBySectionView(APIView):
 class MixedSectionCurriculumView(APIView):
     """
     API endpoint to retrieve curriculum for a Mixed Section.
-    
+
     A mixed section groups multiple regular sections. This endpoint resolves
     curriculum by:
     1. Getting department + semester from the mixed section's batch
     2. For each chosen section, extracting its department + semester
     3. Querying CurriculumDepartment for all (dept_id, semester) pairs
     4. Deduplicating by course_code and returning with department info
-    
+
     Query params:
     - mixed_section_id (required): ID of the MixedSection
     """
@@ -551,7 +551,7 @@ class MixedSectionCurriculumView(APIView):
         dept_sem_pairs = set()
         dept_section_map = {}  # Track which sections contribute which departments
         section_details = {}  # Track section details for debugging
-        
+
         # 1. From mixed section's batch
         batch_dept_id = None
         logger.info(f'[MixedSection {mixed_section_id}] Processing batch...')
@@ -563,7 +563,7 @@ class MixedSectionCurriculumView(APIView):
             elif getattr(mixed_sec.batch, 'department_id', None):
                 batch_dept_id = mixed_sec.batch.department_id
                 logger.info(f'  - Found dept from batch.department: {batch_dept_id}')
-        
+
         if batch_dept_id:
             dept_sem_pairs.add((batch_dept_id, sem_num))
             if batch_dept_id not in dept_section_map:
@@ -571,16 +571,16 @@ class MixedSectionCurriculumView(APIView):
             dept_section_map[batch_dept_id].append(('batch', None))
         else:
             logger.warning(f'[MixedSection {mixed_section_id}] Could not resolve batch department')
-        
+
         # 2. From each chosen section - MUST resolve department from each chosen section
         chosen_sections = list(mixed_sec.sections.all())
         logger.info(f'[MixedSection {mixed_section_id}] Found {len(chosen_sections)} chosen sections')
-        
+
         for i, section in enumerate(chosen_sections):
             dept_id = None
             section_sem = getattr(section.semester, 'number', None) or sem_num
             logger.info(f'  Section {i+1}/{len(chosen_sections)}: ID={section.id}, Name={section.name}, Batch={section.batch_id}, Sem={section_sem}')
-            
+
             # Priority: section.batch.course.department > section.batch.department > section.managing_department
             if section.batch:
                 batch = section.batch
@@ -591,15 +591,15 @@ class MixedSectionCurriculumView(APIView):
                     if getattr(course, 'department_id', None):
                         dept_id = course.department_id
                         logger.info(f'      - Using course.department_id: {dept_id}')
-                
+
                 if not dept_id and getattr(batch, 'department_id', None):
                     dept_id = batch.department_id
                     logger.info(f'      - Using batch.department_id: {dept_id}')
-            
+
             if not dept_id and getattr(section, 'managing_department_id', None):
                 dept_id = section.managing_department_id
                 logger.info(f'    - Using section.managing_department_id: {dept_id}')
-            
+
             if dept_id:
                 dept_sem_pairs.add((dept_id, section_sem))
                 if dept_id not in dept_section_map:
@@ -611,7 +611,7 @@ class MixedSectionCurriculumView(APIView):
                 # Log if we couldn't resolve department for a chosen section
                 logger.warning(f'[MixedSection {mixed_section_id}] Could not resolve department for chosen section {section.id} ({section.name})')
                 section_details[section.id] = {'name': section.name, 'dept_id': None, 'sem': section_sem, 'error': 'No department found'}
-        
+
         if not dept_sem_pairs:
             return Response({'results': []})
 
@@ -619,7 +619,7 @@ class MixedSectionCurriculumView(APIView):
 
         try:
             from curriculum.models import CurriculumDepartment
-            
+
             # Query curriculum for all department-semester pairs
             all_rows = []
             courses_per_dept = {}  # Track courses found per department
@@ -637,26 +637,26 @@ class MixedSectionCurriculumView(APIView):
                     logger.warning(f'Failed to fetch curriculum for dept {dept_id}, sem {sem_num_val}: {e}')
                     courses_per_dept[f'dept_{dept_id}_sem_{sem_num_val}'] = f'ERROR: {str(e)}'
                     continue
-            
+
             logger.info(f'[MixedSection {mixed_section_id}] Total curriculum records fetched: {len(all_rows)}')
-            
+
             if not all_rows:
                 # No curriculum found - return empty with debug info if requested
                 msg = f'No curriculum found for mixed section {mixed_section_id} with dept-sem pairs: {dept_sem_pairs}'
                 logger.warning(msg)
                 if debug:
                     return Response({
-                        'results': [], 
+                        'results': [],
                         'debug': {
-                            'message': msg, 
-                            'dept_sem_pairs': list(dept_sem_pairs), 
+                            'message': msg,
+                            'dept_sem_pairs': list(dept_sem_pairs),
                             'dept_section_map': dept_section_map,
                             'section_details': section_details,
                             'courses_per_dept': courses_per_dept
                         }
                     })
                 return Response({'results': []})
-            
+
             # Deduplicate by course_code, preserving department info
             # Each course maps to all departments that have it
             seen = {}
@@ -664,10 +664,10 @@ class MixedSectionCurriculumView(APIView):
                 code = (c.course_code or '').strip()
                 if not code:
                     code = None
-                
+
                 # Use course code as key if available, otherwise use pk
                 key = code if code else f'pk:{c.pk}'
-                
+
                 if key not in seen:
                     seen[key] = {
                         'id': c.pk,
@@ -689,7 +689,7 @@ class MixedSectionCurriculumView(APIView):
                         'is_dept_core': getattr(c, 'is_dept_core', False),
                         'departments': []
                     }
-                
+
                 # Add department info if not already present
                 existing_depts = [d['id'] for d in seen[key].get('departments', [])]
                 if c.department_id not in existing_depts:
@@ -699,7 +699,7 @@ class MixedSectionCurriculumView(APIView):
                         'name': getattr(c.department, 'name', None),
                         'short_name': getattr(c.department, 'short_name', None),
                     })
-            
+
             results = list(seen.values())
             msg = f'Mixed section {mixed_section_id}: Deduplicated to {len(results)} courses from {len(dept_sem_pairs)} dept-sem pairs'
             logger.info(msg)
@@ -722,9 +722,9 @@ class MixedSectionCurriculumView(APIView):
             logger.exception(error_msg)
             if debug:
                 return Response({
-                    'results': [], 
+                    'results': [],
                     'debug': {
-                        'error': error_msg, 
+                        'error': error_msg,
                         'exception': str(e),
                         'dept_sem_pairs': sorted(list(dept_sem_pairs)) if dept_sem_pairs else [],
                         'section_details': section_details
@@ -750,7 +750,7 @@ class MixedSectionCurriculumView(APIView):
 
         try:
             from academics.models import Subject, TeachingAssignment
-            
+
             for row in rows:
                 if (row.get('course_code') or '').strip():
                     continue
@@ -959,11 +959,11 @@ class SectionTimetableView(APIView):
                         names.append(full_name)
                     usernames.append(u.username if u else '')
                     staff_ids.append(getattr(sp, 'staff_id', ''))
-                
+
                 combined_name = ", ".join(sorted(names))
                 combined_username = ", ".join(sorted(filter(None, usernames)))
                 combined_staff_id = ", ".join(sorted(filter(None, staff_ids)))
-                
+
                 staff_data = {
                     'id': None,
                     'staff_id': combined_staff_id,
@@ -1012,11 +1012,11 @@ class SectionTimetableView(APIView):
                             if exist_batch_id is not None and new_batch_id is None:
                                 replaced = True
                                 break
-                        
+
                         # If different batches or different curriculums, this is a separate assignment - don't replace
                         if exist_batch_id != new_batch_id or exist_curriculum_id != new_curriculum_id:
                             continue  # Skip to next existing entry, don't replace
-                        
+
                         # Same period, same batch, same curriculum - check if we should replace
                         # If existing has no subject_batch but new has one -> replace
                         if (exist.get('subject_batch') is None) and (new_entry.get('subject_batch') is not None):
@@ -1084,7 +1084,7 @@ class SectionTimetableView(APIView):
 
                 # Apply the same shared-section dept filtering for specials.
                 special_qs = _apply_shared_section_student_dept_filter(special_qs, sec, student_profile)
-            
+
             for e in special_qs:
                 try:
                     daynum = e.date.isoweekday()
@@ -1125,7 +1125,7 @@ class SectionTimetableView(APIView):
                                 curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None), 'mnemonic': getattr(e.curriculum_row, 'mnemonic', None)}
                         except Exception:
                             curr_obj = {'id': e.curriculum_row.id, 'course_code': getattr(e.curriculum_row, 'course_code', None), 'course_name': getattr(e.curriculum_row, 'course_name', None)}
-                    
+
                     # Use only the explicitly assigned subject_batch for special entries
                     sb = getattr(e, 'subject_batch', None)
 
@@ -1216,7 +1216,7 @@ class SectionTimetableView(APIView):
                 # Build a set of (period_id, batch_id) tuples for special entries
                 special_keys = {
                     (
-                        a.get('period_id'), 
+                        a.get('period_id'),
                         a.get('subject_batch', {}).get('id') if a.get('subject_batch') else None
                     )
                     for a in assignments if a.get('is_special')
@@ -1674,7 +1674,7 @@ class PeriodSwapView(APIView):
             to_period_id = int(to_period_id)
         except Exception:
             return Response({'error': 'period ids must be integers'}, status=400)
-        
+
         # Validate that neither period is a break or lunch
         from .models import TimetableSlot
         try:
@@ -1690,7 +1690,7 @@ class PeriodSwapView(APIView):
                 }, status=400)
         except TimetableSlot.DoesNotExist as e:
             return Response({'error': f'Period not found: {str(e)}'}, status=404)
-        
+
         try:
             from_date = datetime.date.fromisoformat(from_date_str)
             to_date = datetime.date.fromisoformat(to_date_str)
@@ -1769,29 +1769,29 @@ class PeriodSwapView(APIView):
         )
         if same_subject and same_staff:
             return Response({'error': 'Cannot swap a period with itself (same subject and same staff)'}, status=400)
-        
+
         # Validate that the requesting staff is teaching at least one of the periods being swapped
         staff_profile = getattr(request.user, 'staff_profile', None)
         if staff_profile:
             from_staff_id = from_a.staff_id if from_a.staff else None
             to_staff_id = to_a.staff_id if to_a.staff else None
             requesting_staff_id = staff_profile.id
-            
+
             if from_staff_id != requesting_staff_id and to_staff_id != requesting_staff_id:
                 return Response({'error': 'You can only swap periods where you are assigned as the teaching staff'}, status=403)
-        
+
         # Prevent swapping elective periods
         if from_cr and getattr(from_cr, 'is_elective', False):
             return Response({'error': 'Cannot swap elective periods'}, status=400)
         if to_cr and getattr(to_cr, 'is_elective', False):
             return Response({'error': 'Cannot swap elective periods'}, status=400)
-        
+
         # Prevent swapping custom subject periods (those with subject_text but no curriculum_row)
         if not from_cr and from_text:
             return Response({'error': 'Cannot swap custom subject periods'}, status=400)
         if not to_cr and to_text:
             return Response({'error': 'Cannot swap custom subject periods'}, status=400)
-        
+
         # Prevent swapping periods that already have non-swap special entries
         existing_from_special = SpecialTimetableEntry.objects.filter(
             timetable__section=sec,
@@ -1799,14 +1799,14 @@ class PeriodSwapView(APIView):
             period_id=from_period_id,
             is_active=True
         ).exclude(timetable__name__startswith='[SWAP]').exists()
-        
+
         existing_to_special = SpecialTimetableEntry.objects.filter(
             timetable__section=sec,
             date=to_date,
             period_id=to_period_id,
             is_active=True
         ).exclude(timetable__name__startswith='[SWAP]').exists()
-        
+
         if existing_from_special:
             return Response({'error': 'Cannot swap a period that has a special timetable entry'}, status=400)
         if existing_to_special:
@@ -1832,7 +1832,7 @@ class PeriodSwapView(APIView):
         # Get or create swap SpecialTimetables for each date (may be same or different)
         swap_name_from = f'[SWAP] {from_date_str}'
         swap_name_to = f'[SWAP] {to_date_str}'
-        
+
         st_from, _ = SpecialTimetable.objects.get_or_create(
             section=sec,
             name=swap_name_from,
@@ -1841,7 +1841,7 @@ class PeriodSwapView(APIView):
         if not st_from.is_active:
             st_from.is_active = True
             st_from.save(update_fields=['is_active'])
-        
+
         # Only create second timetable if dates differ
         if from_date == to_date:
             st_to = st_from
@@ -1869,19 +1869,19 @@ class PeriodSwapView(APIView):
         ).exclude(
             entries__date__gte=_today,
         ).update(is_active=False)
-        
+
         # Delete any existing conflicting entries
         SpecialTimetableEntry.objects.filter(timetable=st_from, date=from_date, period_id=from_period_id).delete()
         SpecialTimetableEntry.objects.filter(timetable=st_to, date=to_date, period_id=to_period_id).delete()
-        
+
         # subject_text stores the ORIGINAL (displaced) subject code so the UI can show "new ⇄ orig"
         from_orig_text = getattr(from_a.curriculum_row, 'course_code', None) or getattr(from_a.curriculum_row, 'course_name', None) or (from_a.subject_text or '') if from_a.curriculum_row else (from_a.subject_text or '')
         to_orig_text = getattr(to_a.curriculum_row, 'course_code', None) or getattr(to_a.curriculum_row, 'course_name', None) or (to_a.subject_text or '') if to_a.curriculum_row else (to_a.subject_text or '')
-        
+
         logger.info(f"Creating cross-day swap for section {sec.name}:")
         logger.info(f"  {from_date_str} Period {from_period_id}: {from_orig_text} (staff={from_a.staff_id if from_a.staff else None}) → {to_orig_text} (staff={to_a.staff_id if to_a.staff else None})")
         logger.info(f"  {to_date_str} Period {to_period_id}: {to_orig_text} (staff={to_a.staff_id if to_a.staff else None}) → {from_orig_text} (staff={from_a.staff_id if from_a.staff else None})")
-        
+
         # Entry A: from_period on from_date now carries to_a's subject/staff
         SpecialTimetableEntry.objects.create(
             timetable=st_from, date=from_date, period_id=from_period_id,
@@ -2043,7 +2043,7 @@ class TimetableTemplateViewSet(viewsets.ModelViewSet):
         semester_type = data.get('semesterType', 'odd').upper()
         columns = data.get('columns', [])
         rows = data.get('rows', [])
-        
+
         # We will store the exact JSON config in the description field so the frontend can reconstruct it.
         import json
         description = json.dumps({
@@ -2093,7 +2093,7 @@ class TimetableTemplateViewSet(viewsets.ModelViewSet):
         from .models import TimetableConfigColumn, TimetableConfigRow
         import datetime
         import re
-        
+
         def parse_time(t_str):
             if not t_str: return None
             try:
@@ -2119,11 +2119,11 @@ class TimetableTemplateViewSet(viewsets.ModelViewSet):
                 if len(parts) == 2:
                     start_time = parse_time(parts[0])
                     end_time = parse_time(parts[1])
-            
+
             period_name = col.get('period', '')
             is_break = period_name.lower() == 'break'
             is_lunch = period_name.lower() == 'lunch'
-            
+
             TimetableSlot.objects.create(
                 template=template,
                 index=idx + 1,
@@ -2133,7 +2133,7 @@ class TimetableTemplateViewSet(viewsets.ModelViewSet):
                 start_time=start_time,
                 end_time=end_time
             )
-            
+
             TimetableConfigColumn.objects.create(
                 template=template,
                 frontend_id=col.get('id', f'col-{idx+1}'),
@@ -2141,7 +2141,7 @@ class TimetableTemplateViewSet(viewsets.ModelViewSet):
                 period=period_name,
                 timing=col.get('timing', '')
             )
-            
+
         for idx, row in enumerate(rows):
             TimetableConfigRow.objects.create(
                 template=template,
@@ -2719,7 +2719,7 @@ class StaffTimetableView(APIView):
             # 3. subject_batch.staff=staff_profile (batch-assigned to this staff)
             # 4. subject_batch.created_by=staff_profile (batch created by this staff)
             qs = qs.annotate(has_ta=Exists(ta_qs)).filter(
-                Q(staff=staff_profile) | 
+                Q(staff=staff_profile) |
                 Q(staff__isnull=True, has_ta=True) |
                 Q(subject_batch__staff=staff_profile) |
                 Q(subject_batch__created_by=staff_profile)
@@ -2728,7 +2728,7 @@ class StaffTimetableView(APIView):
         except Exception:
             # fallback: only show direct assignments and batch assignments
             qs = TimetableAssignment.objects.select_related('period', 'staff', 'curriculum_row', 'section', 'section__batch', 'subject_batch', 'subject_batch__staff').filter(
-                Q(staff=staff_profile) | 
+                Q(staff=staff_profile) |
                 Q(subject_batch__staff=staff_profile) |
                 Q(subject_batch__created_by=staff_profile)
             )
@@ -2737,7 +2737,7 @@ class StaffTimetableView(APIView):
         for a in qs:
             day = a.day
             lst = out.setdefault(day, [])
-            # determine staff to present: 
+            # determine staff to present:
             # Priority: batch staff > explicit staff > requesting staff (if resolved via TA)
             if a.subject_batch and a.subject_batch.staff:
                 staff_obj = a.subject_batch.staff
@@ -2805,11 +2805,11 @@ class StaffTimetableView(APIView):
             else:
                 curriculum_obj = {'id': a.curriculum_row.pk, 'course_code': a.curriculum_row.course_code, 'course_name': a.curriculum_row.course_name, 'mnemonic': getattr(a.curriculum_row, 'mnemonic', None)} if a.curriculum_row else None
 
-            # Enhanced section info with batch details  
+            # Enhanced section info with batch details
             section_info = None
             if getattr(a, 'section', None):
                 section_info = {
-                    'id': getattr(a.section, 'pk', None), 
+                    'id': getattr(a.section, 'pk', None),
                     'name': getattr(a.section, 'name', None),
                     'batch': {
                         'id': getattr(a.section.batch, 'pk', None),
@@ -2831,8 +2831,8 @@ class StaffTimetableView(APIView):
                 'elective_subject_id': elective_id,
                 'subject_batch': {'id': a.subject_batch.pk, 'name': getattr(a.subject_batch, 'name', None)} if getattr(a, 'subject_batch', None) else None,
                 'staff': {
-                    'id': staff_obj.pk, 
-                    'staff_id': getattr(staff_obj, 'staff_id', None), 
+                    'id': staff_obj.pk,
+                    'staff_id': getattr(staff_obj, 'staff_id', None),
                     'username': getattr(getattr(staff_obj, 'user', None), 'username', None),
                     'first_name': getattr(getattr(staff_obj, 'user', None), 'first_name', ''),
                     'last_name': getattr(getattr(staff_obj, 'user', None), 'last_name', '')
@@ -2877,7 +2877,7 @@ class StaffTimetableView(APIView):
                     explicit_staff = getattr(e, 'staff', None)
                     batch_staff = getattr(getattr(e, 'subject_batch', None), 'staff', None) if e.subject_batch else None
                     batch_creator = getattr(getattr(e, 'subject_batch', None), 'created_by', None) if e.subject_batch else None
-                    
+
                     # Check batch assignment first
                     if batch_staff and getattr(batch_staff, 'id', None) == getattr(staff_profile, 'id', None):
                         include_special = True
@@ -2899,7 +2899,7 @@ class StaffTimetableView(APIView):
                                     include_special = True
                         except Exception:
                             pass
-                    
+
                     if not include_special:
                         continue
                     daynum = e.date.isoweekday()
@@ -2949,7 +2949,7 @@ class StaffTimetableView(APIView):
                     section_info = None
                     if getattr(e.timetable, 'section', None):
                         section_info = {
-                            'id': getattr(e.timetable.section, 'pk', None), 
+                            'id': getattr(e.timetable.section, 'pk', None),
                             'name': getattr(e.timetable.section, 'name', None),
                             'batch': {
                                 'id': getattr(e.timetable.section.batch, 'pk', None),
@@ -2971,7 +2971,7 @@ class StaffTimetableView(APIView):
                         'elective_subject_id': elective_id,
                         'subject_batch': {'id': getattr(e.subject_batch, 'pk', None), 'name': getattr(e.subject_batch, 'name', None)} if getattr(e, 'subject_batch', None) else None,
                         'staff': {
-                            'id': getattr(batch_staff if batch_staff else e.staff, 'pk', None), 
+                            'id': getattr(batch_staff if batch_staff else e.staff, 'pk', None),
                             'staff_id': getattr(batch_staff if batch_staff else e.staff, 'staff_id', None),
                             'username': getattr(getattr(batch_staff if batch_staff else e.staff, 'user', None), 'username', None),
                             'first_name': getattr(getattr(batch_staff if batch_staff else e.staff, 'user', None), 'first_name', ''),
@@ -3077,17 +3077,17 @@ class SpecialTimetableEntryViewSet(viewsets.ModelViewSet):
         if staff_profile:
             try:
                 from academics.models import TeachingAssignment
-                
+
                 # entries explicitly assigned to this staff
                 staff_q = qs.filter(staff=staff_profile)
-                
+
                 # entries where a TeachingAssignment maps this staff to the curriculum_row for the same section
                 ta_q = TeachingAssignment.objects.filter(staff=staff_profile, is_active=True)
                 mapped_q = qs.filter(
-                    curriculum_row__in=ta_q.values_list('curriculum_row', flat=True), 
+                    curriculum_row__in=ta_q.values_list('curriculum_row', flat=True),
                     timetable__section__in=ta_q.values_list('section', flat=True)
                 )
-                
+
                 return (staff_q | mapped_q).distinct()
             except Exception:
                 return qs.filter(staff=staff_profile)
@@ -3102,10 +3102,10 @@ class SpecialTimetableEntryViewSet(viewsets.ModelViewSet):
                 sec = getattr(student_profile, 'section', None)
                 if not sec:
                     return SpecialTimetableEntry.objects.none()
-                
+
                 # entries for the section
                 sec_q = qs.filter(timetable__section=sec)
-                
+
                 sec_q = sec_q.filter(
                     Q(subject_batch__isnull=True) |
                     Q(subject_batch__students=student_profile)
@@ -3157,11 +3157,11 @@ class SpecialTimetableEntryViewSet(viewsets.ModelViewSet):
         curriculum_row = serializer.validated_data.get('curriculum_row')
         timetable_obj = serializer.validated_data.get('timetable')
         staff_provided = serializer.validated_data.get('staff')
-        
+
         # Key Logic: If this is a CONFIGURED SUBJECT (has curriculum_row), ALWAYS assign to subject's teaching staff
         # NOT to the advisor who is creating it
         resolved_staff = None
-        
+
         if staff_provided:
             # Staff explicitly provided - use it
             resolved_staff = staff_provided
@@ -3169,19 +3169,19 @@ class SpecialTimetableEntryViewSet(viewsets.ModelViewSet):
         elif curriculum_row and timetable_obj:
             # CONFIGURED SUBJECT - Must assign to the subject's teaching staff, NOT the advisor
             logger.info(f'🔍 Looking up teaching staff for curriculum_row={curriculum_row.id} in section={timetable_obj.section.id}')
-            
+
             try:
                 from academics.models import TeachingAssignment
-                
+
                 # Query 1: Section-specific teaching assignment
                 ta = TeachingAssignment.objects.filter(
                     section=timetable_obj.section,
                     curriculum_row=curriculum_row,
                     is_active=True
                 ).select_related('staff').first()
-                
+
                 logger.info(f'  Section-specific query result: {ta}')
-                
+
                 # Query 2: Fallback - any active teaching assignment for this curriculum
                 if not ta:
                     ta = TeachingAssignment.objects.filter(
@@ -3189,14 +3189,14 @@ class SpecialTimetableEntryViewSet(viewsets.ModelViewSet):
                         is_active=True
                     ).select_related('staff').first()
                     logger.info(f'  General curriculum query result: {ta}')
-                
+
                 # Use the found teaching staff
                 if ta and ta.staff:
                     resolved_staff = ta.staff
                     logger.info(f'✅ SUCCESS: Resolved to teaching staff {resolved_staff.id} ({resolved_staff.staff_id})')
                 else:
                     logger.warning(f'❌ PROBLEM: No teaching assignment found for curriculum_row={curriculum_row.id}')
-                    
+
             except Exception as e:
                 logger.error(f'❌ ERROR resolving teaching staff: {e}', exc_info=True)
         else:
@@ -3205,7 +3205,7 @@ class SpecialTimetableEntryViewSet(viewsets.ModelViewSet):
             if staff_profile:
                 resolved_staff = staff_profile
                 logger.info(f'📝 Custom subject - using advisor as staff: {staff_profile.id}')
-        
+
         # Save the entry with the resolved staff
         if resolved_staff:
             logger.info(f'💾 SAVING special entry with staff_id={resolved_staff.id}')
@@ -3238,7 +3238,7 @@ class SpecialTimetableEntryViewSet(viewsets.ModelViewSet):
 
 class BulkSpecialTimetableEntryCreateView(APIView):
     """Create multiple special timetable entries at once for multiple periods and dates.
-    
+
     POST /api/timetable/special-entries-bulk/
     Body: {
         timetable_id: <int>,
@@ -3257,10 +3257,10 @@ class BulkSpecialTimetableEntryCreateView(APIView):
     def post(self, request):
         from datetime import datetime, timedelta
         from academics.models import TeachingAssignment, PeriodAttendanceSession
-        
+
         user = request.user
         perms = get_user_permissions(user)
-        
+
         # Check permissions
         role_names = {r.name.upper() for r in user.roles.all()}
         allowed = False
@@ -3306,11 +3306,11 @@ class BulkSpecialTimetableEntryCreateView(APIView):
         try:
             # Get timetable
             timetable = SpecialTimetable.objects.select_related('section').get(pk=int(timetable_id))
-            
+
             # Parse dates
             date_start = datetime.strptime(date_start_str, '%Y-%m-%d').date()
             date_end = datetime.strptime(date_end_str, '%Y-%m-%d').date()
-            
+
             if date_start > date_end:
                 return Response({'detail': 'date_start cannot be after date_end'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -3319,12 +3319,12 @@ class BulkSpecialTimetableEntryCreateView(APIView):
             if staff_id and staff_profile.id != int(staff_id) and not user.is_staff:
                 # Non-staff cannot assign to other staff
                 return Response({'detail': 'You cannot assign entries to other staff'}, status=status.HTTP_403_FORBIDDEN)
-            
+
             # Resolve staff for the entries
             # Key Logic: If curriculum_row is provided, ALWAYS resolve to subject's teaching staff
             # NOT to the advisor who is creating it
             resolved_staff = None
-            
+
             if staff_id:
                 # Explicit staff provided
                 from academics.models import StaffProfile
@@ -3333,19 +3333,19 @@ class BulkSpecialTimetableEntryCreateView(APIView):
             elif curriculum_row_id:
                 # CONFIGURED SUBJECT - look up teaching staff for this subject
                 logger.info(f'🔍 Resolving teaching staff for curriculum_row={curriculum_row_id}')
-                
+
                 try:
                     from academics.models import TeachingAssignment
-                    
+
                     # Query 1: Section-specific teaching assignment (most likely)
                     ta = TeachingAssignment.objects.filter(
                         section=timetable.section,
                         curriculum_row_id=int(curriculum_row_id),
                         is_active=True
                     ).select_related('staff').first()
-                    
+
                     logger.info(f'  Section-specific query: {ta}')
-                    
+
                     # Query 2: Fallback - any active teaching assignment for this curriculum
                     if not ta:
                         ta = TeachingAssignment.objects.filter(
@@ -3353,7 +3353,7 @@ class BulkSpecialTimetableEntryCreateView(APIView):
                             is_active=True
                         ).select_related('staff').first()
                         logger.info(f'  General curriculum query: {ta}')
-                    
+
                     # Assign to the found teaching staff
                     if ta and ta.staff:
                         resolved_staff = ta.staff
@@ -3362,7 +3362,7 @@ class BulkSpecialTimetableEntryCreateView(APIView):
                         logger.warning(f'❌ PROBLEM: No teaching assignment found for curriculum_row={curriculum_row_id}')
                         # For configured subjects with no teaching staff assigned, don't default to advisor
                         # Let it be None so it creates without a staff assignment
-                        
+
                 except Exception as e:
                     logger.error(f'❌ ERROR resolving teaching staff: {e}', exc_info=True)
             else:
@@ -3386,7 +3386,7 @@ class BulkSpecialTimetableEntryCreateView(APIView):
             current_date = date_start
             iterate_count = 0
             match_count = 0
-            
+
             # Iterate through date range
             while current_date <= date_end:
                 iterate_count += 1
@@ -3395,9 +3395,9 @@ class BulkSpecialTimetableEntryCreateView(APIView):
                 # Convert to 1-7 format (1=Mon, ..., 7=Sun)
                 current_dow_1_7 = current_dow + 1
                 is_match = current_dow_1_7 in day_numbers
-                
+
                 logger.info(f'  [{iterate_count}] {current_date}: weekday()={current_dow}, 1-7={current_dow_1_7}, match={is_match}')
-                
+
                 # Only create entries for matching days of week
                 if is_match:
                     match_count += 1
@@ -3421,7 +3421,7 @@ class BulkSpecialTimetableEntryCreateView(APIView):
                                 logger.info(f'    ✅ Created entry {entry.id} for period {period_id}')
                             else:
                                 logger.info(f'    ⚠️ Entry already exists for period {period_id}')
-                                
+
                                 # Create PeriodAttendanceSession for this entry
                             try:
                                 PeriodAttendanceSession.objects.get_or_create(
@@ -3457,37 +3457,37 @@ class BulkSpecialTimetableEntryCreateView(APIView):
 
 class PeriodSwapRequestView(APIView):
     """Handle period swap requests that require approval.
-    
+
     POST /api/timetable/swap-requests/
         Create a new swap request between any two periods
         Body: { section_id, from_date, from_period_id, to_date, to_period_id, reason }
-        
+
         Staff can request swaps for:
         - Their own period with another staff's period
         - Any two periods in a section (allows coordinators/HODs to initiate swaps)
-        
+
         Validations:
         - Both periods must have different assigned staff
         - Cannot swap elective periods
         - Cannot swap custom subject periods
         - Cannot swap same subject with same staff
-    
+
     GET /api/timetable/swap-requests/
         List swap requests (pending, received, or sent by the user)
         Query params: status (PENDING, APPROVED, REJECTED, CANCELLED)
     """
     permission_classes = (IsAuthenticated,)
-    
+
     def post(self, request):
         """Create a new period swap request."""
         from academics.models import Section, StaffProfile
         import datetime
-        
+
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             raise PermissionDenied('Staff profile required')
-        
+
         data = request.data
         section_id = data.get('section_id')
         from_date_str = data.get('from_date')
@@ -3495,12 +3495,12 @@ class PeriodSwapRequestView(APIView):
         from_period_id = data.get('from_period_id')
         to_period_id = data.get('to_period_id')
         reason = data.get('reason', '')
-        
+
         if not all([section_id, from_date_str, to_date_str, from_period_id, to_period_id]):
             return Response({
                 'error': 'section_id, from_date, to_date, from_period_id, and to_period_id are required'
             }, status=400)
-        
+
         try:
             section = Section.objects.get(pk=int(section_id))
             from_date = datetime.date.fromisoformat(from_date_str)
@@ -3509,20 +3509,20 @@ class PeriodSwapRequestView(APIView):
             to_period = TimetableSlot.objects.get(pk=int(to_period_id))
         except Exception as e:
             return Response({'error': f'Invalid data: {str(e)}'}, status=400)
-        
+
         # Get assignments to determine the other staff
         from_day_of_week = from_date.isoweekday()
         to_day_of_week = to_date.isoweekday()
-        
+
         # Try multiple query approaches to find assignments
         from_assigns = TimetableAssignment.objects.filter(
             section=section, period=from_period, day=from_day_of_week
         ).select_related('staff', 'staff__user', 'curriculum_row', 'subject_batch', 'subject_batch__staff', 'subject_batch__staff__user').first()
-        
+
         to_assigns = TimetableAssignment.objects.filter(
             section=section, period=to_period, day=to_day_of_week
         ).select_related('staff', 'staff__user', 'curriculum_row', 'subject_batch', 'subject_batch__staff', 'subject_batch__staff__user').first()
-        
+
         # If exact period lookup fails, fall back to matching by period index
         if not from_assigns:
             try:
@@ -3533,7 +3533,7 @@ class PeriodSwapRequestView(APIView):
                     ).select_related('staff', 'staff__user', 'curriculum_row', 'subject_batch', 'subject_batch__staff', 'subject_batch__staff__user').first()
             except Exception:
                 pass
-        
+
         if not to_assigns:
             try:
                 to_slot_index = to_period.index
@@ -3543,27 +3543,27 @@ class PeriodSwapRequestView(APIView):
                     ).select_related('staff', 'staff__user', 'curriculum_row', 'subject_batch', 'subject_batch__staff', 'subject_batch__staff__user').first()
             except Exception:
                 pass
-        
+
         if not from_assigns or not to_assigns:
             return Response({'error': 'No assignments found for the selected periods'}, status=400)
-        
+
         # Check for electives and custom subjects
         from_cr = from_assigns.curriculum_row
         to_cr = to_assigns.curriculum_row
-        
+
         if from_cr and getattr(from_cr, 'is_elective', False):
             return Response({'error': 'Cannot swap elective periods'}, status=400)
         if to_cr and getattr(to_cr, 'is_elective', False):
             return Response({'error': 'Cannot swap elective periods'}, status=400)
-        
+
         from_text = (from_assigns.subject_text or '').strip()
         to_text = (to_assigns.subject_text or '').strip()
-        
+
         if not from_cr and from_text:
             return Response({'error': 'Cannot swap custom subject periods'}, status=400)
         if not to_cr and to_text:
             return Response({'error': 'Cannot swap custom subject periods'}, status=400)
-        
+
         # RULE 1: Block swaps if subject has batches
         if from_assigns.subject_batch_id:
             from_subject_code = getattr(from_cr, 'course_code', None) or from_text or ''
@@ -3571,7 +3571,7 @@ class PeriodSwapRequestView(APIView):
         if to_assigns.subject_batch_id:
             to_subject_code = getattr(to_cr, 'course_code', None) or to_text or ''
             return Response({'error': f'Cannot swap batched subject ({to_subject_code}). Only common subjects can be swapped.'}, status=400)
-        
+
         # RULE 2: Block advisor subjects (check if this is an advisor-specific assignment)
         # Advisor subjects are typically identified by the section's advisor teaching it
         try:
@@ -3579,7 +3579,7 @@ class PeriodSwapRequestView(APIView):
             section_advisor = SectionAdvisor.objects.filter(
                 section=section, is_active=True, academic_year__is_active=True
             ).first()
-            
+
             if section_advisor:
                 advisor_staff = section_advisor.advisor
                 # If assignment has direct staff and it's the advisor, block it
@@ -3591,17 +3591,17 @@ class PeriodSwapRequestView(APIView):
                     return Response({'error': f'Cannot swap advisor subject ({to_subject_code})'}, status=400)
         except Exception:
             pass
-        
+
         # Get staff from TeachingAssignment mapping for common subjects
         from_staff = None
         to_staff = None
-        
+
         def get_staff_for_assignment(assigns, curriculum_row):
             """Get staff from assignment, or lookup via TeachingAssignment"""
             # First check direct assignment
             if assigns.staff:
                 return assigns.staff
-            
+
             # If no direct staff, lookup via TeachingAssignment
             if curriculum_row:
                 try:
@@ -3611,20 +3611,20 @@ class PeriodSwapRequestView(APIView):
                         curriculum_row=curriculum_row,
                         is_active=True
                     ).select_related('staff').first()
-                    
+
                     if ta and ta.staff:
                         return ta.staff
                 except Exception:
                     pass
-            
+
             return None
-        
+
         from_staff = get_staff_for_assignment(from_assigns, from_cr)
         to_staff = get_staff_for_assignment(to_assigns, to_cr)
-        
+
         from_subject = getattr(from_cr, 'course_code', None) or from_text or ''
         to_subject = getattr(to_cr, 'course_code', None) or to_text or ''
-        
+
         if not from_staff or not to_staff:
             error_detail = []
             if not from_staff:
@@ -3632,10 +3632,10 @@ class PeriodSwapRequestView(APIView):
             if not to_staff:
                 error_detail.append(f'To period ({to_subject}) has no staff assigned')
             return Response({'error': '; '.join(error_detail)}, status=400)
-        
+
         if from_staff.id == to_staff.id:
             return Response({'error': 'Cannot swap periods that are taught by the same staff member'}, status=400)
-        
+
         # Determine who to notify based on who the requester is
         # If requester is teaching one of the periods, notify the other staff
         # If requester is not teaching either period, notify the to_period staff by default
@@ -3649,7 +3649,7 @@ class PeriodSwapRequestView(APIView):
             # Requester is not teaching either period (coordinator/HOD initiating swap)
             # Notify the to_period staff by default
             requested_to = to_staff
-        
+
         # Check for existing pending request for the same swap
         existing = PeriodSwapRequest.objects.filter(
             section=section,
@@ -3659,10 +3659,10 @@ class PeriodSwapRequestView(APIView):
             to_period=to_period,
             status='PENDING'
         ).exists()
-        
+
         if existing:
             return Response({'error': 'A pending swap request already exists for these periods'}, status=400)
-        
+
         # Create the swap request
         swap_request = PeriodSwapRequest.objects.create(
             section=section,
@@ -3677,36 +3677,36 @@ class PeriodSwapRequestView(APIView):
             reason=reason,
             status='PENDING'
         )
-        
+
         serializer = PeriodSwapRequestSerializer(swap_request)
         return Response({
             'success': True,
             'message': f'Swap request sent to {requested_to.user.get_full_name() if requested_to.user else requested_to.staff_id}',
             'request': serializer.data
         }, status=201)
-    
+
     def get(self, request):
         """List swap requests for the current staff."""
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             raise PermissionDenied('Staff profile required')
-        
+
         status_filter = request.query_params.get('status', '')
-        
+
         base_qs = PeriodSwapRequest.objects.select_related(
             'section', 'requested_by', 'requested_to',
             'requested_by__user', 'requested_to__user',
             'from_period', 'to_period'
         ).order_by('-created_at')
-        
+
         received_qs = base_qs.filter(requested_to=staff_profile)
         sent_qs = base_qs.filter(requested_by=staff_profile)
-        
+
         if status_filter:
             received_qs = received_qs.filter(status=status_filter)
             sent_qs = sent_qs.filter(status=status_filter)
-        
+
         return Response({
             'success': True,
             'received': PeriodSwapRequestSerializer(received_qs, many=True).data,
@@ -3716,46 +3716,46 @@ class PeriodSwapRequestView(APIView):
 
 class PeriodSwapRequestActionView(APIView):
     """Handle approval/rejection of period swap requests.
-    
+
     POST /api/timetable/swap-requests/<id>/approve/
         Approve a swap request and execute the swap
-    
+
     POST /api/timetable/swap-requests/<id>/reject/
         Reject a swap request
-        
+
     POST /api/timetable/swap-requests/<id>/cancel/
         Cancel a swap request (only by requester)
     """
     permission_classes = (IsAuthenticated,)
-    
+
     def post(self, request, request_id, action):
         """Approve, reject, or cancel a swap request."""
         from django.utils import timezone
-        
+
         user = request.user
         staff_profile = getattr(user, 'staff_profile', None)
         if not staff_profile:
             raise PermissionDenied('Staff profile required')
-        
+
         try:
             swap_request = PeriodSwapRequest.objects.select_related(
                 'section', 'requested_by', 'requested_to', 'from_period', 'to_period'
             ).get(pk=request_id)
         except PeriodSwapRequest.DoesNotExist:
             return Response({'error': 'Swap request not found'}, status=404)
-        
+
         if swap_request.status != 'PENDING':
             return Response({
                 'error': f'This request has already been {swap_request.status.lower()}'
             }, status=400)
-        
+
         response_message = request.data.get('message', '')
-        
+
         if action == 'approve':
             # Only the requested_to staff can approve
             if swap_request.requested_to.id != staff_profile.id:
                 raise PermissionDenied('Only the requested staff can approve this swap')
-            
+
             # Execute the swap by creating SpecialTimetableEntry records
             try:
                 from_assigns = TimetableAssignment.objects.filter(
@@ -3763,26 +3763,26 @@ class PeriodSwapRequestActionView(APIView):
                     period=swap_request.from_period,
                     day=swap_request.from_date.isoweekday()
                 ).select_related('staff', 'curriculum_row', 'subject_batch').first()
-                
+
                 to_assigns = TimetableAssignment.objects.filter(
                     section=swap_request.section,
                     period=swap_request.to_period,
                     day=swap_request.to_date.isoweekday()
                 ).select_related('staff', 'curriculum_row', 'subject_batch').first()
-                
+
                 if not from_assigns or not to_assigns:
                     return Response({'error': 'Assignments not found for swap'}, status=400)
-                
+
                 # Create special timetable entries for the swap
                 swap_name_from = f'[SWAP] {swap_request.from_date.isoformat()}'
                 swap_name_to = f'[SWAP] {swap_request.to_date.isoformat()}'
-                
+
                 st_from, _ = SpecialTimetable.objects.get_or_create(
                     section=swap_request.section,
                     name=swap_name_from,
                     defaults={'created_by': staff_profile, 'is_active': True}
                 )
-                
+
                 if swap_request.from_date == swap_request.to_date:
                     st_to = st_from
                 else:
@@ -3791,20 +3791,20 @@ class PeriodSwapRequestActionView(APIView):
                         name=swap_name_to,
                         defaults={'created_by': staff_profile, 'is_active': True}
                     )
-                
+
                 # Delete existing entries if any
                 SpecialTimetableEntry.objects.filter(
                     timetable=st_from,
                     date=swap_request.from_date,
                     period=swap_request.from_period
                 ).delete()
-                
+
                 SpecialTimetableEntry.objects.filter(
                     timetable=st_to,
                     date=swap_request.to_date,
                     period=swap_request.to_period
                 ).delete()
-                
+
                 # Create the swap entries
                 SpecialTimetableEntry.objects.create(
                     timetable=st_from,
@@ -3816,7 +3816,7 @@ class PeriodSwapRequestActionView(APIView):
                     subject_text=swap_request.from_subject_text,
                     is_active=True
                 )
-                
+
                 SpecialTimetableEntry.objects.create(
                     timetable=st_to,
                     date=swap_request.to_date,
@@ -3827,50 +3827,50 @@ class PeriodSwapRequestActionView(APIView):
                     subject_text=swap_request.to_subject_text,
                     is_active=True
                 )
-                
+
                 swap_request.status = 'APPROVED'
                 swap_request.response_message = response_message
                 swap_request.responded_at = timezone.now()
                 swap_request.save()
-                
+
                 return Response({
                     'success': True,
                     'message': 'Swap request approved and periods swapped successfully'
                 })
-                
+
             except Exception as e:
                 return Response({'error': f'Failed to execute swap: {str(e)}'}, status=500)
-        
+
         elif action == 'reject':
             # Only the requested_to staff can reject
             if swap_request.requested_to.id != staff_profile.id:
                 raise PermissionDenied('Only the requested staff can reject this swap')
-            
+
             swap_request.status = 'REJECTED'
             swap_request.response_message = response_message
             swap_request.responded_at = timezone.now()
             swap_request.save()
-            
+
             return Response({
                 'success': True,
                 'message': 'Swap request rejected'
             })
-        
+
         elif action == 'cancel':
             # Only the requester can cancel
             if swap_request.requested_by.id != staff_profile.id:
                 raise PermissionDenied('Only the requester can cancel this swap')
-            
+
             swap_request.status = 'CANCELLED'
             swap_request.response_message = response_message
             swap_request.responded_at = timezone.now()
             swap_request.save()
-            
+
             return Response({
                 'success': True,
                 'message': 'Swap request cancelled'
             })
-        
+
         else:
             return Response({'error': 'Invalid action'}, status=400)
 

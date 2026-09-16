@@ -115,7 +115,7 @@ export const academicV2Routes: RouteObject[] = [
     path: 'academic-v2/admin/bypass/logs',
     element: <BypassLogsPage />,
   },
-  
+
   // Faculty Routes
   {
     path: 'academic-v2/courses',

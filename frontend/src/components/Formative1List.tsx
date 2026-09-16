@@ -1010,7 +1010,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
       try {
         let roster: Student[] = [];
-        
+
         // ALWAYS check user's TAs first (matching CIA logic) - this handles electives correctly
         let matchedTa: any = null;
         try {
@@ -1021,7 +1021,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
             const idMatch = teachingAssignmentId ? t.id === teachingAssignmentId : false;
             return idMatch || codeMatch;
           });
-          
+
           // matchedTa determined
         } catch (err) {
           console.warn('[Formative] My TAs fetch failed:', err);
@@ -1034,11 +1034,11 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           // fetching regular TA roster
           try {
             const taResp = await fetchTeachingAssignmentRoster(rosterTaId);
-            roster = (taResp.students || []).map((s: TeachingAssignmentRosterStudent) => ({ 
-              id: Number(s.id), 
-              reg_no: String(s.reg_no ?? ''), 
-              name: String(s.name ?? ''), 
-              section: s.section ?? null 
+            roster = (taResp.students || []).map((s: TeachingAssignmentRosterStudent) => ({
+              id: Number(s.id),
+              reg_no: String(s.reg_no ?? ''),
+              name: String(s.name ?? ''),
+              section: s.section ?? null
             })).filter((s) => Number.isFinite(s.id));
             // regular roster returned
             if (matchedTa && mounted) setSubjectData({ subject_name: matchedTa.subject_name, section: matchedTa.section_name });
@@ -2003,7 +2003,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                   </button>
                 </div>
               </div>
-            ) : 
+            ) :
               <div className="obe-table-wrapper" style={{ position: 'relative' }}>
               <table className="obe-table" style={{ minWidth: 1200, pointerEvents: showPublishedLockPanel ? 'none' : 'auto' }}>
                 <thead>

@@ -12,14 +12,14 @@ function shortLabel(item:any){
     const firstWord = s.split(/[\s\-\_]+/)[0]
     return firstWord || s.slice(0, 15) + (s.length > 15 ? '…' : '')
   }
-  
+
   // Priority: mnemonic > course_name > course_code
   if(item.mnemonic) return item.mnemonic
   if(item.course_name) return item.course_name
   if(item.course_code) return item.course_code
   if(item.subject_text) return item.subject_text
   if(item.course) return item.course
-  
+
   return ''
 }
 
@@ -29,28 +29,28 @@ export default function StudentTimetable(){
   const [periods, setPeriods] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [studentId, setStudentId] = useState<number | null>(null)
-  
+
   // Date selector state
   const [selectedDate, setSelectedDate] = useState<Date>(new Date())
-  
+
   // Calculate day of week from selected date: 0=Mon, 1=Tue, ..., 6=Sun
   const getDayFromDate = (date: Date) => {
     const dow = date.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
     return dow === 0 ? 6 : dow - 1 // Convert to Mon=0, ..., Sun=6
   }
-  
+
   const [selectedDay, setSelectedDay] = useState(getDayFromDate(new Date()))
-  
+
   // Update selected day when date changes
   useEffect(() => {
     setSelectedDay(getDayFromDate(selectedDate))
   }, [selectedDate])
-  
+
   // Format date for display
   const formatDate = (date: Date) => {
     return date.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
   }
-  
+
   // Convert Date to YYYY-MM-DD string in LOCAL timezone (not UTC)
   const dateToInputValue = (date: Date): string => {
     const year = date.getFullYear()
@@ -58,7 +58,7 @@ export default function StudentTimetable(){
     const day = String(date.getDate()).padStart(2, '0')
     return `${year}-${month}-${day}`
   }
-  
+
   // Parse YYYY-MM-DD string to Date in LOCAL timezone
   const inputValueToDate = (value: string): Date => {
     const [year, month, day] = value.split('-').map(Number)
@@ -141,7 +141,7 @@ export default function StudentTimetable(){
                 <p className="text-gray-600">View your class schedule for {formatDate(selectedDate)}</p>
               </div>
             </div>
-            
+
             {/* Date Selector */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
               <label className="text-sm font-medium text-gray-700 whitespace-nowrap">Select Date:</label>
@@ -220,10 +220,10 @@ export default function StudentTimetable(){
                         const dayObj = timetable.find(x=> x.day === di+1) || { assignments: [] }
                         const assignments = (dayObj.assignments||[]).filter((x:any)=> x.period_id === p.id)
                         const hasSpecial = assignments.some((x:any)=> x.is_special)
-                        
+
                         return (
-                          <td 
-                            key={`cell-${di}-${p.id}`} 
+                          <td
+                            key={`cell-${di}-${p.id}`}
                             className={`px-4 py-3 align-top ${hasSpecial && assignments.some(x=> !x.is_special) ? 'bg-red-50' : ''}`}
                           >
                             {p.is_break ? (
@@ -236,19 +236,19 @@ export default function StudentTimetable(){
                                   {assignments.map((a:any, i:number)=> {
                                     const overridden = hasSpecial && !a.is_special
                                     return (
-                                      <div 
-                                        key={`${a.id || a.curriculum_row?.id || i}`} 
+                                      <div
+                                        key={`${a.id || a.curriculum_row?.id || i}`}
                                         className={`rounded-lg p-2.5 ${
-                                          a.is_special 
-                                            ? 'bg-amber-50 border border-amber-200' 
-                                            : overridden 
-                                              ? 'bg-red-50 border border-red-200' 
+                                          a.is_special
+                                            ? 'bg-amber-50 border border-amber-200'
+                                            : overridden
+                                              ? 'bg-red-50 border border-red-200'
                                               : 'bg-blue-50 border border-blue-200'
                                         }`}
                                       >
                                         <div className="font-semibold text-gray-900 text-xs leading-tight flex items-center gap-1">
                                           <BookOpen className="h-3 w-3" />
-                                          {a.is_special 
+                                          {a.is_special
                                             ? (a.timetable_name || 'Special')
                                             : shortLabel(a.curriculum_row || a.subject_text)
                                           }
@@ -311,7 +311,7 @@ export default function StudentTimetable(){
                   <div className="text-xs text-indigo-700 mt-1">{formatDate(selectedDate)}</div>
                 </div>
               </div>
-              
+
               {/* Day tabs */}
               <div className="grid grid-cols-7 gap-1 mb-4">
                 {DAYS.map((d, di) => {
@@ -320,7 +320,7 @@ export default function StudentTimetable(){
                   const dayDate = new Date(selectedDate)
                   dayDate.setDate(selectedDate.getDate() + dayDiff)
                   const isToday = dayDate.toDateString() === new Date().toDateString()
-                  
+
                   return (
                     <button
                       key={d}
@@ -358,11 +358,11 @@ export default function StudentTimetable(){
                     {(() => {
                       const dayObj = timetable.find(x => x.day === selectedDay + 1) || { assignments: [] }
                       const nonBreakPeriods = periods.filter((p: any) => !p.is_break && !p.is_lunch)
-                      
+
                       return nonBreakPeriods.map((p: any) => {
                         const assignments = (dayObj.assignments || []).filter((x: any) => x.period_id === p.id)
                         const hasSpecial = assignments.some((x: any) => x.is_special)
-                        
+
                         return (
                           <tr key={p.id} className="hover:bg-gray-50">
                             <td className="px-3 py-3 align-top">

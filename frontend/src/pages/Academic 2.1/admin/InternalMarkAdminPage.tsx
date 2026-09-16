@@ -40,13 +40,13 @@ export default function InternalMarkAdminPage() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [semesters, setSemesters] = useState<Semester[]>([]);
-  
+
   // Filters
   const [selectedDepartment, setSelectedDepartment] = useState<string>('');
   const [selectedSemester, setSelectedSemester] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
-  
+
   // Stats
   const [stats, setStats] = useState({
     totalCourses: 0,
@@ -98,10 +98,10 @@ export default function InternalMarkAdminPage() {
       const params = new URLSearchParams();
       if (selectedSemester) params.append('semester', selectedSemester);
       if (selectedDepartment) params.append('department', selectedDepartment);
-      
+
       const response = await fetchWithAuth(`/api/academic-v2/courses/?${params.toString()}`);
       if (!response.ok) throw new Error('Failed to load courses');
-      
+
       const data = await response.json();
       // Handle both result formats: { courses: [], stats: {} } or direct array
       const courseArray = Array.isArray(data) ? data : (data.courses || data.results || []);
@@ -136,10 +136,10 @@ export default function InternalMarkAdminPage() {
       const params = new URLSearchParams();
       if (selectedSemester) params.append('semester', selectedSemester);
       if (selectedDepartment) params.append('department', selectedDepartment);
-      
+
       const response = await fetchWithAuth(`/api/academic-v2/internal-marks/export/?${params.toString()}`);
       if (!response.ok) throw new Error('Export failed');
-      
+
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -319,10 +319,10 @@ export default function InternalMarkAdminPage() {
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredCourses.map((course) => {
-                  const progress = course.total_students > 0 
-                    ? Math.round((course.marks_entered / course.total_students) * 100) 
+                  const progress = course.total_students > 0
+                    ? Math.round((course.marks_entered / course.total_students) * 100)
                     : 0;
-                  
+
                   return (
                     <tr key={course.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3">
@@ -344,7 +344,7 @@ export default function InternalMarkAdminPage() {
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-                            <div 
+                            <div
                               className={`h-full rounded-full ${
                                 progress === 100 ? 'bg-green-500' : progress > 50 ? 'bg-blue-500' : 'bg-orange-500'
                               }`}

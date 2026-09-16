@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  ShieldCheck, 
-  Plus, 
-  Layers, 
-  Clock, 
-  Calendar, 
-  Trash2, 
+import {
+  ShieldCheck,
+  Plus,
+  Layers,
+  Clock,
+  Calendar,
+  Trash2,
   Pencil,
-  Search, 
-  Check, 
-  X, 
-  AlertCircle, 
-  Users, 
+  Search,
+  Check,
+  X,
+  AlertCircle,
+  Users,
   Sparkles,
   ArrowRight,
   CheckCircle2
@@ -141,7 +141,7 @@ export default function BioSecureAdminPage() {
     setGroupDescription(group.description || '');
     setSectionSearch('');
     setSelectedSectionIds((group.sections || []).map((s) => s.id));
-    
+
     if (group.batches && group.batches.length > 0) {
       setBatches(
         group.batches.map((b) => ({

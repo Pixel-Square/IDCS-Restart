@@ -56,7 +56,7 @@ export default function DataViewPage() {
 
   async function loadStudentsForDeptSem(dept: string, sem: string) {
     if (!dept || !sem) return;
-    
+
     setLoading(true);
     setError(null);
     try {

@@ -216,7 +216,7 @@ def _resolve_commands(project, files: dict) -> tuple:
                 'if [ -f mvnw ]; then chmod +x mvnw && ./mvnw clean package -DskipTests 2>&1; '
                 'else mvn clean package -DskipTests 2>&1; fi'
             )
-        
+
         if entry_point and ('mvn ' in build_cmd or 'mvnw ' in build_cmd):
             build_cmd = build_cmd.replace('package', f'package -Dspring-boot.main-class={entry_point} -Dstart-class={entry_point}')
 

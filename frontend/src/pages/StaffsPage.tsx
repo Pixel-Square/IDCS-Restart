@@ -155,7 +155,7 @@ export default function StaffsPage() {
       const qp = includeNonTeaching ? '?include_non_teaching=true' : ''
       const baseUrl = `/api/academics/staffs-page/${qp}`
       const res = await fetchWithAuth(forceFresh ? withCacheBust(baseUrl) : baseUrl)
-      
+
       if (!res.ok) {
         if (res.status === 403) {
           setError('You do not have permission to view this page.')
@@ -171,7 +171,7 @@ export default function StaffsPage() {
       setCanEdit(data.can_edit || false)
       setCanViewAllStaff(data.can_view_all || false)
       setCanImport(data.can_import || false)
-      
+
       // Keep selection stable; if current selection disappears, move to a valid default.
       if (depts.length > 0) {
         const deptIds = new Set<number>(depts.map((d: Department) => d.id))
@@ -528,7 +528,7 @@ export default function StaffsPage() {
 
         // Success - refresh both the staff list and all staff modal data (keep modal open)
         await Promise.all([fetchStaffs(), refreshAllStaff()])
-        
+
         // Clear students page cache so new departments/sections show up immediately
         const cacheKey = 'students_page_cache'
         const username = sessionStorage.getItem('username')
@@ -540,7 +540,7 @@ export default function StaffsPage() {
         }
         // Signal to Students page that departments list should be refreshed
         sessionStorage.setItem('students_departments_refresh', Date.now().toString())
-        
+
         setNotificationMessage(result.detail || 'Staff assigned to department successfully!')
         setNotificationType('success')
         setNotificationOpen(true)
@@ -808,7 +808,7 @@ export default function StaffsPage() {
                   <div className="px-6 py-8 text-center text-gray-500">
                     <Users className="h-10 w-10 mx-auto mb-2 text-gray-300" />
                     <p>
-                      {selectedRole 
+                      {selectedRole
                         ? `No staff members with role "${selectedRole}" found`
                         : 'No staff members found'
                       }
@@ -897,7 +897,7 @@ export default function StaffsPage() {
                                   </div>
                                 )}
                                 {/* No roles */}
-                                {(!staff.user_roles || staff.user_roles.length === 0) && 
+                                {(!staff.user_roles || staff.user_roles.length === 0) &&
                                  (!staff.department_role_mappings || staff.department_role_mappings.length === 0) && (
                                   <span className="text-gray-400">—</span>
                                 )}
@@ -992,7 +992,7 @@ export default function StaffsPage() {
                 <div className="px-6 py-8 text-center text-gray-500">
                   <Users className="h-10 w-10 mx-auto mb-2 text-gray-300" />
                   <p>
-                    {selectedRole 
+                    {selectedRole
                       ? `No staff members with role "${selectedRole}" in this department`
                       : 'No staff members in this department'
                     }
@@ -1073,7 +1073,7 @@ export default function StaffsPage() {
                                 </div>
                               )}
                               {/* No roles */}
-                              {(!staff.user_roles || staff.user_roles.length === 0) && 
+                              {(!staff.user_roles || staff.user_roles.length === 0) &&
                                (!staff.department_role_mappings || staff.department_role_mappings.length === 0) && (
                                 <span className="text-gray-400">—</span>
                               )}
@@ -1236,7 +1236,7 @@ export default function StaffsPage() {
                   </svg>
                 </button>
               </div>
-              
+
               {/* Search Input */}
               <div className="relative">
                 <input

@@ -880,7 +880,7 @@ class AcademicPerformanceAnalyticsView(APIView):
                 s_ids = list(student_qs.values_list('id', flat=True))
                 # Find all subjects actually taken by these students
                 subj_ids = marks_model.objects.filter(student_id__in=s_ids).values_list("subject_id", flat=True).distinct()
-                
+
                 db_subjs = Subject.objects.filter(id__in=subj_ids)
                 distinct_subjects = [{"id": str(sb.id), "name": sb.name, "code": sb.code} for sb in db_subjs]
 
@@ -893,7 +893,7 @@ class AcademicPerformanceAnalyticsView(APIView):
                         if last_three.isdigit():
                             return int(last_three)
                     return 999999
-                
+
                 sorted_student_qs.sort(key=get_sort_key)
 
                 for s in sorted_student_qs[:150]:
@@ -934,13 +934,13 @@ class AcademicPerformanceAnalyticsView(APIView):
                         student_marks_map[sid] = True
                     if val < pass_th:
                         student_marks_map[sid] = False
-                
+
                 for sid, is_p in student_marks_map.items():
                     if is_p:
                         pass_count += 1
                     else:
                         fail_count += 1
-                
+
                 # Account for active students with no mark records as fail/pending
                 untested = len(student_ids) - len(student_marks_map)
                 if untested > 0:
@@ -1165,7 +1165,7 @@ class StudentSearchView(APIView):
             qs = qs.filter(get_student_dept_q(dept))
         if q:
             qs = qs.filter(Q(reg_no__icontains=q) | Q(user__username__icontains=q) | Q(user__first_name__icontains=q) | Q(user__last_name__icontains=q))
-        
+
         results = []
         for s in qs[:25]:
             dept_lbl = s.home_department.short_name if s.home_department else (s.section.batch.course.department.short_name if (s.section and s.section.batch and s.section.batch.course and s.section.batch.course.department) else "ENG")
@@ -1584,12 +1584,12 @@ class ComparisonPerformanceAnalyticsView(APIView):
                     if d.isdigit():
                         dept_qs |= Q(course__department_id=d)
                 subj_qs = subj_qs.filter(dept_qs)
-            
+
             subjects_list = [{"id": str(s.id), "code": s.code, "name": s.name} for s in subj_qs[:200]]
 
             # Main multi-comparison logic across CI1 -> CIA2 -> Model -> ESE
             line_series = []
-            
+
             # Map exam types to models & maximum marks
             exam_configs = []
             for qp in req_qp_types:
@@ -1616,7 +1616,7 @@ class ComparisonPerformanceAnalyticsView(APIView):
             # If multiple subjects are selected, make subject comparison lines.
             # If multiple sections are selected, make section comparison lines.
             # If multiple departments are selected, make department comparison lines.
-            
+
             # Determine comparison strategy based on selection counts
             comparison_mode = "subject"
             if len(req_secs) > 1:
@@ -1641,7 +1641,7 @@ class ComparisonPerformanceAnalyticsView(APIView):
 
             # Find matching subjects in this filtered scope
             active_stu_ids = list(students_base.values_list('id', flat=True))
-            
+
             # Filter subjects list dynamically to display in dropdown UI
             matching_subjs = Subject.objects.filter(
                 id__in=Cia1Mark.objects.filter(student_id__in=active_stu_ids).values_list('subject_id', flat=True).distinct()
@@ -1661,7 +1661,7 @@ class ComparisonPerformanceAnalyticsView(APIView):
                         m_qs = mark_model.objects.filter(student_id__in=sec_stu_ids)
                         if req_subjects:
                             m_qs = m_qs.filter(subject_id__in=req_subjects)
-                        
+
                         cnt = m_qs.count()
                         if cnt > 0:
                             avg_raw = m_qs.aggregate(Avg(field_name))[f"{field_name}__avg"] or 0
@@ -1684,7 +1684,7 @@ class ComparisonPerformanceAnalyticsView(APIView):
                 for d_id in req_depts:
                     dept_obj = Department.objects.filter(id=d_id if d_id.isdigit() else -1).first()
                     dept_name = dept_obj.short_name if dept_obj else f"Dept {d_id}"
-                    
+
                     series_data = []
                     d_students = students_base.filter(get_student_dept_q(d_id))
                     d_stu_ids = list(d_students.values_list('id', flat=True))
@@ -1718,7 +1718,7 @@ class ComparisonPerformanceAnalyticsView(APIView):
                 for sub_id in subjs_to_compare:
                     sub_obj = Subject.objects.filter(id=sub_id).first()
                     sub_name = sub_obj.name if sub_obj else f"Subject {sub_id}"
-                    
+
                     series_data = []
                     for label, mark_model, field_name, max_m in exam_configs:
                         # Filter marks strictly within current students and sections
@@ -1768,7 +1768,7 @@ class StudentCurriculumMarksView(APIView):
     def get(self, request):
         auth_ctx = resolve_user_auth_context(request.user)
         scope = get_performance_scope(request.user)
-        
+
         dept = request.query_params.get("dept", "").strip()
         year = request.query_params.get("year", "").strip()
         sem_val = request.query_params.get("sem", "").strip()
@@ -1776,21 +1776,21 @@ class StudentCurriculumMarksView(APIView):
         exam_type = request.query_params.get("exam", "CIA 1").strip()
         subject_val = request.query_params.get("subject", "").strip()
         search_q = request.query_params.get("q", "").strip()
-        
+
         dept = clamp_department_param(scope, dept)
-            
+
         semester_num = None
         if sem_val and sem_val.isdigit():
             semester_num = int(sem_val)
-            
+
         qs = StudentProfile.objects.filter(
             Q(status__isnull=True) | ~Q(status__in=["INACTIVE", "DEBAR"])
         ).select_related("user", "home_department", "section", "section__batch", "section__semester")
-        
+
         _cq = allowed_student_q(scope, get_student_dept_q)
         if _cq is not None:
             qs = qs.filter(_cq)
-        
+
         if dept:
             qs = qs.filter(get_student_dept_q(dept))
         if year:
@@ -1799,7 +1799,7 @@ class StudentCurriculumMarksView(APIView):
             qs = qs.filter(section__semester__number=semester_num)
         if section_val:
             qs = qs.filter(section__name__iexact=section_val)
-            
+
         if search_q:
             qs = qs.filter(
                 Q(reg_no__icontains=search_q) |
@@ -1809,7 +1809,7 @@ class StudentCurriculumMarksView(APIView):
             )
 
         students = list(qs[:100])
-        
+
         # The authoritative subject set is built from the filtered cohort's actual marks
         # The authoritative subject set is derived from the filtered cohort's actual
         # marks (computed below) — NOT from a naive Subject↔Department join, which
@@ -1818,10 +1818,10 @@ class StudentCurriculumMarksView(APIView):
         # academics.models.Subject.
         subject_all = list(Subject.objects.all())
         subject_code_to_id = {sub.code.upper(): str(sub.id) for sub in subject_all if sub.code}
-            
+
         subjects = []
         subject_data = []
-        
+
         from OBE.models import (
             Cia1Mark, Cia2Mark, Ssa1Mark, Ssa2Mark, Review1Mark, Review2Mark,
             Formative1Mark, Formative2Mark, ModelExamMark, LabExamMark, FinalInternalMark
@@ -1947,7 +1947,7 @@ class StudentCurriculumMarksView(APIView):
             )
             sem_lbl = str(s.section.semester.number) if (s.section and s.section.semester) else (str(semester_num) if semester_num else "1")
             ay_lbl = s.batch or (s.section.batch.name if (s.section and s.section.batch) else "")
-            
+
             student_marks_data.append({
                 "student_id": str(s.id),
                 "reg_no": s.reg_no,
@@ -1959,7 +1959,7 @@ class StudentCurriculumMarksView(APIView):
                 "marks": marks_by_student.get(s.id, {}),
                 "attendance": 90.0
             })
-            
+
         return Response({
             "subjects": subject_data,
             "students": student_marks_data,

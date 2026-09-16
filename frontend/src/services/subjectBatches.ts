@@ -22,7 +22,7 @@ export async function fetchSubjectBatches(): Promise<SubjectBatch[]> {
   return data.results || data
 }
 
-export async function createSubjectBatch(payload: { 
+export async function createSubjectBatch(payload: {
   name: string
   student_ids?: number[]
   academic_year?: number

@@ -39,7 +39,7 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
       if (message) {
         setFilterMessage(message);
       }
-      
+
       setTemplates(data);
       // Fetch COL claim info (balance + claimable dates)
       try {
@@ -63,7 +63,7 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
   const handleTemplateSelect = (template: RequestTemplate) => {
     setSelectedTemplate(template);
     const initialData: Record<string, any> = {};
-    
+
     // Pre-fill date fields if preselectedDate is provided
     if (preselectedDate) {
       template.form_schema.forEach(field => {
@@ -79,7 +79,7 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
         }
       });
     }
-    
+
     setFormData(initialData);
     setError(null);
     setUseColClaim(false);
@@ -88,7 +88,7 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
   // Auto-uncheck COL claim if dates change and become invalid
   useEffect(() => {
     if (!selectedTemplate || !useColClaim || !colInfo) return;
-    
+
     // Get earliest date from form
     let earliestRequestDate: string | null = null;
     selectedTemplate.form_schema.forEach(field => {
@@ -113,7 +113,7 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!selectedTemplate) {
       setError('Please select a request type');
       return;
@@ -182,7 +182,7 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
                   ℹ️ {filterMessage}
                 </div>
               )}
-              
+
               {/* Step 1: Select Template */}
               {!selectedTemplate ? (
                 <div>
@@ -250,17 +250,17 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
                   />
 
                   {/* Claim COL option for deduct templates (Casual Leave) */}
-                  {selectedTemplate.leave_policy && 
-                   selectedTemplate.leave_policy.action === 'deduct' && 
-                   colInfo && 
+                  {selectedTemplate.leave_policy &&
+                   selectedTemplate.leave_policy.action === 'deduct' &&
+                   colInfo &&
                    colInfo.col_balance > 0 && (
                     <div>
                       {(() => {
                         // Check if form has date fields filled
-                        const hasDateFields = selectedTemplate.form_schema.some(f => 
+                        const hasDateFields = selectedTemplate.form_schema.some(f =>
                           (f.type === 'date' || f.name.includes('date')) && formData[f.name]
                         );
-                        
+
                         // Get the earliest date from form
                         let earliestRequestDate: string | null = null;
                         selectedTemplate.form_schema.forEach(field => {
@@ -275,7 +275,7 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
                         // Check if request date is after COL earned dates
                         let canClaim = true;
                         let warningMsg = '';
-                        
+
                         if (earliestRequestDate && colInfo.earned_dates && colInfo.earned_dates.length > 0) {
                           const latestEarnedDate = colInfo.earned_dates[0]?.date; // Already sorted desc in backend
                           if (earliestRequestDate <= latestEarnedDate) {
@@ -294,10 +294,10 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
                             <div className={`p-3 border rounded flex items-start gap-3 ${canClaim ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'}`}>
                               {canClaim ? (
                                 <>
-                                  <input 
-                                    id="claim_col" 
-                                    type="checkbox" 
-                                    checked={useColClaim} 
+                                  <input
+                                    id="claim_col"
+                                    type="checkbox"
+                                    checked={useColClaim}
                                     onChange={e => setUseColClaim(e.target.checked)}
                                     className="mt-0.5"
                                   />

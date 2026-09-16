@@ -101,7 +101,7 @@ class CodeCourseIncharge(models.Model):
 
 class CodeClass(models.Model):
     """A class/section within a CodeCourse.
-    
+
     References the existing IDCS Section model instead of duplicating it.
     """
     course = models.ForeignKey(

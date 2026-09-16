@@ -71,7 +71,7 @@ export default function VenueAllocationModal({ isOpen, onClose, onRulesUpdated }
             capacity: item.capacity,
             createdAt: item.created_at,
           }));
-          
+
           if (groupsRes.ok) {
             const gData = await groupsRes.json();
             const parsedGroups = (gData.results || gData).map((item: any) => ({
@@ -85,7 +85,7 @@ export default function VenueAllocationModal({ isOpen, onClose, onRulesUpdated }
               createdAt: item.created_at,
             }));
             setSavedGroups(parsedGroups);
-            
+
             // Map group names to rules
             parsedRules.forEach((rule: any) => {
               rule.groupNames = parsedGroups
@@ -99,7 +99,7 @@ export default function VenueAllocationModal({ isOpen, onClose, onRulesUpdated }
         console.error('Failed to load venue exceptions:', e);
       }
     };
-    
+
     fetchData();
   }, [isOpen]);
 
@@ -135,7 +135,7 @@ export default function VenueAllocationModal({ isOpen, onClose, onRulesUpdated }
         method: 'POST',
         body: JSON.stringify(payload)
       });
-      
+
       const newRule: VenueExceptionRule = {
         id: frontendId,
         venueName: autoName,

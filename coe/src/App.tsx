@@ -174,7 +174,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                 ✕
               </button>
             </div>
-            
+
             <div className="mb-4 hidden items-center justify-end lg:flex">
               <button
                 onClick={() => setIsDesktopSidebarCollapsed(true)}

@@ -1,10 +1,10 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
-    CurriculumMasterViewSet, 
-    CurriculumDepartmentViewSet, 
-    ElectiveSubjectViewSet, 
-    ElectiveChoicesView, 
+    CurriculumMasterViewSet,
+    CurriculumDepartmentViewSet,
+    ElectiveSubjectViewSet,
+    ElectiveChoicesView,
     MasterImportView,
     DepartmentGroupViewSet,
     CurriculumDepartmentsView,

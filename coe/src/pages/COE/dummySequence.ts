@@ -7,35 +7,35 @@ const ODD_SEMESTERS = ['SEM7', 'SEM5', 'SEM3', 'SEM1'];
 
 export async function getSemesterStartSequence(department: string, targetSemester: string): Promise<number> {
   if (department === 'ALL') return 0;
-  
+
   const semestersToCheck = EVEN_SEMESTERS.includes(targetSemester) ? EVEN_SEMESTERS : ODD_SEMESTERS.includes(targetSemester) ? ODD_SEMESTERS : null;
-  
+
   // If it's not a standard semester format, just start at 0
   if (!semestersToCheck) return 0;
-  
+
   const targetIndex = semestersToCheck.indexOf(targetSemester);
   if (targetIndex <= 0) return 0; // Highest semester starts at 0 (so first student is 1)
 
   const semsToFetch = semestersToCheck.slice(0, targetIndex);
-  
+
   let startSequence = 0;
-  
+
   const results = await Promise.allSettled(
     semsToFetch.map(async (sem) => {
       const selectionMap = await fetchCourseSelectionMapFromApi(department, sem);
       const res = await fetchCoeStudentsMap({ department, semester: sem });
       const absentCourseMap = readCourseAbsenteesMap(getAttendanceFilterKey(department, sem));
-      
+
       let count = 0;
       res.departments.forEach((deptBlock: any) => {
         deptBlock.courses.forEach((course: any) => {
-          const courseKey = getCourseKey({ 
-            department: deptBlock.department, 
-            semester: sem, 
-            courseCode: course.course_code || '', 
-            courseName: course.course_name || '' 
+          const courseKey = getCourseKey({
+            department: deptBlock.department,
+            semester: sem,
+            courseCode: course.course_code || '',
+            courseName: course.course_name || ''
           });
-          
+
           if (selectionMap[courseKey]?.eseType === 'ESE') {
              const courseAbsentees = absentCourseMap.get(courseKey);
              const validStudents = (course.students || []).filter((s: any) => {
@@ -57,7 +57,7 @@ export async function getSemesterStartSequence(department: string, targetSemeste
       console.error('Unable to fetch stats for sequence calculation', result.reason);
     }
   });
-  
+
   return startSequence;
 }
 
@@ -74,7 +74,7 @@ export function generateDummyNumber(department: string, globalSequence: number):
     ME: '08',
     MECH: '08',
   };
-  
+
   const normalizedDepartment = String(department || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   const deptCode = DEPARTMENT_DUMMY_DIGITS[normalizedDepartment] || '00';
   return `E256${deptCode}${String(globalSequence).padStart(5, '0')}`;

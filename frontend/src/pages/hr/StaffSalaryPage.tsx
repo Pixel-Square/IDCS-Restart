@@ -545,23 +545,23 @@ export default function StaffSalaryPage() {
           <section className="bg-white border rounded-xl p-4 overflow-auto">
             <h2 className="text-xl font-semibold mb-3">Staff Salary Declaration</h2>
             {loading && <div className="flex items-center gap-2 text-slate-600 mb-4"><Loader2 className="w-4 h-4 animate-spin" /> Loading staff data...</div>}
-            
+
             {/* Declaration Filters */}
             <div className="mb-4 flex flex-wrap gap-3 items-end bg-slate-50 p-3 rounded">
               <div>
                 <label className="text-sm font-medium text-slate-700 block mb-1">Search (Name/ID)</label>
-                <input 
-                  type="text" 
-                  placeholder="Search staff..." 
-                  value={declSearchTerm} 
+                <input
+                  type="text"
+                  placeholder="Search staff..."
+                  value={declSearchTerm}
                   onChange={(e) => setDeclSearchTerm(e.target.value)}
                   className="border rounded px-3 py-2 w-40"
                 />
               </div>
               <div>
                 <label className="text-sm font-medium text-slate-700 block mb-1">Department</label>
-                <select 
-                  value={declDeptFilter} 
+                <select
+                  value={declDeptFilter}
                   onChange={(e) => setDeclDeptFilter(e.target.value)}
                   className="border rounded px-3 py-2 min-w-[200px]"
                 >
@@ -600,7 +600,7 @@ export default function StaffSalaryPage() {
                 <tbody>
                   {(() => {
                     const filtered = declarations.filter((row) => {
-                      const matchesSearch = declSearchTerm === '' || 
+                      const matchesSearch = declSearchTerm === '' ||
                         row.name.toLowerCase().includes(declSearchTerm.toLowerCase()) ||
                         row.staff_id.toLowerCase().includes(declSearchTerm.toLowerCase());
                       const matchesDept = declDeptFilter === '' || row.department.id === Number(declDeptFilter);
@@ -610,7 +610,7 @@ export default function StaffSalaryPage() {
                     const totalPages = Math.ceil(filtered.length / itemsPerPage);
                     const startIdx = (declCurrentPage - 1) * itemsPerPage;
                     const paginatedData = filtered.slice(startIdx, startIdx + itemsPerPage);
-                    
+
                     return paginatedData.map((row) => {
                     const editable = Boolean(editingRows[row.staff_user_id]);
                     const isNonTeaching = (pfConfig?.type2_department_ids || []).includes(row.department.id);
@@ -690,11 +690,11 @@ export default function StaffSalaryPage() {
                   })()}
                 </tbody>
               </table>
-              
+
               {/* Pagination */}
               {(() => {
                 const filtered = declarations.filter((row) => {
-                  const matchesSearch = declSearchTerm === '' || 
+                  const matchesSearch = declSearchTerm === '' ||
                     row.name.toLowerCase().includes(declSearchTerm.toLowerCase()) ||
                     row.staff_id.toLowerCase().includes(declSearchTerm.toLowerCase());
                   const matchesDept = declDeptFilter === '' || row.department.id === Number(declDeptFilter);
@@ -702,7 +702,7 @@ export default function StaffSalaryPage() {
                 });
                 const itemsPerPage = 20;
                 const totalPages = Math.max(1, Math.ceil(filtered.length / itemsPerPage));
-                
+
                 return (
                   <div className="mt-4 flex items-center justify-between">
                     <div className="text-sm text-slate-600">
@@ -834,9 +834,9 @@ export default function StaffSalaryPage() {
         {activeTab === 'pf' && (
           <section className="bg-white border rounded-xl p-4">
             <h2 className="text-xl font-semibold mb-4">PF Declaration Configuration</h2>
-            
+
             {loading && <div className="flex items-center gap-2 text-slate-600 mb-4"><Loader2 className="w-4 h-4 animate-spin" /> Loading configuration...</div>}
-            
+
             <div className="space-y-6">
               {/* PF Settings */}
               <div>
@@ -876,8 +876,8 @@ export default function StaffSalaryPage() {
                           const isInType2 = (pfConfig?.type2_department_ids || []).includes(d.id);
                           return (
                             <label key={`t1-${d.id}`} className={`flex items-center gap-3 p-2 rounded cursor-pointer ${isInType2 ? 'opacity-40 pointer-events-none' : 'hover:bg-blue-100'}`}>
-                              <input 
-                                type="checkbox" 
+                              <input
+                                type="checkbox"
                                 checked={(pfConfig?.type1_department_ids || []).includes(d.id)}
                                 disabled={isInType2}
                                 onChange={() => toggleDept('type1_department_ids', d.id)}
@@ -901,9 +901,9 @@ export default function StaffSalaryPage() {
                           const isInType1 = (pfConfig?.type1_department_ids || []).includes(d.id);
                           return (
                             <label key={`t2-${d.id}`} className={`flex items-center gap-3 p-2 rounded cursor-pointer ${isInType1 ? 'opacity-40 pointer-events-none' : 'hover:bg-green-100'}`}>
-                              <input 
-                                type="checkbox" 
-                                checked={(pfConfig?.type2_department_ids || []).includes(d.id)} 
+                              <input
+                                type="checkbox"
+                                checked={(pfConfig?.type2_department_ids || []).includes(d.id)}
                                 disabled={isInType1}
                                 onChange={() => toggleDept('type2_department_ids', d.id)}
                                 className="w-4 h-4"
@@ -933,7 +933,7 @@ export default function StaffSalaryPage() {
           <section className="bg-white border rounded-xl p-4">
             <h2 className="text-xl font-semibold mb-3">Deduction Types</h2>
             <p className="text-sm text-slate-600 mb-3">Create deduction types, set mode to EMI for first 3 style, monthly for unique monthly values.</p>
-            
+
             {/* Column Headers */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-2 px-3 py-2">
               <label className="text-xs font-semibold text-slate-700 uppercase">Deduction Name</label>
@@ -941,7 +941,7 @@ export default function StaffSalaryPage() {
               <label className="text-xs font-semibold text-slate-700 uppercase">Status</label>
               <label className="text-xs font-semibold text-slate-700 uppercase">Sort Order</label>
             </div>
-            
+
             <div className="space-y-2 mb-4">
               {deductionTypes.map((d, idx) => (
                 <div key={d.id || `new-${idx}`} className="grid grid-cols-1 md:grid-cols-4 gap-2">
@@ -961,7 +961,7 @@ export default function StaffSalaryPage() {
 
             <div className="border-t pt-6">
               <h3 className="text-lg font-semibold mb-3">EMI Plans</h3>
-              
+
               {/* Column Headers */}
               <div className="grid grid-cols-1 md:grid-cols-5 gap-2 mb-2 px-3 py-2">
                 <label className="text-xs font-semibold text-slate-700 uppercase">Select Staff</label>
@@ -970,7 +970,7 @@ export default function StaffSalaryPage() {
                 <label className="text-xs font-semibold text-slate-700 uppercase">Number of Months</label>
                 <label className="text-xs font-semibold text-slate-700 uppercase">Start Month</label>
               </div>
-              
+
               <div className="grid grid-cols-1 md:grid-cols-5 gap-2 mb-3">
                 <select value={newEmi.staff_user_id} onChange={(e) => setNewEmi((p: any) => ({ ...p, staff_user_id: e.target.value }))} className="border rounded px-3 py-2">
                   <option value="">Choose staff member</option>
@@ -1010,14 +1010,14 @@ export default function StaffSalaryPage() {
 
             <div className="border-t pt-6 mt-6">
               <h3 className="text-lg font-semibold mb-3">Earn Types</h3>
-              
+
               {/* Column Headers */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2 px-3 py-2">
                 <label className="text-xs font-semibold text-slate-700 uppercase">Earn Type Name</label>
                 <label className="text-xs font-semibold text-slate-700 uppercase">Status</label>
                 <label className="text-xs font-semibold text-slate-700 uppercase">Sort Order</label>
               </div>
-              
+
               <div className="space-y-2">
                 {earnTypes.map((e, idx) => (
                   <div key={e.id || `new-earn-${idx}`} className="grid grid-cols-1 md:grid-cols-3 gap-2">
@@ -1086,23 +1086,23 @@ export default function StaffSalaryPage() {
                   </button>
                 </div>
               </div>
-              
+
               {/* Monthly Sheet Filters */}
               <div className="flex flex-wrap gap-3 items-end">
                 <div>
                   <label className="text-sm font-medium text-slate-700 block mb-1">Search (Name/ID)</label>
-                  <input 
-                    type="text" 
-                    placeholder="Search staff..." 
-                    value={monthlySearchTerm} 
+                  <input
+                    type="text"
+                    placeholder="Search staff..."
+                    value={monthlySearchTerm}
                     onChange={(e) => setMonthlySearchTerm(e.target.value)}
                     className="border border-slate-300 rounded px-3 py-2 w-40 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
                 <div>
                   <label className="text-sm font-medium text-slate-700 block mb-1">Department</label>
-                  <select 
-                    value={monthlyDeptFilter} 
+                  <select
+                    value={monthlyDeptFilter}
                     onChange={(e) => setMonthlyDeptFilter(e.target.value)}
                     className="border border-slate-300 rounded px-3 py-2 min-w-[200px] text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
@@ -1144,13 +1144,13 @@ export default function StaffSalaryPage() {
               <tbody>
                 {(() => {
                   const filtered = (monthlySheet?.results || []).filter((r: any) => {
-                    const matchesSearch = monthlySearchTerm === '' || 
+                    const matchesSearch = monthlySearchTerm === '' ||
                       r.staff_name.toLowerCase().includes(monthlySearchTerm.toLowerCase()) ||
                       r.staff_id.toLowerCase().includes(monthlySearchTerm.toLowerCase());
                     const matchesDept = monthlyDeptFilter === '' || r.department.id === Number(monthlyDeptFilter);
                     return matchesSearch && matchesDept;
                   });
-                  
+
                   // Group by department
                   const grouped = filtered.reduce((acc: any, row: any) => {
                     const deptKey = row.department.id;
@@ -1160,22 +1160,22 @@ export default function StaffSalaryPage() {
                     acc[deptKey].rows.push(row);
                     return acc;
                   }, {} as Record<number, any>);
-                  
+
                   // Sort departments by name
-                  const sortedDepts = Object.values(grouped).sort((a: any, b: any) => 
+                  const sortedDepts = Object.values(grouped).sort((a: any, b: any) =>
                     a.dept.name.localeCompare(b.dept.name)
                   );
-                  
+
                   // Helper to sum numeric columns
-                  const sumRows = (rows: any[], field: string) => 
+                  const sumRows = (rows: any[], field: string) =>
                     rows.reduce((sum, r) => sum + Number(r[field] || 0), 0);
-                  
+
                   const sumEarnValues = (rows: any[], earnId: string) =>
                     rows.reduce((sum, r) => sum + Number(r.earn_values?.[earnId] ?? 0), 0);
-                  
+
                   const sumDeductionValues = (rows: any[], dedId: string) =>
                     rows.reduce((sum, r) => sum + Number(r.deduction_values?.[dedId] ?? 0), 0);
-                  
+
                   const finalRowsToRender: any[] = [];
                   const grandTotals = {
                     basic_salary: 0, allowance: 0, days: 0, gross_salary: 0, lop_amount: 0,
@@ -1184,13 +1184,13 @@ export default function StaffSalaryPage() {
                     deduction_totals: {} as Record<string, number>,
                     others: 0, net_salary: 0
                   };
-                  
+
                   sortedDepts.forEach((group: any) => {
                     // Add staff rows for this department
                     group.rows.forEach((r: any) => {
                       finalRowsToRender.push({ type: 'staff', data: r });
                     });
-                    
+
                     // Calculate department totals
                     const deptTotals = {
                       basic_salary: sumRows(group.rows, 'basic_salary'),
@@ -1212,9 +1212,9 @@ export default function StaffSalaryPage() {
                       others: sumRows(group.rows, 'others'),
                       net_salary: sumRows(group.rows, 'net_salary')
                     };
-                    
+
                     finalRowsToRender.push({ type: 'dept_total', dept: group.dept, totals: deptTotals });
-                    
+
                     // Accumulate grand totals
                     grandTotals.basic_salary += deptTotals.basic_salary;
                     grandTotals.allowance += deptTotals.allowance;
@@ -1233,10 +1233,10 @@ export default function StaffSalaryPage() {
                     grandTotals.others += deptTotals.others;
                     grandTotals.net_salary += deptTotals.net_salary;
                   });
-                  
+
                   // Add grand total row
                   finalRowsToRender.push({ type: 'grand_total', totals: grandTotals });
-                  
+
                   let staffCounter = 0;
                   return finalRowsToRender.map((item: any, idx: number) => {
                     if (item.type === 'staff') {

@@ -158,13 +158,13 @@ export default function AdditionalPage() {
     const filterKey = `${dept}::${sem}`;
     const shuffledLists = readShuffledLists();
     const bundleStore = readCourseBundleDummyStore();
-    
+
     const courseBundleMap = bundleStore[filterKey] || {};
     const courseData = courseBundleMap[courseCode] || { courseDummies: [], bundles: {} };
 
     // 1. Determine the last dummy number
     let lastDummy = 0;
-    
+
     // Check in existing shuffled list for this filter
     const currentShuffled = shuffledLists[filterKey] || {};
     Object.keys(currentShuffled).forEach(d => {
@@ -184,7 +184,7 @@ export default function AdditionalPage() {
     const deptDigit = DEPARTMENT_DUMMY_DIGITS[dept] || '9';
     const semDigit = sem.replace('SEM', '') || '0';
     const basePrefix = parseInt(`${deptDigit}${semDigit}`, 10);
-    
+
     if (lastDummy === 0 || Math.floor(lastDummy / 1000) !== basePrefix) {
       lastDummy = basePrefix * 1000;
     }
@@ -199,10 +199,10 @@ export default function AdditionalPage() {
     // 3. Create a separate bundle for this student
     const bundleIndex = Object.keys(courseData.bundles).length + 1;
     const bundleName = `B${bundleIndex}-ADD`; // Special suffix
-    
+
     courseData.courseDummies.push(newDummy);
     courseData.bundles[bundleName] = [newDummy];
-    
+
     courseBundleMap[courseCode] = courseData;
     bundleStore[filterKey] = courseBundleMap;
     writeCourseBundleDummyStore(bundleStore);
@@ -220,7 +220,7 @@ export default function AdditionalPage() {
     });
 
     setMessage({ type: 'success', text: `Student added successfully with Dummy No: ${newDummy} in Bundle: ${bundleName}` });
-    
+
     // Clear student-specific inputs
     setRegNo('');
     setStudentName('');
@@ -254,13 +254,13 @@ export default function AdditionalPage() {
         >
           Add student
         </button>
-        <button 
+        <button
           onClick={handleOpenLogs}
           className="rounded bg-gray-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-gray-800"
         >
           Logs
         </button>
-        <button 
+        <button
           onClick={handleReset}
           className="rounded bg-red-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-700"
         >
@@ -306,7 +306,7 @@ export default function AdditionalPage() {
               </table>
             </div>
             <div className="mt-4 flex justify-end">
-              <button 
+              <button
                 onClick={() => setShowLogs(false)}
                 className="rounded-lg bg-gray-200 px-6 py-2 text-sm font-bold text-gray-700 hover:bg-gray-300 transition-colors"
               >

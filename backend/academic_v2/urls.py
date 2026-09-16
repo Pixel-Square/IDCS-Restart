@@ -107,7 +107,7 @@ router.register(r'cqi-operators', AcV2CqiOperatorViewSet, basename='cqi-operator
 
 urlpatterns = [
     path('', include(router.urls)),
-    
+
     # Helper endpoints
     path('courses/<uuid:course_id>/internal-summary/', course_internal_summary, name='course-internal-summary'),
     path('courses/<uuid:course_id>/pattern/<str:exam_type>/', get_pattern_for_exam, name='get-pattern-for-exam'),

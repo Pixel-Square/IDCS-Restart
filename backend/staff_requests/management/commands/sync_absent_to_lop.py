@@ -57,33 +57,33 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         from staff_attendance.models import AttendanceRecord
         from staff_requests.models import StaffRequest, StaffLeaveBalance
-        
+
         # Parse date range
         from_date = None
         to_date = None
-        
+
         if options['from_date']:
             from_date = datetime.strptime(options['from_date'], '%Y-%m-%d').date()
         if options['to_date']:
             to_date = datetime.strptime(options['to_date'], '%Y-%m-%d').date()
-        
+
         # Filter users
         users = User.objects.all()
         if options['user']:
             users = users.filter(username=options['user'])
-        
+
         lop_name = options['lop_name']
         dry_run = options['dry_run']
-        
+
         if dry_run:
             self.stdout.write(self.style.WARNING('DRY RUN MODE - No changes will be made'))
-        
+
         self.stdout.write(f'Syncing LOP for {users.count()} users...')
         if from_date:
             self.stdout.write(f'Date range: {from_date} to {to_date or "present"}')
-        
+
         total_updated = 0
-        
+
         for user in users:
             # Build attendance query
             attendance_query = Q(user=user)
@@ -101,7 +101,7 @@ class Command(BaseCommand):
 
             # Count how many absent units are covered by approved deduct/neutral forms
             covered_units = 0.0
-            
+
             # Find all approved non-earn requests for this user that can compensate absence
             approved_requests = StaffRequest.objects.filter(
                 applicant=user,
@@ -126,20 +126,20 @@ class Command(BaseCommand):
 
             # Calculate LOP units
             lop_count = round(max(0.0, absent_units_total - covered_units), 2)
-            
+
             # Get or create LOP balance
             lop_balance, created = StaffLeaveBalance.objects.get_or_create(
                 staff=user,
                 leave_type=lop_name,
                 defaults={'balance': 0.0}
             )
-            
+
             old_lop = lop_balance.balance
-            
+
             if not dry_run:
                 lop_balance.balance = lop_count
                 lop_balance.save()
-            
+
             if old_lop != lop_count:
                 status_style = self.style.SUCCESS if lop_count < old_lop else self.style.WARNING
                 self.stdout.write(
@@ -149,12 +149,12 @@ class Command(BaseCommand):
                     )
                 )
                 total_updated += 1
-        
+
         if dry_run:
             self.stdout.write(self.style.WARNING(f'DRY RUN: Would update {total_updated} users'))
         else:
             self.stdout.write(self.style.SUCCESS(f'Successfully updated LOP for {total_updated} users'))
-    
+
     def _build_absent_units_by_date(self, attendance_records, user):
         """Map date -> absent units using FN/AN (0.5 each)."""
         units_by_date = {}
@@ -187,13 +187,13 @@ class Command(BaseCommand):
         dates = {}
         start_date = None
         end_date = None
-        
+
         # Try different field name patterns
         for start_key in ['start_date', 'from_date', 'startDate', 'fromDate', 'from']:
             if start_key in form_data:
                 start_date = form_data[start_key]
                 break
-        
+
         for end_key in ['end_date', 'to_date', 'endDate', 'toDate', 'to']:
             if end_key in form_data:
                 end_date = form_data[end_key]
@@ -203,14 +203,14 @@ class Command(BaseCommand):
             start_date = form_data['date']
         if not end_date and 'date' in form_data:
             end_date = form_data['date']
-        
+
         if start_date and end_date:
             try:
                 if isinstance(start_date, str):
                     start = datetime.fromisoformat(start_date.replace('Z', '+00:00')).date()
                 else:
                     start = start_date
-                
+
                 if isinstance(end_date, str):
                     end = datetime.fromisoformat(end_date.replace('Z', '+00:00')).date()
                 else:

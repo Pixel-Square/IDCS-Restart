@@ -58,12 +58,12 @@ export default function UserQueriesComponent({ user }: UserQueriesComponentProps
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    
+
     if (!isPhoneVerified) {
       setError('Please verify your phone number before raising a token.');
       return;
     }
-    
+
     if (!newQuery.trim()) {
       setError('Please enter your token details');
       return;
@@ -79,7 +79,7 @@ export default function UserQueriesComponent({ user }: UserQueriesComponentProps
       setNewQuery('');
       setShowForm(false);
       await loadQueries();
-      
+
       // Clear success message after 3 seconds
       setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
@@ -107,10 +107,10 @@ export default function UserQueriesComponent({ user }: UserQueriesComponentProps
       const days = Math.floor(diffInDays);
       return `${days} day${days !== 1 ? 's' : ''} ago`;
     } else {
-      return date.toLocaleDateString('en-IN', { 
-        year: 'numeric', 
-        month: 'short', 
-        day: 'numeric' 
+      return date.toLocaleDateString('en-IN', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
       });
     }
   }
@@ -239,7 +239,7 @@ export default function UserQueriesComponent({ user }: UserQueriesComponentProps
             </div>
             <h3 className="text-lg font-medium text-slate-900 mb-2">No Tokens Yet</h3>
             <p className="text-slate-600 text-sm mb-4">
-              {isPhoneVerified 
+              {isPhoneVerified
                 ? 'You haven\'t raised any tokens. Click "Raise Token" to get started.'
                 : 'Verify your phone number to start raising tokens.'}
             </p>
@@ -266,7 +266,7 @@ export default function UserQueriesComponent({ user }: UserQueriesComponentProps
                       {statusConfig.label}
                     </span>
                   </div>
-                  
+
                   {/* Admin Response */}
                   {query.admin_notes && (
                     <div className="mt-3 mb-2">
@@ -281,7 +281,7 @@ export default function UserQueriesComponent({ user }: UserQueriesComponentProps
                       </div>
                     </div>
                   )}
-                  
+
                   <div className="flex items-center justify-between text-xs text-slate-500">
                     <span>Token #{query.serial_number}</span>
                     <span>{formatDate(query.created_at)}</span>

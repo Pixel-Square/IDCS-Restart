@@ -34,13 +34,13 @@ async function refreshToken(): Promise<string> {
         window.localStorage.removeItem('refresh')
         throw new Error(String(lastErr?.message || lastErr || 'refresh failed'))
       }
-      
+
       if (!res.ok) {
         window.localStorage.removeItem('access')
         window.localStorage.removeItem('refresh')
         throw new Error('refresh failed')
       }
-      
+
       const data = await res.json()
       if (data.access) window.localStorage.setItem('access', data.access)
       if (data.refresh) window.localStorage.setItem('refresh', data.refresh)
@@ -65,7 +65,7 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
   let lastErr: any = null
   for (const base of getApiBaseCandidates()) {
     try {
-      const url = typeof input === 'string' && !input.startsWith('http') 
+      const url = typeof input === 'string' && !input.startsWith('http')
         ? `${base}${input.startsWith('/') ? '' : '/'}${input}`
         : input
       res = await fetch(url, { ...init, headers })

@@ -6,7 +6,7 @@ import { getCachedMe } from '../../services/auth'
 type Section = { id: number; name: string; batch: string; batch_regulation?: { id: number; code: string; name?: string } | null; department_id?: number; department_short_name?: string; semester?: number; department?: { id: number; code?: string }; mixed_section?: boolean; mixed_section_id?: number | null; is_mixed_section?: boolean }
 type Staff = { id: number; user: string | { username?: string; first_name?: string; last_name?: string }; staff_id: string; department?: number | { id?: number; code?: string; name?: string } }
 type CurriculumRow = { id: number; course_code?: string; course_name?: string; department?: { id: number; code?: string }; department_id?: number; department_code?: string; semester?: number; regulation?: string; home_dept_codes?: string[]; departments?: { id: number; code?: string; name?: string; short_name?: string }[] }
-type TeachingAssignment = { 
+type TeachingAssignment = {
   id: number
   staff: string | number
   subject: string
@@ -72,7 +72,7 @@ const getElectiveTypeName = (opt: any) => {
   if (cat.startsWith('PE')) return 'PE';
   if (cat === 'OE') return 'OE';
   if (cat === 'EE' || cat === 'EM') return 'EE';
-  
+
   const parentName = (opt.parent_name || '').toLowerCase();
   if (parentName.includes('professional elective')) return 'PE';
   if (parentName.includes('open elective')) return 'OE';
@@ -81,16 +81,16 @@ const getElectiveTypeName = (opt: any) => {
   return 'Elective';
 };
 
-function SearchableStaffSelect({ 
-  staffList, 
-  initialValue, 
-  id, 
-  isMulti = false 
-}: { 
-  staffList: Staff[], 
-  initialValue: any, 
-  id: string, 
-  isMulti?: boolean 
+function SearchableStaffSelect({
+  staffList,
+  initialValue,
+  id,
+  isMulti = false
+}: {
+  staffList: Staff[],
+  initialValue: any,
+  id: string,
+  isMulti?: boolean
 }) {
   const getInitialValues = () => {
     if (!initialValue) return [];
@@ -163,8 +163,8 @@ function SearchableStaffSelect({
             return (
               <span key={st.id} className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs border border-blue-200 font-medium">
                 {st.staff_id} - {getStaffDisplayName(st)}
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   onClick={() => removeValue(st.id)}
                   className="text-blue-500 hover:text-blue-700 font-bold ml-0.5"
                 >
@@ -175,28 +175,28 @@ function SearchableStaffSelect({
           })}
         </div>
       )}
-      
-      <div 
+
+      <div
         className="w-full p-2 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm cursor-pointer focus:ring-2 focus:ring-blue-500 focus:border-blue-500 flex justify-between items-center"
         onClick={() => setIsOpen(!isOpen)}
       >
         <span>{displayValue}</span>
         <span className="text-gray-400 text-xs">&#9662;</span>
       </div>
-      
-      <input 
-        type="hidden" 
-        id={id} 
-        value={isMulti ? JSON.stringify(selectedIds) : (selectedIds[0] || '')} 
+
+      <input
+        type="hidden"
+        id={id}
+        value={isMulti ? JSON.stringify(selectedIds) : (selectedIds[0] || '')}
       />
-      
+
       {isOpen && (
         <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-xl">
           <div className="p-2 border-b border-gray-200">
-            <input 
-              type="text" 
-              className="w-full p-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" 
-              placeholder="Search by ID or Name..." 
+            <input
+              type="text"
+              className="w-full p-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+              placeholder="Search by ID or Name..."
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
               autoFocus
@@ -204,7 +204,7 @@ function SearchableStaffSelect({
           </div>
           <div className="max-h-48 overflow-y-auto">
             {!isMulti && (
-              <div 
+              <div
                 className="p-2 hover:bg-gray-100 cursor-pointer text-sm text-gray-500 italic"
                 onClick={() => { setSelectedIds([]); setIsOpen(false); }}
               >
@@ -214,14 +214,14 @@ function SearchableStaffSelect({
             {filteredStaff.map(st => {
               const isChecked = selectedIds.some(id => String(id) === String(st.id));
               return (
-                <div 
-                  key={st.id} 
+                <div
+                  key={st.id}
                   className={`p-2 hover:bg-gray-100 cursor-pointer text-sm text-gray-800 flex items-center gap-2 ${isChecked ? 'bg-blue-50/50' : ''}`}
                   onClick={() => toggleSelect(st.id)}
                 >
                   {isMulti && (
-                    <input 
-                      type="checkbox" 
+                    <input
+                      type="checkbox"
                       checked={isChecked}
                       onChange={() => {}}
                       className="rounded text-blue-600 focus:ring-blue-500 border-gray-300"
@@ -271,7 +271,7 @@ export default function TeachingAssignmentsPage(){
   // Filter staff by selected department for dept-core subjects dropdown
   const getFilteredStaffForDeptCore = (subject?: CurriculumRow) => {
     const isGraphics = subject && (
-      subject.course_code === 'GEA1105' || 
+      subject.course_code === 'GEA1105' ||
       (subject.course_name || '').toLowerCase().includes('graphics')
     );
 
@@ -336,20 +336,20 @@ export default function TeachingAssignmentsPage(){
   const getDeptCoreParents = () => {
     return electiveParents.filter(p => {
       if (!(p as any).is_dept_core) return false;
-      
+
       const subjectDeptId = p.department_id || p.department?.id;
       const subjectDeptCode = p.department_code || p.department?.code;
-      
+
       if (selectedDept) {
         return subjectDeptId === selectedDept;
       }
-      
+
       const me = getCachedMe();
       const meDeptCode = me?.profile?.department?.code;
       if (meDeptCode && subjectDeptCode) {
         return String(meDeptCode) === String(subjectDeptCode);
       }
-      
+
       return true;
     });
   }
@@ -399,7 +399,7 @@ export default function TeachingAssignmentsPage(){
       const me = getCachedMe()
       const meDept = me?.profile?.department
       if (meDept) {
-        const matched = departments.find(d => 
+        const matched = departments.find(d =>
           (meDept.code && String(d.code) === String(meDept.code)) ||
           (meDept.short_name && String(d.short_name).toLowerCase() === String(meDept.short_name).toLowerCase()) ||
           (meDept.name && String(d.name).toLowerCase() === String(meDept.name).toLowerCase())
@@ -426,12 +426,12 @@ export default function TeachingAssignmentsPage(){
   async function fetchData(forceRefresh = false){
     try{
       setLoading(true)
-      
+
       // Clear cache if force refresh
       if (forceRefresh) {
         clearCache()
       }
-      
+
       // Check cache first unless force refresh
       if (!forceRefresh && useCachedTeachingData) {
         const cached = getCachedData()
@@ -548,19 +548,19 @@ export default function TeachingAssignmentsPage(){
         })
         setSections(sectionsData)
       }
-      if (staffRes.ok){ 
-        const d = await safeJson(staffRes); 
+      if (staffRes.ok){
+        const d = await safeJson(staffRes);
         staffData = (d.results || d) as Staff[]
         setStaff(staffData)
         // Initialize elective staff with same data initially
         setElectiveStaff(staffData)
       }
-      if (curRes.ok){ 
-        const d = await safeJson(curRes); 
-        const rows = (d.results || d); 
+      if (curRes.ok){
+        const d = await safeJson(curRes);
+        const rows = (d.results || d);
         curriculumData = rows
         electiveParentsData = rows.filter((r:any)=> r.is_elective || r.is_dept_core)
-        setCurriculum(curriculumData); 
+        setCurriculum(curriculumData);
         setElectiveParents(electiveParentsData);
 
         // Derive departments visible to this user from curriculum rows (user-mapped departments)
@@ -626,10 +626,10 @@ export default function TeachingAssignmentsPage(){
           console.error('Failed to fetch electives', e);
         }
       }
-      if (taRes.ok){ 
-        const d = await safeJson(taRes); 
+      if (taRes.ok){
+        const d = await safeJson(taRes);
         assignmentsData = d.results || d
-        setAssignments(assignmentsData) 
+        setAssignments(assignmentsData)
       }
 
       // Fetch per-section curriculum for all sections so HOD assignments use
@@ -745,7 +745,7 @@ export default function TeachingAssignmentsPage(){
         console.error('loadElectives failed', e);
       }
     }
-    
+
     loadElectives();
   }, [selectedElectiveDept, selectedDept])
 
@@ -779,7 +779,7 @@ export default function TeachingAssignmentsPage(){
         console.log(`Loaded ${staffList.length} staff for elective section (top-level dept filter: ${deptFilter || 'all'})`)
       } catch(e) { console.error('loadElectiveStaff failed', e) }
     }
-    
+
     loadElectiveStaff();
   }, [selectedDept])
 
@@ -805,7 +805,7 @@ export default function TeachingAssignmentsPage(){
       }
       return []
     }
-    
+
     const sectionRows = sharedSectionCurriculum[section.id]
     if (sectionRows && sectionRows.length > 0) {
       // Exclude is_elective rows.
@@ -826,7 +826,7 @@ export default function TeachingAssignmentsPage(){
             const matchedRow = curriculum.find(r => r.id === c.id);
             return matchedRow?.department?.code || (matchedRow?.department as any)?.code;
           })();
-          
+
           if (selectedDept) {
             return subjectDeptId === selectedDept;
           }
@@ -864,13 +864,13 @@ export default function TeachingAssignmentsPage(){
     return assignments.filter(a => {
       // Normalize section ID from various possible sources
       const aSectionId = Number(
-        a.section_details?.id || 
-        (a as any).section_details?.id || 
-        a.section || 
-        (a as any).section_id || 
+        a.section_details?.id ||
+        (a as any).section_details?.id ||
+        a.section ||
+        (a as any).section_id ||
         0
       );
-      
+
       // Normalize curriculum row ID from various possible sources
       const aCurriculumRowId = Number(
         a.curriculum_row_details?.id ||
@@ -879,7 +879,7 @@ export default function TeachingAssignmentsPage(){
         (a as any).curriculum_row_id ||
         0
       );
-      
+
       return aSectionId === Number(sectionId) && aCurriculumRowId === Number(curricularRowId);
     });
   }
@@ -900,13 +900,13 @@ export default function TeachingAssignmentsPage(){
     return assignments.find(a => {
       // Normalize section ID from various possible sources
       const aSectionId = Number(
-        a.section_details?.id || 
-        (a as any).section_details?.id || 
-        a.section || 
-        (a as any).section_id || 
+        a.section_details?.id ||
+        (a as any).section_details?.id ||
+        a.section ||
+        (a as any).section_id ||
         0
       );
-      
+
       // Normalize curriculum row ID from various possible sources
       const aCurriculumRowId = Number(
         a.curriculum_row_details?.id ||
@@ -915,11 +915,11 @@ export default function TeachingAssignmentsPage(){
         (a as any).curriculum_row_id ||
         0
       );
-      
+
       // Use strict equality after normalization
       const sectionMatches = aSectionId === Number(sectionId);
       const curriculumMatches = aCurriculumRowId === Number(curricularRowId);
-      
+
       return sectionMatches && curriculumMatches;
     });
   }
@@ -929,7 +929,7 @@ export default function TeachingAssignmentsPage(){
   // Helper to get staff info from assignment, falling back to staff list lookup if needed
   const getAssignedStaffInfo = (assignment: TeachingAssignment) => {
     if (!assignment) return { id: '', staffId: '', name: '' }
-    
+
     // If we have staff_details, use it
     if (assignment.staff_details) {
       return {
@@ -938,7 +938,7 @@ export default function TeachingAssignmentsPage(){
         name: getAssignmentStaffName(assignment.staff_details)
       }
     }
-    
+
     // Otherwise try to find the staff from the staff list
     const staffId = typeof assignment.staff === 'number' ? assignment.staff : (assignment.staff_details?.id || assignment.staff)
     const foundStaff = staff.find(s => s.id == staffId)
@@ -949,7 +949,7 @@ export default function TeachingAssignmentsPage(){
         name: getStaffDisplayName(foundStaff)
       }
     }
-    
+
     return { id: '', staffId: '', name: '—' }
   }
 
@@ -1012,37 +1012,37 @@ export default function TeachingAssignmentsPage(){
       alert('Select staff')
       return Promise.reject('No staff selected')
     }
-    
+
     try {
       if (existingAssignmentId) {
         // Update existing assignment
         const payload = { staff_id: Number(staffId), is_active: true }
-        const res = await fetchWithAuth(`/api/academics/teaching-assignments/${existingAssignmentId}/`, { 
-          method: 'PATCH', 
-          body: JSON.stringify(payload) 
+        const res = await fetchWithAuth(`/api/academics/teaching-assignments/${existingAssignmentId}/`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload)
         })
-        if (res.ok) { 
-          alert('Updated successfully'); 
+        if (res.ok) {
+          alert('Updated successfully');
           fetchData(true);
           return Promise.resolve()
-        } else { 
-          const txt = await res.text(); 
+        } else {
+          const txt = await res.text();
           alert('Error: ' + txt);
           return Promise.reject(txt)
         }
       } else {
         // Create new assignment
         const payload = { elective_subject_id: electiveId, staff_id: Number(staffId), is_active: true }
-        const res = await fetchWithAuth('/api/academics/teaching-assignments/', { 
-          method: 'POST', 
-          body: JSON.stringify(payload) 
+        const res = await fetchWithAuth('/api/academics/teaching-assignments/', {
+          method: 'POST',
+          body: JSON.stringify(payload)
         })
-        if (res.ok) { 
-          alert('Assigned successfully'); 
+        if (res.ok) {
+          alert('Assigned successfully');
           fetchData(true);
           return Promise.resolve()
-        } else { 
-          const txt = await res.text(); 
+        } else {
+          const txt = await res.text();
           alert('Error: ' + txt);
           return Promise.reject(txt)
         }
@@ -1077,7 +1077,7 @@ export default function TeachingAssignmentsPage(){
   const saveBulkEditing = async () => {
     let successCount = 0;
     let failureCount = 0;
-    
+
     try {
       // Show all sections - department filter only affects staff dropdown
       const visibleSections = sections
@@ -1089,7 +1089,7 @@ export default function TeachingAssignmentsPage(){
           if (!staffSel) continue;
 
           const isMulti = isMultiFacultyAllowed(section, subject);
-          const selectedIds = isMulti 
+          const selectedIds = isMulti
             ? JSON.parse(staffSel.value || '[]').map(Number).filter(Boolean)
             : [Number(staffSel.value)].filter(Boolean);
 
@@ -1108,9 +1108,9 @@ export default function TeachingAssignmentsPage(){
             // Add new
             const toAdd = selectedIds.filter((id: number) => !existingStaffIds.includes(id));
             for (const id of toAdd) {
-              const res = await fetchWithAuth('/api/academics/teaching-assignments/', { 
-                method: 'POST', 
-                body: JSON.stringify({ section_id: section.id, curriculum_row_id: subject.id, staff_id: id, is_active: true }) 
+              const res = await fetchWithAuth('/api/academics/teaching-assignments/', {
+                method: 'POST',
+                body: JSON.stringify({ section_id: section.id, curriculum_row_id: subject.id, staff_id: id, is_active: true })
               });
               if (res.ok) successCount++;
               else failureCount++;
@@ -1168,11 +1168,11 @@ export default function TeachingAssignmentsPage(){
 
     let successCount = 0;
     let failureCount = 0;
-    
+
     try {
       for (const parent of getFilteredElectiveParents()) {
         const options = electiveOptions.filter((e: any) => e.parent === parent.id);
-        
+
         for (const opt of options) {
           // Skip cross-department electives — they are read-only for this department
           if (opt.is_cross_department) continue;
@@ -1182,7 +1182,7 @@ export default function TeachingAssignmentsPage(){
           const selectedIds = JSON.parse(staffSel.value || '[]').map(Number).filter(Boolean);
           const existingElectiveAssignments = findExistingElectiveAssignments(opt.id);
           const existingStaffIds = existingElectiveAssignments.map((a: any) => a.staff_details?.id || a.staff);
-          
+
           try {
             // Delete removed
             const toDelete = existingElectiveAssignments.filter((a: any) => !selectedIds.includes(a.staff_details?.id || a.staff));
@@ -1191,13 +1191,13 @@ export default function TeachingAssignmentsPage(){
               if (res.ok) successCount++;
               else failureCount++;
             }
-            
+
             // Add new
             const toAdd = selectedIds.filter((id: number) => !existingStaffIds.includes(id));
             for (const id of toAdd) {
-              const res = await fetchWithAuth('/api/academics/teaching-assignments/', { 
-                method: 'POST', 
-                body: JSON.stringify({ elective_subject_id: opt.id, staff_id: id, is_active: true }) 
+              const res = await fetchWithAuth('/api/academics/teaching-assignments/', {
+                method: 'POST',
+                body: JSON.stringify({ elective_subject_id: opt.id, staff_id: id, is_active: true })
               });
               if (res.ok) successCount++;
               else failureCount++;
@@ -1326,7 +1326,7 @@ export default function TeachingAssignmentsPage(){
               </div>
             )}
           </div>
-          
+
           {(() => {
             // Show all sections - department filter only affects staff dropdown
             const visibleSections = sections
@@ -1341,7 +1341,7 @@ export default function TeachingAssignmentsPage(){
             <div className="space-y-6">
               {visibleSections.map(section => {
                 const sectionSubjects = getSectionSubjects(section);
-                
+
                 return (
                   <div key={section.id} className="border border-gray-200 rounded-lg p-4">
                     {/* Section Header */}
@@ -1396,7 +1396,7 @@ export default function TeachingAssignmentsPage(){
                               const existingAssignments = findExistingAssignments(section.id, subject.id);
                               const existingAssignment = existingAssignments[0];
                               const editing = isEditing(section.id, subject.id);
-                              
+
                               return (
                                 <tr key={`${section.id}-${subject.id}`} className="hover:bg-gray-50 transition-colors">
                                   <td className="px-4 py-3 font-medium text-gray-900">
@@ -1424,7 +1424,7 @@ export default function TeachingAssignmentsPage(){
                                   </td>
                                   <td className="px-4 py-3">
                                     {editing ? (
-                                      <SearchableStaffSelect 
+                                      <SearchableStaffSelect
                                         id={`staff-${section.id}-${subject.id}`}
                                         initialValue={isMultiFacultyAllowed(section, subject) ? existingAssignments.map(a => a.staff_details?.id || a.staff) : (existingAssignment?.staff_details?.id || existingAssignment?.staff || '')}
                                         staffList={getFilteredStaffForDeptCore(subject)}
@@ -1436,7 +1436,7 @@ export default function TeachingAssignmentsPage(){
                                           const assignedStaff = getAssignedStaffInfo(a);
                                           return (
                                             <div key={a.id} className="text-sm text-gray-900 font-medium">
-                                              {assignedStaff.staffId && assignedStaff.name 
+                                              {assignedStaff.staffId && assignedStaff.name
                                                 ? `${assignedStaff.staffId} - ${assignedStaff.name}`
                                                 : (assignedStaff.name || '—')}
                                             </div>
@@ -1453,7 +1453,7 @@ export default function TeachingAssignmentsPage(){
                                     <div className="flex items-center justify-center gap-2">
                                       {!editing && !isBulkEditMode ? (
                                         <div className="flex gap-2 justify-center">
-                                          <button 
+                                          <button
                                             onClick={() => startEditing(section.id, subject.id)}
                                             className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors border border-blue-300"
                                             title="Edit Assignment"
@@ -1485,14 +1485,14 @@ export default function TeachingAssignmentsPage(){
                                         </div>
                                       ) : editing && !isBulkEditMode ? (
                                         <>
-                                          <button 
+                                          <button
                                             onClick={async () => {
                                               const staffSel = document.getElementById(`staff-${section.id}-${subject.id}`) as HTMLInputElement;
                                               const isMulti = isMultiFacultyAllowed(section, subject);
-                                              const selectedIds = isMulti 
+                                              const selectedIds = isMulti
                                                 ? JSON.parse(staffSel?.value || '[]').map(Number).filter(Boolean)
                                                 : [Number(staffSel?.value)].filter(Boolean);
-                                                
+
                                               if (selectedIds.length === 0) {
                                                 if (existingAssignments.length > 0) {
                                                   if (!confirm('Are you sure you want to clear/delete all assignments for this subject/section?')) return;
@@ -1515,10 +1515,10 @@ export default function TeachingAssignmentsPage(){
                                                 }
                                                 return;
                                               }
-                                              
+
                                               try {
                                                 const existingStaffIds = existingAssignments.map((a: any) => a.staff_details?.id || a.staff);
-                                                
+
                                                 // Delete removed
                                                 const toDelete = existingAssignments.filter((a: any) => !selectedIds.includes(a.staff_details?.id || a.staff));
                                                 for (const a of toDelete) {
@@ -1528,13 +1528,13 @@ export default function TeachingAssignmentsPage(){
                                                     throw new Error('Failed to delete assignment: ' + (txt || res.status));
                                                   }
                                                 }
-                                                
+
                                                 // Add new
                                                 const toAdd = selectedIds.filter((id: number) => !existingStaffIds.includes(id));
                                                 for (const id of toAdd) {
-                                                  const res = await fetchWithAuth('/api/academics/teaching-assignments/', { 
-                                                    method: 'POST', 
-                                                    body: JSON.stringify({ section_id: section.id, curriculum_row_id: subject.id, staff_id: id, is_active: true }) 
+                                                  const res = await fetchWithAuth('/api/academics/teaching-assignments/', {
+                                                    method: 'POST',
+                                                    body: JSON.stringify({ section_id: section.id, curriculum_row_id: subject.id, staff_id: id, is_active: true })
                                                   });
                                                   if (!res.ok) {
                                                     const txt = await res.text().catch(() => null);
@@ -1547,7 +1547,7 @@ export default function TeachingAssignmentsPage(){
                                                     throw new Error('Failed to create assignment: ' + (errMsg || res.status));
                                                   }
                                                 }
-                                                
+
                                                 alert('Saved successfully');
                                                 cancelEditing(section.id, subject.id);
                                                 fetchData(true);
@@ -1562,7 +1562,7 @@ export default function TeachingAssignmentsPage(){
                                           </button>
                                           {!isBulkEditMode && (
                                             <>
-                                              <button 
+                                              <button
                                                 onClick={() => cancelEditing(section.id, subject.id)}
                                                 className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-red-300"
                                                 title="Cancel"
@@ -1695,7 +1695,7 @@ export default function TeachingAssignmentsPage(){
                                 </td>
                                 <td className="px-4 py-2">
                                   {editing ? (
-                                    <SearchableStaffSelect 
+                                    <SearchableStaffSelect
                                       id={`staff-${sec.id}-${parent.id}`}
                                       initialValue={isMultiFacultyAllowed(sec, parent) ? existingAssignments.map(a => a.staff_details?.id || a.staff) : (existingAssignment?.staff_details?.id || existingAssignment?.staff || '')}
                                       staffList={getFilteredStaffForDeptCore(parent)}
@@ -1707,7 +1707,7 @@ export default function TeachingAssignmentsPage(){
                                         const assignedStaff = getAssignedStaffInfo(a);
                                         return (
                                           <span key={a.id} className="text-sm text-gray-900 font-medium">
-                                            {assignedStaff.staffId && assignedStaff.name 
+                                            {assignedStaff.staffId && assignedStaff.name
                                               ? `${assignedStaff.staffId} - ${assignedStaff.name}`
                                               : (assignedStaff.name || '—')}
                                           </span>
@@ -1725,10 +1725,10 @@ export default function TeachingAssignmentsPage(){
                                         onClick={async () => {
                                           const sel = document.getElementById(`staff-${sec.id}-${parent.id}`) as HTMLInputElement;
                                           const isMulti = isMultiFacultyAllowed(sec, parent);
-                                          const selectedIds = isMulti 
+                                          const selectedIds = isMulti
                                             ? JSON.parse(sel?.value || '[]').map(Number).filter(Boolean)
                                             : [Number(sel?.value)].filter(Boolean);
-                                          
+
                                           if (selectedIds.length === 0) {
                                             if (existingAssignments.length > 0) {
                                               if (!confirm('Are you sure you want to clear/delete all assignments for this core subject?')) return;
@@ -1755,7 +1755,7 @@ export default function TeachingAssignmentsPage(){
                                           try {
                                             const existing = existingAssignments;
                                             const existingStaffIds = existing.map((a: any) => a.staff_details?.id || a.staff);
-                                            
+
                                             const toDelete = existing.filter((a: any) => !selectedIds.includes(a.staff_details?.id || a.staff));
                                             for (const a of toDelete) {
                                               const res = await fetchWithAuth(`/api/academics/teaching-assignments/${a.id}/`, { method: 'DELETE' });
@@ -1764,7 +1764,7 @@ export default function TeachingAssignmentsPage(){
                                                 throw new Error('Failed to delete assignment: ' + (txt || res.status));
                                               }
                                             }
-                                            
+
                                             const toAdd = selectedIds.filter((id: number) => !existingStaffIds.includes(id));
                                             for (const id of toAdd) {
                                               const res = await fetchWithAuth('/api/academics/teaching-assignments/', {
@@ -1782,7 +1782,7 @@ export default function TeachingAssignmentsPage(){
                                                 throw new Error('Failed to create assignment: ' + (errMsg || res.status));
                                               }
                                             }
-                                            
+
                                             alert('Saved successfully');
                                             cancelEditing(sec.id, parent.id);
                                             fetchData(true);
@@ -1907,7 +1907,7 @@ export default function TeachingAssignmentsPage(){
               </div>
             )}
           </div>
-          
+
           {/* Department Filter Buttons */}
           {userDepartments.length > 1 && (
             <div className="mb-6">
@@ -2010,8 +2010,8 @@ export default function TeachingAssignmentsPage(){
                       // Get own electives matching this parent by parent ID.
                       // When parent comes from a shared section it has no 'department' field;
                       // rely on parent.id (CurriculumDepartment PK) uniqueness instead.
-                      const ownElectives = (electiveOptions || []).filter((e: any) => 
-                        e.parent === parent.id && 
+                      const ownElectives = (electiveOptions || []).filter((e: any) =>
+                        e.parent === parent.id &&
                         !e.is_cross_department &&
                         // Only add dept check when parent has explicit department info
                         (!parent.department || !e.department || e.department.id === parent.department.id)
@@ -2019,9 +2019,9 @@ export default function TeachingAssignmentsPage(){
                       // Get cross-dept electives matching this parent by name, regulation, and semester
                       // This ensures we only show shared electives that belong to the same curriculum context
                       const parentName = (parent.course_name || parent.course_code || '').toLowerCase();
-                      const crossDeptElectives = (electiveOptions || []).filter((e: any) => 
-                        e.is_cross_department && 
-                        e.parent_name && 
+                      const crossDeptElectives = (electiveOptions || []).filter((e: any) =>
+                        e.is_cross_department &&
+                        e.parent_name &&
                         e.parent_name.toLowerCase() === parentName &&
                         e.regulation === parent.regulation &&
                         e.semester === parent.semester
@@ -2058,7 +2058,7 @@ export default function TeachingAssignmentsPage(){
                                     const assignedStaff = getAssignedStaffInfo(a);
                                     return (
                                       <div key={a.id} className="text-sm text-gray-900 font-medium">
-                                        {assignedStaff.staffId && assignedStaff.name 
+                                        {assignedStaff.staffId && assignedStaff.name
                                           ? `${assignedStaff.staffId} - ${assignedStaff.name}`
                                           : (assignedStaff.name || '—')}
                                       </div>
@@ -2069,7 +2069,7 @@ export default function TeachingAssignmentsPage(){
                                 <div className="text-sm text-gray-400 italic">Managed by {opt.owner_department_name?.split(' - ')[1] || opt.owner_department_name?.split(' - ')[0] || 'owner dept'}</div>
                               )
                             ) : editingElective ? (
-                              <SearchableStaffSelect 
+                              <SearchableStaffSelect
                                 id={`elective-staff-${opt.id}`}
                                 initialValue={existingElectiveAssignments.map(a => a.staff_details?.id || a.staff)}
                                 staffList={getFilteredStaffForElective()}
@@ -2079,7 +2079,7 @@ export default function TeachingAssignmentsPage(){
                               <div className="text-sm text-gray-900 font-medium">
                                 {(() => {
                                   const assignedStaff = getAssignedStaffInfo(existingElectiveAssignment)
-                                  return assignedStaff.staffId && assignedStaff.name 
+                                  return assignedStaff.staffId && assignedStaff.name
                                     ? `${assignedStaff.staffId} - ${assignedStaff.name}`
                                     : (assignedStaff.name || '—')
                                 })()}
@@ -2096,7 +2096,7 @@ export default function TeachingAssignmentsPage(){
                               <span className="text-xs text-gray-400 italic">View only</span>
                             ) : !editingElective && !isBulkElectiveEditMode ? (
                               <div className="flex gap-2 justify-end md:justify-start">
-                                <button 
+                                <button
                                   onClick={() => startEditingElective(opt.id)}
                                   className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors border border-blue-300"
                                   title="Edit Assignment"
@@ -2124,7 +2124,7 @@ export default function TeachingAssignmentsPage(){
                               </div>
                             ) : editingElective && !isBulkElectiveEditMode ? (
                               <>
-                                <button 
+                                <button
                                   disabled={!canAssignElectives}
                                   onClick={async () => {
                                     if (!canAssignElectives) return alert('No permission to assign electives');
@@ -2132,7 +2132,7 @@ export default function TeachingAssignmentsPage(){
                                     if (!staffSel) return;
 
                                     const selectedIds = JSON.parse(staffSel.value || '[]').map(Number).filter(Boolean);
-                                    
+
                                     if (selectedIds.length === 0) {
                                       if (existingElectiveAssignments.length > 0) {
                                         if (!confirm('Are you sure you want to clear/delete all assignments for this elective option?')) return;
@@ -2154,22 +2154,22 @@ export default function TeachingAssignmentsPage(){
 
                                     try {
                                       const existingStaffIds = existingElectiveAssignments.map((a: any) => a.staff_details?.id || a.staff);
-                                      
+
                                       // Delete removed
                                       const toDelete = existingElectiveAssignments.filter((a: any) => !selectedIds.includes(a.staff_details?.id || a.staff));
                                       for (const a of toDelete) {
                                         await fetchWithAuth(`/api/academics/teaching-assignments/${a.id}/`, { method: 'DELETE' });
                                       }
-                                      
+
                                       // Add new
                                       const toAdd = selectedIds.filter((id: number) => !existingStaffIds.includes(id));
                                       for (const id of toAdd) {
-                                        await fetchWithAuth('/api/academics/teaching-assignments/', { 
-                                          method: 'POST', 
-                                          body: JSON.stringify({ elective_subject_id: opt.id, staff_id: id, is_active: true }) 
+                                        await fetchWithAuth('/api/academics/teaching-assignments/', {
+                                          method: 'POST',
+                                          body: JSON.stringify({ elective_subject_id: opt.id, staff_id: id, is_active: true })
                                         });
                                       }
-                                      
+
                                       alert('Saved successfully');
                                       cancelEditingElective(opt.id);
                                       fetchData(true);
@@ -2178,8 +2178,8 @@ export default function TeachingAssignmentsPage(){
                                     }
                                   }}
                                   className={`p-2 rounded-lg transition-colors ${
-                                    canAssignElectives 
-                                      ? 'text-green-600 hover:bg-green-50 border border-green-300' 
+                                    canAssignElectives
+                                      ? 'text-green-600 hover:bg-green-50 border border-green-300'
                                       : 'text-gray-400 bg-gray-100 cursor-not-allowed border border-gray-300'
                                   }`}
                                   title={canAssignElectives ? 'Save Assignment' : 'No permission'}
@@ -2188,7 +2188,7 @@ export default function TeachingAssignmentsPage(){
                                 </button>
                                 {!isBulkElectiveEditMode && (
                                   <>
-                                    <button 
+                                    <button
                                       onClick={() => cancelEditingElective(opt.id)}
                                       className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-red-300"
                                       title="Cancel"
@@ -2273,7 +2273,7 @@ export default function TeachingAssignmentsPage(){
                               <div className="text-sm text-gray-900 font-medium">
                                 {(() => {
                                   const assignedStaff = getAssignedStaffInfo(existingElectiveAssignment)
-                                  return assignedStaff.staffId && assignedStaff.name 
+                                  return assignedStaff.staffId && assignedStaff.name
                                     ? `${assignedStaff.staffId} - ${assignedStaff.name}`
                                     : (assignedStaff.name || '—')
                                 })()}

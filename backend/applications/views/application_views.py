@@ -379,7 +379,7 @@ class CreateAndSubmitView(APIView):
             if _recent and _recent.final_decision_at:
                 _cooldown_until = _recent.final_decision_at + timedelta(hours=_pre_flow.sla_hours)
                 _now = timezone.now()
-                
+
                 # Check for gatepass expiry exception
                 _is_expired_gp = False
                 if _is_gatepass_application(_recent):
@@ -473,10 +473,10 @@ class CreateAndSubmitView(APIView):
             starter_roles = []
             allowed = False
             user_roles = list(request.user.roles.all())
-            
+
             if getattr(starter_step, 'stage_id', None):
                 starter_label = getattr(starter_step.stage, 'name', None)
-                
+
                 # Check if user is explicitly pinned to this stage
                 try:
                     if app_models.ApplicationRoleHierarchyStageUser.objects.filter(
@@ -485,7 +485,7 @@ class CreateAndSubmitView(APIView):
                         allowed = True
                 except Exception:
                     pass
-                
+
                 role_ids = (
                     app_models.ApplicationRoleHierarchyStageRole.objects
                     .filter(stage_id=starter_step.stage_id)
@@ -545,7 +545,7 @@ class CreateAndSubmitView(APIView):
             # Auto-advance step 1 if user matches the step (role or stage)
             step1 = approval_engine.get_current_approval_step(application)
             should_auto_advance = False
-            
+
             if step1:
                 # 1. Direct role match
                 if getattr(step1, 'role', None) and step1.role in user_roles:

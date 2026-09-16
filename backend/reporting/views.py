@@ -57,7 +57,7 @@ def _mark_response(request, format_key: str, default_filename: str):
     filters = _filters_from_request(request)
     page = _to_positive_int(request.query_params.get('page', 1), 1)
     page_size = _to_positive_int(request.query_params.get('page_size', 500), 500)
-    
+
     try:
         result = query_reporting_view(
             format_key=format_key,

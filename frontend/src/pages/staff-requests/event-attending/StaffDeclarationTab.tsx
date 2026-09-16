@@ -45,7 +45,7 @@ export default function StaffDeclarationTab() {
     const val = col === 'normal_events_budget' ? applyVal.normal : applyVal.conf;
     if (!window.confirm(`Set ${col === 'normal_events_budget' ? 'Normal Events' : 'Conference'} budget to ₹${val} for ALL currently filtered staff?`)) return;
     setMsg('');
-    
+
     // Applying to all currently filtered staff!
     let successCount = 0;
     try {
@@ -105,17 +105,17 @@ export default function StaffDeclarationTab() {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-white p-4 border border-gray-200 rounded-xl">
         <input type="text" placeholder="Search staff..." value={search} onChange={e => setSearch(e.target.value)}
           className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" />
-        
+
         <select value={deptFilter} onChange={e => setDeptFilter(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
           <option value="">All Departments</option>
           {departments.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
-        
+
         <select value={desigFilter} onChange={e => setDesigFilter(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
           <option value="">All Designations</option>
           {designations.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
-        
+
         <select value={expFilter} onChange={e => setExpFilter(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
           <option value="">All Experience</option>
           <option value="<2">Less than 2 yrs</option>

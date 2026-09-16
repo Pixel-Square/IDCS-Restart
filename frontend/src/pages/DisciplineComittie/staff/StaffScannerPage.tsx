@@ -1,17 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Camera, 
-  CameraOff, 
-  QrCode, 
-  User, 
-  CheckCircle2, 
-  AlertTriangle, 
+import {
+  Camera,
+  CameraOff,
+  QrCode,
+  User,
+  CheckCircle2,
+  AlertTriangle,
   AlertCircle,
-  Sparkles, 
-  X, 
-  Loader2, 
-  Check, 
-  Search, 
+  Sparkles,
+  X,
+  Loader2,
+  Check,
+  Search,
   RefreshCw,
   Clock,
   Building2,
@@ -22,12 +22,12 @@ import {
 } from 'lucide-react';
 import Barcode from 'react-barcode';
 import { getApiBase } from '../../../services/apiBase';
-import { 
-  DisciplineCategory, 
-  DisciplineStudent, 
-  fetchDisciplineCategories, 
-  fetchDisciplineStudents, 
-  createDisciplineLog 
+import {
+  DisciplineCategory,
+  DisciplineStudent,
+  fetchDisciplineCategories,
+  fetchDisciplineStudents,
+  createDisciplineLog
 } from '../../../services/discipline';
 
 function resolveProfileImageUrl(url?: string | null): string | null {
@@ -345,7 +345,7 @@ export default function StaffScannerPage({ onIncidentLogged }: { onIncidentLogge
                 const ctx = canvas.getContext('2d', { willReadFrequently: true });
                 if (ctx) {
                   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                  
+
                   // Method A: decodeFromCanvas if reader is available
                   if (zxingReader && typeof zxingReader.decodeFromCanvas === 'function') {
                     try {
@@ -743,7 +743,7 @@ export default function StaffScannerPage({ onIncidentLogged }: { onIncidentLogge
                   <h3 className="text-sm sm:text-base font-extrabold text-slate-900 leading-snug break-words">
                     {scannedStudent.name}
                   </h3>
-                  
+
                   {/* Badges Container - Wrapped cleanly on small mobile screens */}
                   <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mt-1">
                     <span className="text-[11px] sm:text-xs font-mono font-bold text-indigo-700 bg-white/90 px-2 py-0.5 rounded-md border border-indigo-200/80 shadow-2xs truncate max-w-[150px] sm:max-w-none">

@@ -275,8 +275,8 @@ export default function AnalyticsTab() {
                         </td>
                         <td className="px-4 py-3.5 text-center">
                           <span className={`text-xs px-2 py-1 rounded-lg font-bold uppercase tracking-wider ${
-                            row.status === 'approved' ? 'bg-emerald-100 text-emerald-800' 
-                            : row.status === 'rejected' ? 'bg-red-100 text-red-800' 
+                            row.status === 'approved' ? 'bg-emerald-100 text-emerald-800'
+                            : row.status === 'rejected' ? 'bg-red-100 text-red-800'
                             : 'bg-amber-100 text-amber-800'
                           }`}>
                             {row.status}

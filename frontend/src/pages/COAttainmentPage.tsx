@@ -365,7 +365,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
     const ct = normalizeClassType(classType);
     return (ct === 'THEORY' || ct === 'TCPL' || ct === 'TCPR') && Boolean(theoryEnabled.model);
   }, [classType, theoryEnabled.model]);
-  
+
   // Determine maximum CO number and active COs based on class type
   const maxCONumber = useMemo(() => {
     const enabled = Object.entries(theoryEnabled)
@@ -373,7 +373,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
       .map(([k]) => k);
     return getMaxCONumber(classType, isLabCourse, enabled);
   }, [classType, isLabCourse, theoryEnabled]);
-  
+
   const activeCONumbers = useMemo(() => getActiveCONumbers(maxCONumber), [maxCONumber]);
 
   const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
@@ -642,7 +642,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
         const all = await fetchMyTeachingAssignments();
         if (!mounted) return;
         let filtered = (all || []).filter((a) => a.subject_code === courseId);
-        
+
         // If user doesn't have a TA for this subject, try to fetch from server
         if (filtered.length === 0) {
           try {
@@ -656,7 +656,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
             console.warn('Server TA list fetch failed:', err);
           }
         }
-        
+
         setTas(filtered);
         setTaError(null);
 
@@ -686,7 +686,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
       setClassType(initialClassType);
       return;
     }
-    
+
     let mounted = true;
     (async () => {
       try {
@@ -700,7 +700,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
           setClassType(taClassType);
           return;
         }
-        
+
         // Check if this is an elective TA first
         const electiveSubjectId = (ta as any)?.elective_subject_id;
         if (electiveSubjectId && !(ta as any)?.section_id) {
@@ -711,7 +711,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
               const electiveData = await electiveRes.json();
               const electiveClassType = electiveData?.class_type;
               console.log('[COAttainment] Elective subject class_type:', electiveClassType);
-              
+
               if (electiveClassType) {
                 if (!mounted) return;
                 setClassType(electiveClassType);
@@ -724,7 +724,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
             console.warn('[COAttainment] Failed to fetch elective subject:', err);
           }
         }
-        
+
         const curriculumRowId = (ta as any)?.curriculum_row_id;
         if (!curriculumRowId) {
           // fallback: search dept rows / masters for this course code and pick its class_type

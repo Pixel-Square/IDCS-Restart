@@ -104,22 +104,22 @@ export default function MasterEditor() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Regulation</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-                value={form.regulation || ''} 
-                onChange={e => setForm({...form, regulation: e.target.value})} 
-                required 
+              <input
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                value={form.regulation || ''}
+                onChange={e => setForm({...form, regulation: e.target.value})}
+                required
               />
             </div>
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Semester</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-                type="number" 
-                min={1} 
-                value={form.semester || 1} 
-                onChange={e => setForm({...form, semester: Number(e.target.value)})} 
-                required 
+              <input
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                type="number"
+                min={1}
+                value={form.semester || 1}
+                onChange={e => setForm({...form, semester: Number(e.target.value)})}
+                required
               />
             </div>
           </div>
@@ -141,39 +141,39 @@ export default function MasterEditor() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Course Code</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-                value={form.course_code ?? ''} 
-                onChange={e => setForm({...form, course_code: e.target.value})} 
-                placeholder="Optional" 
+              <input
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                value={form.course_code ?? ''}
+                onChange={e => setForm({...form, course_code: e.target.value})}
+                placeholder="Optional"
               />
             </div>
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Course Name</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-                value={form.course_name || ''} 
-                onChange={e => setForm({...form, course_name: e.target.value})} 
-                required 
+              <input
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                value={form.course_name || ''}
+                onChange={e => setForm({...form, course_name: e.target.value})}
+                required
               />
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">CAT</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-                value={form.category || ''} 
-                onChange={e => setForm({...form, category: e.target.value})} 
-                placeholder="e.g. CORE" 
+              <input
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                value={form.category || ''}
+                onChange={e => setForm({...form, category: e.target.value})}
+                placeholder="e.g. CORE"
               />
             </div>
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Class Type</label>
-              <select 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-                value={form.class_type || 'THEORY'} 
-                onChange={e => setForm({...form, class_type: e.target.value})} 
+              <select
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                value={form.class_type || 'THEORY'}
+                onChange={e => setForm({...form, class_type: e.target.value})}
               >
                 {CLASS_TYPES.map(type => (
                   <option key={type.value} value={type.value}>{type.label}</option>
@@ -182,10 +182,10 @@ export default function MasterEditor() {
             </div>
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">QP Type</label>
-              <select 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-                value={form.qp_type || 'QP1'} 
-                onChange={e => setForm({...form, qp_type: e.target.value})} 
+              <select
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                value={form.qp_type || 'QP1'}
+                onChange={e => setForm({...form, qp_type: e.target.value})}
               >
                 {QP_TYPES.map(type => (
                   <option key={type.value} value={type.value}>{type.label}</option>
@@ -196,52 +196,52 @@ export default function MasterEditor() {
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">L</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
-                type="number" 
-                min={0} 
-                value={form.l || 0} 
-                onChange={e => setForm({...form, l: Number(e.target.value)})} 
+              <input
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm"
+                type="number"
+                min={0}
+                value={form.l || 0}
+                onChange={e => setForm({...form, l: Number(e.target.value)})}
               />
             </div>
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">T</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
-                type="number" 
-                min={0} 
-                value={form.t || 0} 
-                onChange={e => setForm({...form, t: Number(e.target.value)})} 
+              <input
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm"
+                type="number"
+                min={0}
+                value={form.t || 0}
+                onChange={e => setForm({...form, t: Number(e.target.value)})}
               />
             </div>
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">P</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
-                type="number" 
-                min={0} 
-                value={form.p || 0} 
-                onChange={e => setForm({...form, p: Number(e.target.value)})} 
+              <input
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm"
+                type="number"
+                min={0}
+                value={form.p || 0}
+                onChange={e => setForm({...form, p: Number(e.target.value)})}
               />
             </div>
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">S</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
-                type="number" 
-                min={0} 
-                value={form.s || 0} 
-                onChange={e => setForm({...form, s: Number(e.target.value)})} 
+              <input
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm"
+                type="number"
+                min={0}
+                value={form.s || 0}
+                onChange={e => setForm({...form, s: Number(e.target.value)})}
               />
             </div>
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">C</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm" 
-                type="number" 
-                min={0} 
-                value={form.c || 0} 
-                onChange={e => setForm({...form, c: Number(e.target.value)})} 
+              <input
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-sm"
+                type="number"
+                min={0}
+                value={form.c || 0}
+                onChange={e => setForm({...form, c: Number(e.target.value)})}
               />
             </div>
           </div>
@@ -269,11 +269,11 @@ export default function MasterEditor() {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
-              <input 
-                type="checkbox" 
-                checked={!!form.for_all_departments} 
-                onChange={e => setForm({...form, for_all_departments: e.target.checked})} 
-                id="forAllDepts" 
+              <input
+                type="checkbox"
+                checked={!!form.for_all_departments}
+                onChange={e => setForm({...form, for_all_departments: e.target.checked})}
+                id="forAllDepts"
                 className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
               />
               <label htmlFor="forAllDepts" className="text-xs sm:text-sm font-semibold text-indigo-900">For All Departments</label>
@@ -311,21 +311,21 @@ export default function MasterEditor() {
           </div>
           <div className="flex flex-col sm:flex-row gap-2">
             <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
-              <input 
-                type="checkbox" 
-                checked={!!form.editable} 
-                onChange={e => setForm({...form, editable: e.target.checked})} 
-                id="editable" 
+              <input
+                type="checkbox"
+                checked={!!form.editable}
+                onChange={e => setForm({...form, editable: e.target.checked})}
+                id="editable"
                 className="w-3.5 h-3.5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
               />
               <label htmlFor="editable" className="text-xs sm:text-sm font-semibold text-indigo-900">Editable</label>
             </div>
             <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
-              <input 
-                type="checkbox" 
-                checked={!!form.is_elective} 
-                onChange={e => setForm({...form, is_elective: e.target.checked})} 
-                id="is_elective" 
+              <input
+                type="checkbox"
+                checked={!!form.is_elective}
+                onChange={e => setForm({...form, is_elective: e.target.checked})}
+                id="is_elective"
                 className="w-3.5 h-3.5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
               />
               <label htmlFor="is_elective" className="text-xs sm:text-sm font-semibold text-indigo-900">Is Elective</label>
@@ -334,7 +334,7 @@ export default function MasterEditor() {
           {savedMessage && (
             <div className="bg-green-100 text-green-800 px-3 py-1.5 rounded-lg font-semibold text-sm inline-block">{savedMessage}</div>
           )}
-          
+
           <div className="flex flex-col sm:flex-row gap-2">
             <button
               type="submit"

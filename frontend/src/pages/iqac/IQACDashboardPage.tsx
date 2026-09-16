@@ -260,15 +260,15 @@ export default function IQACDashboardPage(): JSX.Element {
                 Action Required: Event Budget Conditions Expired
               </h4>
               <p style={{ margin: '4px 0 0 0', color: '#b45309', fontSize: '13px' }}>
-                {expiryStatus.count === 0 
-                  ? 'No event budget conditions have been set up yet.' 
+                {expiryStatus.count === 0
+                  ? 'No event budget conditions have been set up yet.'
                   : `The current event budget conditions expired on ${expiryStatus.last_to_date || 'a past date'}.`}
                 {' '}Please review and update the conditions for the new academic period.
               </p>
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <Link 
+            <Link
               to="/staff-requests/event-attending"
               onClick={() => {
                 // Ideally this would link directly to the tab, but since the tab state is inside EventAttendingPage,
@@ -287,7 +287,7 @@ export default function IQACDashboardPage(): JSX.Element {
             >
               Update Conditions
             </Link>
-            <button 
+            <button
               onClick={() => setShowExpiryPopup(false)}
               style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#b45309' }}
               title="Dismiss"

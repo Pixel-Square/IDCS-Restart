@@ -268,14 +268,24 @@ def _read_sheet_values(
     sheet_name: str,
     headers: dict[str, str],
 ) -> list[list[Any]]:
-    encoded_sheet_name = quote(sheet_name, safe='')
+    # Handle single quotes in sheet names or special characters
+    clean_sheet_name = sheet_name.replace("'", "\\'") if sheet_name else 'Sheet1'
+    encoded_sheet_name = quote(f"'{clean_sheet_name}'" if not (sheet_name.startswith("'") and sheet_name.endswith("'")) else sheet_name, safe='')
     response = requests.get(
-        f'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_sheet_name}!A1:Z1000',
+        f'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_sheet_name}',
         headers={**headers, 'Accept': 'application/json'},
         timeout=30,
     )
     if not response.ok:
-        raise GoogleSheetsServiceError(f'Google Sheets read failed for {sheet_name}: {response.text}')
+        # Fallback to unquoted name if quoted fails
+        encoded_fallback = quote(sheet_name, safe='')
+        response = requests.get(
+            f'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_fallback}',
+            headers={**headers, 'Accept': 'application/json'},
+            timeout=30,
+        )
+        if not response.ok:
+            raise GoogleSheetsServiceError(f'Google Sheets read failed for {sheet_name}: {response.text}')
 
     payload = response.json() or {}
     return payload.get('values') or []
@@ -308,11 +318,23 @@ def _get_qp_specs_for_exam(exam_assignment) -> list[dict[str, Any]]:
     except Exception:
         pass
 
-    pattern = getattr(exam_assignment, 'qp_pattern', None) or {}
+    pattern = exam_assignment.get_qp_pattern() if hasattr(exam_assignment, 'get_qp_pattern') else (getattr(exam_assignment, 'qp_pattern', None) or {})
     if not isinstance(pattern, dict):
         return []
 
     questions: list[dict[str, Any]] = []
+    if isinstance(pattern.get('questions'), list) and pattern['questions']:
+        for i, q in enumerate(pattern['questions']):
+            if isinstance(q, dict):
+                questions.append({
+                    'id': str(q.get('id') or f'q{i}'),
+                    'title': str(q.get('question_number') or q.get('title') or f'Q{i + 1}'),
+                    'max_marks': q.get('max_marks') or 0,
+                    'co': q.get('co_number') or q.get('co') or 0,
+                    'btl': q.get('btl_level') or q.get('btl') or None,
+                })
+        return questions
+
     titles = pattern.get('titles') or []
     marks_list = pattern.get('marks') or []
     cos = pattern.get('cos') or []
@@ -323,7 +345,7 @@ def _get_qp_specs_for_exam(exam_assignment) -> list[dict[str, Any]]:
         if i < len(enabled) and not enabled[i]:
             continue
         questions.append({
-            'id': f'q{i + 1}',
+            'id': f'q{i}',
             'title': titles[i] if i < len(titles) else str(i + 1),
             'max_marks': marks_list[i] if i < len(marks_list) else 0,
             'co': cos[i] if i < len(cos) else 0,
@@ -424,8 +446,8 @@ def sync_google_sheet_to_backend(
     sheet_name: str | None = None,
     column_mapping: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    from academics.models import StudentProfile
-    from .models import AcV2StudentMark
+    from academics.models import StudentProfile, StudentSectionAssignment
+    from .models import AcV2StudentMark, AcV2DraftMark
 
     sheet_title = sheet_name or (exam_assignment.exam_display_name or exam_assignment.exam or 'Marks')
     headers = _build_google_auth_headers(config)
@@ -447,47 +469,76 @@ def sync_google_sheet_to_backend(
 
     title_to_column_index: dict[str, int] = {}
     if isinstance(raw_question_columns, dict):
-        for title, column_label in raw_question_columns.items():
+        for raw_key, column_label in raw_question_columns.items():
             column_index = _column_label_to_index(str(column_label or ''))
             if column_index is None:
                 continue
-            raw_title_str = str(title or '').strip()
-            if raw_title_str:
-                title_to_column_index[raw_title_str] = column_index
-                title_to_column_index[raw_title_str.lower()] = column_index
-                # Strip leading 'Q' or 'q' if present
-                stripped = raw_title_str.lstrip('Qq').strip()
+            key_str = str(raw_key or '').strip()
+            if key_str:
+                title_to_column_index[key_str] = column_index
+                title_to_column_index[key_str.lower()] = column_index
+                # Strip leading 'Q' or 'q'
+                stripped = key_str.lstrip('Qq').strip()
                 if stripped:
                     title_to_column_index[stripped] = column_index
                     title_to_column_index[stripped.lower()] = column_index
 
+    # Preload section students for fast, accurate lookup
+    sec_students_map: dict[str, StudentProfile] = {}
+    try:
+        ta_sec = getattr(getattr(exam_assignment.section, 'teaching_assignment', None), 'section', None)
+        if ta_sec:
+            for sa in StudentSectionAssignment.objects.filter(section=ta_sec, end_date__isnull=True).select_related('student__user'):
+                sp = sa.student
+                if sp and sp.reg_no:
+                    cleaned = re.sub(r'\s+', '', str(sp.reg_no)).upper()
+                    sec_students_map[cleaned] = sp
+    except Exception:
+        pass
+
     updated_count = 0
-    for row in values[1:]:
+    for row in values:
         if not row:
             continue
-        reg_no = str(_safe_row_value(row, reg_column_index) or '').strip()
-        student_name = str(_safe_row_value(row, name_column_index) or '').strip()
-        if not reg_no:
+        raw_reg = str(_safe_row_value(row, reg_column_index) or '').strip()
+        if not raw_reg:
             continue
 
-        student = StudentProfile.objects.filter(reg_no__iexact=reg_no).first()
+        cleaned_reg = re.sub(r'\s+', '', raw_reg).upper()
+        # Look up student first in section, then globally
+        student = sec_students_map.get(cleaned_reg)
         if not student:
+            student = StudentProfile.objects.filter(reg_no__iexact=raw_reg).first()
+            if not student and cleaned_reg:
+                student = StudentProfile.objects.filter(reg_no__iexact=cleaned_reg).first()
+        if not student:
+            # Row is not a recognized student (e.g. header row, title row)
             continue
+
+        student_name = str(_safe_row_value(row, name_column_index) or '').strip()
 
         question_marks = {}
         for index, question in enumerate(questions):
             q_title = str(question.get('title') or '').strip()
             q_id = str(question.get('id') or '').strip()
+            # Try specific key matches: q_id, index-based keys, or title
             mapped_col_index = (
-                title_to_column_index.get(q_title)
-                or title_to_column_index.get(q_title.lower())
-                or title_to_column_index.get(q_id)
+                title_to_column_index.get(q_id)
                 or title_to_column_index.get(q_id.lower())
+                or title_to_column_index.get(f"q_{index}")
+                or title_to_column_index.get(f"q{index}")
+                or title_to_column_index.get(str(index))
                 or title_to_column_index.get(str(index + 1))
                 or title_to_column_index.get(f"Q{index + 1}")
                 or title_to_column_index.get(f"q{index + 1}")
+                or title_to_column_index.get(q_title)
+                or title_to_column_index.get(q_title.lower())
             )
             col_index = mapped_col_index if mapped_col_index is not None else (index + 2)
+            # Guard against reading from Register No. or Student Name column
+            if col_index == reg_column_index or col_index == name_column_index:
+                continue
+
             raw_value = _safe_row_value(row, col_index)
             if raw_value in ('', None):
                 continue
@@ -498,14 +549,13 @@ def sync_google_sheet_to_backend(
             question_marks[question['id']] = value
 
         total_value = None
-
         absent_value = False
 
         mark_obj, _ = AcV2StudentMark.objects.update_or_create(
             exam_assignment=exam_assignment,
             student=student,
             defaults={
-                'reg_no': reg_no,
+                'reg_no': student.reg_no or raw_reg,
                 'student_name': student_name or getattr(student, 'student_name', '') or (student.user.get_full_name() if getattr(student, 'user', None) else ''),
                 'question_marks': question_marks,
                 'total_mark': total_value,
@@ -513,23 +563,24 @@ def sync_google_sheet_to_backend(
                 'is_exempted': False,
             },
         )
-        qp_pattern = exam_assignment.get_qp_pattern()
-        mark_obj.calculate_co_marks(qp_pattern)
-        mark_obj.calculate_total()
-        mark_obj.save(update_fields=['reg_no', 'student_name', 'question_marks', 'total_mark', 'is_absent', 'is_exempted', 'co1_mark', 'co2_mark', 'co3_mark', 'co4_mark', 'co5_mark', 'co6_mark'])
+        try:
+            qp_pattern = exam_assignment.get_qp_pattern()
+            mark_obj.calculate_co_marks(qp_pattern)
+            mark_obj.calculate_total()
+            mark_obj.save(update_fields=['reg_no', 'student_name', 'question_marks', 'total_mark', 'is_absent', 'is_exempted', 'co1_mark', 'co2_mark', 'co3_mark', 'co4_mark', 'co5_mark', 'co6_mark'])
+        except Exception:
+            mark_obj.save(update_fields=['reg_no', 'student_name', 'question_marks'])
 
         # Also create/update AcV2DraftMark so draft mark entry views show the marks immediately
-        from .models import AcV2DraftMark
         AcV2DraftMark.objects.update_or_create(
             exam_assignment=exam_assignment,
             student=student,
             defaults={
-                'reg_no': reg_no,
+                'reg_no': student.reg_no or raw_reg,
                 'student_name': student_name or getattr(student, 'student_name', '') or (student.user.get_full_name() if getattr(student, 'user', None) else ''),
                 'question_marks': question_marks,
                 'total_mark': mark_obj.total_mark,
                 'is_absent': absent_value,
-                'is_exempted': False,
             },
         )
         updated_count += 1

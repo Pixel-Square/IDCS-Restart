@@ -1,19 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  ShieldAlert, 
-  CheckCircle2, 
-  Clock, 
-  IndianRupee, 
-  UploadCloud, 
-  FileCheck, 
-  FileText, 
-  AlertCircle, 
-  ExternalLink, 
-  RefreshCw, 
-  User, 
-  Building2, 
-  GraduationCap, 
-  Loader2, 
+import {
+  ShieldAlert,
+  CheckCircle2,
+  Clock,
+  IndianRupee,
+  UploadCloud,
+  FileCheck,
+  FileText,
+  AlertCircle,
+  ExternalLink,
+  RefreshCw,
+  User,
+  Building2,
+  GraduationCap,
+  Loader2,
   X,
   Check,
   CreditCard,
@@ -22,10 +22,10 @@ import {
   Scale
 } from 'lucide-react';
 import { getApiBase } from '../../../services/apiBase';
-import { 
-  DisciplineLog, 
-  fetchStudentMyIncidents, 
-  uploadDisciplineReceipt 
+import {
+  DisciplineLog,
+  fetchStudentMyIncidents,
+  uploadDisciplineReceipt
 } from '../../../services/discipline';
 
 function resolveMediaUrl(url?: string | null): string | null {

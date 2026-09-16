@@ -81,7 +81,7 @@ export default function TimetableAdminPage() {
           for (const item of data) {
              let rows = [];
              let columns = [];
-             
+
              // First try to load from the new relational tables
              if (item.config_columns && item.config_columns.length > 0) {
                  columns = item.config_columns.map((c: any) => ({
@@ -132,7 +132,7 @@ export default function TimetableAdminPage() {
                  createdAt: item.created_at
              });
           }
-          
+
           setSemesterTemplates(parsedTemplates);
           // the other templates use the same struct
           const normalized = parsedTemplates.map((t: any) => normalizeTemplate(t));
@@ -154,13 +154,13 @@ export default function TimetableAdminPage() {
          columns: template.columns,
          rows: template.rows
       };
-      
+
       const response = await fetchWithAuth('/api/timetable/templates/save_frontend_template/', {
          method: 'POST',
          headers: { 'Content-Type': 'application/json' },
          body: JSON.stringify(payload)
       });
-      
+
       if (response.ok) {
          const data = await response.json();
          const finalTemplate = { ...template, id: data.id.toString() };

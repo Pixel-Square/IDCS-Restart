@@ -228,11 +228,11 @@ class AdminUserSearchView(APIView):
         query = request.query_params.get('q', '').strip()
         if not query or len(query) < 2:
             return Response([])
-            
+
         from django.contrib.auth import get_user_model
         from django.db.models import Q
         User = get_user_model()
-        
+
         # Searching staff users by username, email, or name
         users = User.objects.filter(
             Q(username__icontains=query) |
@@ -240,7 +240,7 @@ class AdminUserSearchView(APIView):
             Q(first_name__icontains=query) |
             Q(last_name__icontains=query)
         ).filter(is_active=True).distinct()[:20]
-        
+
         data = [
             {
                 'id': u.id,
@@ -258,7 +258,7 @@ class AdminSectionListView(APIView):
         from academics.models import Section
         # Only returning active/recent sections (this logic varies per college, we return all for now)
         qs = Section.objects.select_related('batch', 'batch__department').order_by('-batch__start_year', 'batch__department__short_name', 'name')
-        
+
         data = [
             {
                 'id': s.id,
@@ -494,7 +494,7 @@ class InchargeAssessmentDetailView(APIView):
             lines = []
             lines.append(f"Requested PK: {pk}")
             lines.append(f"User: {request.user.username}")
-            
+
             assessments = []
             for a in CodeAssessment.objects.all():
                 project_id = getattr(a, 'coding_project', None)
@@ -503,19 +503,19 @@ class InchargeAssessmentDetailView(APIView):
                 assessments.append(f"Assessment ID={a.id}, Title={a.title}, Type={a.assessment_type}, Status={a.status}, Course={a.session.course.id if a.session else None}, Project={project_id}")
             lines.append("All assessments:")
             lines.extend(assessments)
-            
+
             projects = []
             for p in CodingProject.objects.all():
                 projects.append(f"Project ID={p.id}, Assessment={p.assessment_id if p.assessment else None}")
             lines.append("All projects:")
             lines.extend(projects)
-            
+
             incharges = []
             for cci in CodeCourseIncharge.objects.all():
                 incharges.append(f"CourseIncharge User={cci.user.username}, Course={cci.course.id}, Active={cci.is_active}")
             lines.append("All course incharges:")
             lines.extend(incharges)
-            
+
             with open("/home/iqac2/IDCS-Restart/backend/db_diagnostic_extended.log", "w") as f:
                 f.write("\n".join(lines))
         except Exception as e:
@@ -728,12 +728,12 @@ class ProjectTreeView(APIView):
                 pass
 
         assessment = get_object_or_404(CodeAssessment, pk=assessment_id, assessment_type='CODING')
-        
+
         # Check permissions
         from .permissions import get_user_coder_role
         role = get_user_coder_role(request.user)
         print(f"CODER TREE ACCESS DEBUG: user={request.user} role={role} assessment={assessment.id} course={assessment.session.course.id}")
-        
+
         try:
             if role in ['CODE_ADMIN', 'CODE_COURSE_INCHARGE']:
                 _verify_course_access(request.user, assessment.session.course)
@@ -743,7 +743,7 @@ class ProjectTreeView(APIView):
                 if not sp:
                     print(f"CODER TREE ACCESS DENIED: reason=student_profile_not_found user={request.user}")
                     return Response({'detail': 'Student profile not found.'}, status=404)
-                
+
                 # Print enrollment count for debugging
                 enroll_exists = CodeEnrollment.objects.filter(
                     student=sp, code_class__course=assessment.session.course, is_active=True,
@@ -931,7 +931,7 @@ class ImportZipView(APIView):
                     name = info.filename.strip('/')
                     if not name:
                         continue
-                    
+
                     parts = name.split('/')
                     # If it's a directory entry or we extract parts for it
                     if info.is_dir():
@@ -957,7 +957,7 @@ class ImportZipView(APIView):
                     parts = name.split('/')
                     file_name = parts[-1]
                     dir_parts = parts[:-1]
-                    
+
                     parent = None
                     path_so_far = ""
                     for part in dir_parts:

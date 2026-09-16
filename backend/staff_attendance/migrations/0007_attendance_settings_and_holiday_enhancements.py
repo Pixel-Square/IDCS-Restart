@@ -19,14 +19,14 @@ class Migration(migrations.Migration):
             name='is_sunday',
             field=models.BooleanField(default=False, help_text='True if this is an auto-generated Sunday holiday'),
         ),
-        
+
         # Add field to track if holiday can be removed
         migrations.AddField(
             model_name='holiday',
             name='is_removable',
             field=models.BooleanField(default=True, help_text='If False, this holiday cannot be deleted'),
         ),
-        
+
         # Create AttendanceSettings model
         migrations.CreateModel(
             name='AttendanceSettings',

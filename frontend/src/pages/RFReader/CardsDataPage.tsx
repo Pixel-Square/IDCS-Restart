@@ -684,8 +684,8 @@ export default function RFReaderCardsDataPage() {
                       .toUpperCase()
                       .slice(0, 2);
                     return (
-                  <tr 
-                    key={`${row.role}-${row.id}`} 
+                  <tr
+                    key={`${row.role}-${row.id}`}
                     className="hover:bg-gray-50 transition cursor-pointer"
                     onMouseEnter={() => handleMouseEnter(row)}
                     onMouseLeave={handleMouseLeave}
@@ -774,7 +774,7 @@ export default function RFReaderCardsDataPage() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            
+
             <div className="p-6 space-y-3">
               <button
                 disabled={downloading}

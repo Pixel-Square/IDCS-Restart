@@ -292,7 +292,7 @@ export default function VersionManagementPage() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-7xl mx-auto space-y-10">
-        
+
         {/* Top Header */}
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
           <div>
@@ -451,7 +451,7 @@ export default function VersionManagementPage() {
                           Created {new Date(v.created_at).toLocaleDateString()}
                         </p>
                       </div>
-                      
+
                       {/* Action buttons */}
                       <div className="flex items-center gap-1">
                         <button

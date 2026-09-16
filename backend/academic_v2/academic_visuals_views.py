@@ -207,7 +207,7 @@ class AcademicVisualDynamicOptionsView(APIView):
             # 3. Canonical Subjects with TA Linkages & Metadata
             sub_qs = Subject.objects.all().order_by('name', 'code')
             seen_subs = set()
-            
+
             ta_qs = TeachingAssignment.objects.select_related(
                 'subject', 'section', 'academic_year', 'staff', 'staff__department'
             ).filter(subject__isnull=False)
@@ -392,7 +392,7 @@ class AcademicDashboardQueryView(APIView):
 
         # Compare By dimension
         compare_by = visual_config.get("compareBy") or visual_config.get("groupByField") or visual_config.get("legend") or ""
-        
+
         # Auto-detect comparison dimension if not explicitly specified
         if not compare_by or compare_by in ["None", "none", ""]:
             if len(selected_depts) > 1:
@@ -469,7 +469,7 @@ class AcademicDashboardQueryView(APIView):
                             sub_sem_num = int("".join(digits))
                     except:
                         sub_sem_num = 5
-                    
+
                     sec_name = "A"
                     dept_code = "CSE"
                     dept_display = "CSE"
@@ -480,7 +480,7 @@ class AcademicDashboardQueryView(APIView):
                             sec_name = item.teaching_assignment.section.name
                         if item.teaching_assignment.academic_year and item.teaching_assignment.academic_year.name:
                             acad_yr = item.teaching_assignment.academic_year.name
-                        
+
                         if item.teaching_assignment.staff and item.teaching_assignment.staff.department:
                             d_obj = item.teaching_assignment.staff.department
                             dept_code = str(d_obj.code or 'CSE').strip()
@@ -552,15 +552,15 @@ class AcademicDashboardQueryView(APIView):
         total_students = len(raw_rows)
         avg_score = round(sum([r["marks_obtained"] for r in raw_rows]) / total_students, 2) if total_students > 0 else 0.0
         avg_attendance = round(sum([r["attendance_pct"] for r in raw_rows]) / total_students, 2) if total_students > 0 else 0.0
-        
+
         above_58_students = sum([1 for r in raw_rows if r.get("is_above_58")])
         below_58_students = sum([1 for r in raw_rows if r.get("is_below_58")])
         equal_58_students = total_students - above_58_students - below_58_students
-        
+
         above_58_pct = round((above_58_students / total_students) * 100, 2) if total_students > 0 else 0.0
         below_58_pct = round((below_58_students / total_students) * 100, 2) if total_students > 0 else 0.0
         equal_58_pct = round((equal_58_students / total_students) * 100, 2) if total_students > 0 else 0.0
-        
+
         highest_mark = max([r["marks_obtained"] for r in raw_rows]) if total_students > 0 else 0.0
         lowest_mark = min([r["marks_obtained"] for r in raw_rows]) if total_students > 0 else 0.0
 
@@ -616,7 +616,7 @@ class AcademicDashboardQueryView(APIView):
         # 1. KPI & Gauge Comparison
         if vis_type in ['kpi', 'gauge']:
             metric_key = 'attendance_pct' if 'attendance' in y_axis.lower() else 'average_marks'
-            
+
             if active_series_dim:
                 kpi_groups = {}
                 for r in raw_rows:
@@ -697,7 +697,7 @@ class AcademicDashboardQueryView(APIView):
             for r in raw_rows:
                 x_val = str(r.get(x_axis_dim, "Category"))
                 ser_val = str(r.get(active_series_dim, "Value")) if active_series_dim else "Value"
-                
+
                 if y_axis in ["student_count", "above_58_count", "below_58_count"]:
                     val_num = float(r.get(y_axis, 1.0))
                 elif 'attendance' in y_axis.lower():

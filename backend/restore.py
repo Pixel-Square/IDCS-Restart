@@ -32,14 +32,14 @@ with open(dump_path, 'r', encoding='utf-8') as f:
                 elec_id = parse_val(parts[7])
                 cus_sub = parse_val(parts[8])
                 assessments_str = parse_val(parts[9])
-                
+
                 assessments = []
                 if assessments_str:
                     try:
                         assessments = json.loads(assessments_str)
                     except:
                         pass
-                
+
                 to_insert.append({
                     'id': ta_id,
                     'is_active': is_active,
@@ -77,7 +77,7 @@ for m in missing:
     if m['curriculum_row_id'] and int(m['curriculum_row_id']) not in valid_cr_ids:
         skipped += 1
         continue
-    
+
     objs.append(TeachingAssignment(**m))
 
 if objs:

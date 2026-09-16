@@ -460,7 +460,7 @@ class UserAdmin(DjangoUserAdmin):
                         # Check uniqueness based on reg_no/staff_id, not username
                         existing_user = None
                         existing_profile = None
-                        
+
                         if profile_type == 'STUDENT':
                             reg_no = r.get('reg_no')
                             # Check if reg_no already exists
@@ -882,13 +882,13 @@ class UserQueryAdmin(admin.ModelAdmin):
     readonly_fields = ('user', 'query_text', 'created_at', 'updated_at')
     fields = ('user', 'query_text', 'status', 'admin_notes', 'created_at', 'updated_at')
     ordering = ('-created_at',)
-    
+
     def query_preview(self, obj):
         """Show a preview of the query text in the list view."""
         preview = obj.query_text[:100] + '...' if len(obj.query_text) > 100 else obj.query_text
         return preview
     query_preview.short_description = 'Query Preview'
-    
+
     def has_add_permission(self, request):
         """Prevent adding queries from admin - they should be created by users via API."""
         return False
@@ -908,7 +908,7 @@ class ProfileImageUpdateRequestAdmin(admin.ModelAdmin):
 @admin.register(SuperuserImpersonationLog)
 class SuperuserImpersonationLogAdmin(admin.ModelAdmin):
     """Audit log for superuser impersonations."""
-    
+
     list_display = (
         'id',
         'superuser',
@@ -950,13 +950,13 @@ class SuperuserImpersonationLogAdmin(admin.ModelAdmin):
             'fields': ('created_at',)
         }),
     )
-    
+
     def has_add_permission(self, request):
         return False
-    
+
     def has_delete_permission(self, request, obj=None):
         return False
-    
+
     def has_change_permission(self, request, obj=None):
         return False
 
@@ -964,7 +964,7 @@ class SuperuserImpersonationLogAdmin(admin.ModelAdmin):
 @admin.register(SuperuserImpersonationPermission)
 class SuperuserImpersonationPermissionAdmin(admin.ModelAdmin):
     """Manage which superusers can impersonate which users."""
-    
+
     list_display = (
         'superuser',
         'can_impersonate_any',
@@ -975,7 +975,7 @@ class SuperuserImpersonationPermissionAdmin(admin.ModelAdmin):
     list_filter = ('is_active', 'can_impersonate_any', 'updated_at')
     search_fields = ('superuser__username', 'superuser__email', 'allowed_departments')
     filter_horizontal = ('allowed_target_roles',)
-    
+
     fieldsets = (
         ('Superuser', {'fields': ('superuser',)}),
         ('Impersonation Scope', {
@@ -985,9 +985,9 @@ class SuperuserImpersonationPermissionAdmin(admin.ModelAdmin):
         ('Validity', {'fields': ('is_active', 'expires_at')}),
         ('Metadata', {'fields': ('created_at', 'updated_at'), 'classes': ('collapse',)}),
     )
-    
+
     readonly_fields = ('created_at', 'updated_at')
-    
+
     def get_readonly_fields(self, request, obj=None):
         readonly = list(self.readonly_fields)
         if obj:

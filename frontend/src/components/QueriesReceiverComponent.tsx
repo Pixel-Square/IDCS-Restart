@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  MessageSquare, 
-  Send, 
-  CheckCircle, 
-  Clock, 
-  Eye, 
-  AlertCircle, 
-  Loader2, 
-  Edit2, 
-  Save, 
+import {
+  MessageSquare,
+  Send,
+  CheckCircle,
+  Clock,
+  Eye,
+  AlertCircle,
+  Loader2,
+  Edit2,
+  Save,
   X,
   Filter,
   User,
@@ -97,7 +97,7 @@ export default function QueriesReceiverComponent() {
       setSuccess('Query updated successfully!');
       setEditingId(null);
       await loadQueries();
-      
+
       setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
       setError('Failed to update query. Please try again.');
@@ -177,7 +177,7 @@ export default function QueriesReceiverComponent() {
             <Filter className="w-4 h-4" />
             Filters:
           </div>
-          
+
           {/* Status Filter */}
           <select
             value={statusFilter}
@@ -187,7 +187,7 @@ export default function QueriesReceiverComponent() {
             <option value="">All Status</option>
             {STATUS_OPTIONS.map((status) => (
               <option key={status} value={status}>
-                {STATUS_CONFIG[status as keyof typeof STATUS_CONFIG].label} 
+                {STATUS_CONFIG[status as keyof typeof STATUS_CONFIG].label}
                 {statusCounts[status] ? ` (${statusCounts[status]})` : ''}
               </option>
             ))}
@@ -319,7 +319,7 @@ export default function QueriesReceiverComponent() {
                         </div>
                       </div>
                     </div>
-                    
+
                     {!isEditing ? (
                       <div className="flex items-center gap-2">
                         <span className={`px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1.5 ${statusConfig.color}`}>
@@ -363,8 +363,8 @@ export default function QueriesReceiverComponent() {
                   {/* Query Content */}
                   <div className="mb-3">
                     <div className={`rounded-lg p-4 text-sm leading-relaxed ${
-                      query.query_text.includes('[ESV_RESET_REQUEST]') 
-                        ? 'bg-rose-50 border border-rose-100 text-rose-900 ring-2 ring-rose-500/20' 
+                      query.query_text.includes('[ESV_RESET_REQUEST]')
+                        ? 'bg-rose-50 border border-rose-100 text-rose-900 ring-2 ring-rose-500/20'
                         : 'bg-slate-50 border border-slate-100 text-slate-800'
                     }`}>
                       {query.query_text.includes('[ESV_RESET_REQUEST]') && (
@@ -392,11 +392,11 @@ export default function QueriesReceiverComponent() {
                             setSaving(true);
                             try {
                               // 1. Update status to FIXED
-                              await updateQuery(query.id, { 
-                                status: 'FIXED', 
-                                admin_notes: `[SYSTEM] Reset approved by Admin. Local data cleared for ${facultyCode}.` 
+                              await updateQuery(query.id, {
+                                status: 'FIXED',
+                                admin_notes: `[SYSTEM] Reset approved by Admin. Local data cleared for ${facultyCode}.`
                               });
-                              
+
                               // 2. Broadcast the reset signal (Cross-tab notification)
                               if (typeof BroadcastChannel !== 'undefined') {
                                 const channel = new BroadcastChannel('idcs-marks-sync');

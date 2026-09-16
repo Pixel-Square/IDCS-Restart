@@ -24,51 +24,51 @@ class ElectiveChoiceTemplateDownloadView(APIView):
     def get(self, request):
         user = request.user
         perms = get_user_permissions(user)
-        
+
         # Check permission
         if not ('curriculum.import_elective_choices' in perms or user.is_staff or user.is_superuser):
-            return Response({'error': 'You do not have permission to download elective import template'}, 
+            return Response({'error': 'You do not have permission to download elective import template'},
                           status=status.HTTP_403_FORBIDDEN)
-        
+
         if not EXCEL_SUPPORT:
-            return Response({'error': 'Excel support not available. Please install openpyxl.'}, 
+            return Response({'error': 'Excel support not available. Please install openpyxl.'},
                           status=status.HTTP_400_BAD_REQUEST)
-        
+
         try:
             # Get all departments
             from academics.models import Department
             departments = Department.objects.all().order_by('short_name')
             dept_names = [dept.short_name for dept in departments if dept.short_name]
-            
+
             # Create Excel workbook
             wb = Workbook()
             ws = wb.active
             ws.title = "Elective Choices"
-            
+
             # Headers
             headers = ['student_reg_no', 'elective_subject_code', 'department', 'semester_type', 'academic_year', 'is_active']
             ws.append(headers)
-            
+
             # Sample row
             sample_dept = dept_names[0] if dept_names else 'AI&DS'
             ws.append(['REG001', 'ELEC001', sample_dept, 'ODD', '2025-2026', 'TRUE'])
-            
+
             # Add data validation (dropdown) for department column (column C)
             if dept_names:
                 # Create a comma-separated list of department names
                 dept_list = ','.join(dept_names)
-                
+
                 # Create data validation for department column
                 dv_dept = DataValidation(type="list", formula1=f'"{dept_list}"', allow_blank=True)
                 dv_dept.error = 'Please select a department from the dropdown'
                 dv_dept.errorTitle = 'Invalid Department'
                 dv_dept.prompt = 'Select a department'
                 dv_dept.promptTitle = 'Department'
-                
+
                 # Apply validation to department column (C2:C1000)
                 ws.add_data_validation(dv_dept)
                 dv_dept.add(f'C2:C1000')
-            
+
             # Add data validation (dropdown) for semester_type column (column D)
             sem_types = 'ODD,EVEN'
             dv_sem_type = DataValidation(type="list", formula1=f'"{sem_types}"', allow_blank=False)
@@ -76,16 +76,16 @@ class ElectiveChoiceTemplateDownloadView(APIView):
             dv_sem_type.errorTitle = 'Invalid Semester Type'
             dv_sem_type.prompt = 'Select semester type (ODD or EVEN)'
             dv_sem_type.promptTitle = 'Semester Type'
-            
+
             # Apply validation to semester_type column (D2:D1000)
             ws.add_data_validation(dv_sem_type)
             dv_sem_type.add(f'D2:D1000')
-            
+
             # Format academic_year column (E) as text to prevent Excel auto-formatting
             from openpyxl.styles import numbers
             for row in range(2, 1001):  # Apply to rows 2-1000
                 ws[f'E{row}'].number_format = numbers.FORMAT_TEXT
-            
+
             # Adjust column widths
             ws.column_dimensions['A'].width = 20  # student_reg_no
             ws.column_dimensions['B'].width = 25  # elective_subject_code
@@ -93,22 +93,22 @@ class ElectiveChoiceTemplateDownloadView(APIView):
             ws.column_dimensions['D'].width = 15  # semester_type
             ws.column_dimensions['E'].width = 20  # academic_year
             ws.column_dimensions['F'].width = 12  # is_active
-            
+
             # Save to bytes
             from io import BytesIO
             excel_file = BytesIO()
             wb.save(excel_file)
             excel_file.seek(0)
-            
+
             response = HttpResponse(
                 excel_file.read(),
                 content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             )
             response['Content-Disposition'] = 'attachment; filename="elective_choices_template.xlsx"'
             return response
-            
+
         except Exception as e:
-            return Response({'error': f'Failed to generate template: {str(e)}'}, 
+            return Response({'error': f'Failed to generate template: {str(e)}'},
                           status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -120,38 +120,38 @@ class ElectiveChoiceBulkImportView(APIView):
     def post(self, request):
         user = request.user
         perms = get_user_permissions(user)
-        
+
         # Check permission
         if not ('curriculum.import_elective_choices' in perms or user.is_staff or user.is_superuser):
-            return Response({'error': 'You do not have permission to import elective choices'}, 
+            return Response({'error': 'You do not have permission to import elective choices'},
                           status=status.HTTP_403_FORBIDDEN)
-        
+
         uploaded_file = request.FILES.get('csv_file')
         if not uploaded_file:
             return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         filename = uploaded_file.name.lower()
         is_excel = filename.endswith(('.xlsx', '.xls'))
         is_csv = filename.endswith('.csv')
-        
+
         if not (is_csv or is_excel):
             return Response({'error': 'File must be CSV or Excel (.xlsx, .xls)'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         # Parse file based on format
         rows = []
         if is_excel:
             if not EXCEL_SUPPORT:
-                return Response({'error': 'Excel support not available. Please install openpyxl or use CSV format.'}, 
+                return Response({'error': 'Excel support not available. Please install openpyxl or use CSV format.'},
                               status=status.HTTP_400_BAD_REQUEST)
             try:
                 wb = load_workbook(uploaded_file, read_only=True)
                 ws = wb.active
-                
+
                 # Get headers from first row
                 headers = []
                 for cell in ws[1]:
                     headers.append(cell.value)
-                
+
                 # Read data rows
                 for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
                     row_dict = {}
@@ -171,16 +171,16 @@ class ElectiveChoiceBulkImportView(APIView):
                 rows = [(idx, row) for idx, row in enumerate(reader, start=2)]
             except Exception as e:
                 return Response({'error': f'Failed to parse CSV file: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         # Process rows
         try:
             from .models import ElectiveChoice, ElectiveSubject
             from academics.models import StudentProfile, AcademicYear, Department
-            
+
             created_count = 0
             updated_count = 0
             errors = []
-            
+
             with transaction.atomic():
                 for idx, row in rows:
                     try:
@@ -190,37 +190,37 @@ class ElectiveChoiceBulkImportView(APIView):
                         semester_type = row.get('semester_type', '').strip().upper()
                         ay_name = row.get('academic_year', '').strip()
                         is_active_str = row.get('is_active', 'TRUE').strip().upper()
-                        
+
                         if not student_reg or not elective_code or not dept_name or not semester_type:
                             errors.append(f'Row {idx}: Missing required fields (student_reg_no, elective_subject_code, department, semester_type)')
                             continue
-                        
+
                         # Validate semester_type
                         if semester_type not in ('ODD', 'EVEN'):
                             errors.append(f'Row {idx}: semester_type must be ODD or EVEN, got "{semester_type}"')
                             continue
-                        
+
                         # Find student
                         try:
                             student = StudentProfile.objects.get(reg_no=student_reg)
                         except StudentProfile.DoesNotExist:
                             errors.append(f'Row {idx}: Student with reg_no "{student_reg}" not found')
                             continue
-                        
+
                         # Find department
                         try:
                             department = Department.objects.get(short_name__iexact=dept_name)
                         except Department.DoesNotExist:
                             errors.append(f'Row {idx}: Department with short_name "{dept_name}" not found')
                             continue
-                        
+
                         # Find academic year with parity
                         academic_year = None
                         if ay_name:
                             try:
                                 # Try exact match first
                                 academic_year = AcademicYear.objects.filter(name=ay_name, parity=semester_type).first()
-                                
+
                                 # If not found, try normalizing the format
                                 if not academic_year:
                                     # Convert "2025-26" to "2025-2026" or "2025-2026" to "2025-26"
@@ -229,7 +229,7 @@ class ElectiveChoiceBulkImportView(APIView):
                                     if match:
                                         start_year = match.group(1)
                                         end_year = match.group(2)
-                                        
+
                                         # Try alternative formats
                                         if len(end_year) == 2:
                                             # Convert "2025-26" to "2025-2026"
@@ -239,7 +239,7 @@ class ElectiveChoiceBulkImportView(APIView):
                                             # Convert "2025-2026" to "2025-26"
                                             short_end = end_year[-2:]
                                             academic_year = AcademicYear.objects.filter(name=f'{start_year}-{short_end}', parity=semester_type).first()
-                                
+
                                 if not academic_year:
                                     # Get available academic years for better error message
                                     available = AcademicYear.objects.filter(parity=semester_type).values_list('name', flat=True)[:5]
@@ -255,7 +255,7 @@ class ElectiveChoiceBulkImportView(APIView):
                             if not academic_year:
                                 errors.append(f'Row {idx}: No active academic year found with semester type "{semester_type}". Please specify academic_year in CSV.')
                                 continue
-                        
+
                         # Find elective subject by code, department, and semester (which should match the academic year parity)
                         try:
                             # Filter by course_code and department
@@ -263,16 +263,16 @@ class ElectiveChoiceBulkImportView(APIView):
                                 course_code=elective_code,
                                 department=department
                             ).first()
-                            
+
                             if not elective:
                                 errors.append(f'Row {idx}: Elective subject with code "{elective_code}" in department "{dept_name}" not found')
                                 continue
                         except Exception as e:
                             errors.append(f'Row {idx}: Error finding elective subject: {str(e)}')
                             continue
-                        
+
                         is_active = is_active_str in ('TRUE', '1', 'YES', 'Y')
-                        
+
                         # Create or update choice
                         choice, created = ElectiveChoice.objects.update_or_create(
                             student=student,
@@ -283,27 +283,27 @@ class ElectiveChoiceBulkImportView(APIView):
                                 'created_by': user
                             }
                         )
-                        
+
                         if created:
                             created_count += 1
                         else:
                             updated_count += 1
-                            
+
                     except Exception as e:
                         errors.append(f'Row {idx}: {str(e)}')
-            
+
             result = {
                 'message': 'Import completed',
                 'created': created_count,
                 'updated': updated_count,
                 'errors': errors[:50]  # Limit error messages
             }
-            
+
             if errors:
                 result['warning'] = f'Import completed with {len(errors)} errors'
-            
+
             return Response(result, status=status.HTTP_200_OK)
-            
+
         except Exception as e:
-            return Response({'error': f'Failed to process file: {str(e)}'}, 
+            return Response({'error': f'Failed to process file: {str(e)}'},
                           status=status.HTTP_500_INTERNAL_SERVER_ERROR)

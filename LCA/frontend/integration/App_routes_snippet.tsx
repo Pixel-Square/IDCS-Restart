@@ -1,6 +1,6 @@
 /**
  * LCA Integration Snippet for frontend/src/App.tsx
- * 
+ *
  * Copy and paste the following imports and route declarations into your React Router setup.
  */
 

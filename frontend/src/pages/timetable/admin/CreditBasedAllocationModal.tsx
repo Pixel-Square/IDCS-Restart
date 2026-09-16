@@ -253,7 +253,7 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
         const res = await fetchWithAuth(`/api/timetable/credit-allocations/?credit_value=${creditVal}`);
         const data = await res.json();
         const existing = (data.results || data).find((item: any) => String(item.credit_value) === String(creditVal));
-        
+
         if (existing) {
            await fetchWithAuth(`/api/timetable/credit-allocations/${existing.id}/`, {
              method: 'PATCH',
@@ -320,7 +320,7 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
           });
         }
       }
-      
+
       setSaveStatus('saved');
       setTimeout(() => setSaveStatus('idle'), 2000);
       return true;
@@ -547,7 +547,7 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden border border-gray-100 transition-all">
-        
+
         {/* Modal Header */}
         <div className="px-6 py-4 bg-gradient-to-r from-purple-800 via-indigo-800 to-teal-800 text-white flex items-center justify-between shadow-md">
           <div className="flex items-center gap-3">
@@ -567,7 +567,7 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
               </p>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-2">
             {/* Top Slider Navigation Button */}
             {activeTab === 'credit_and_classtype' ? (
@@ -605,7 +605,7 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
         {/* PAGE 1: Credit & Class Type Exceptions */}
         {activeTab === 'credit_and_classtype' && (
           <div className="p-6 overflow-y-auto flex-1 space-y-6">
-            
+
             {/* Info Banner */}
             <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 flex items-start gap-3">
               <Info size={20} className="text-purple-600 shrink-0 mt-0.5" />
@@ -807,14 +807,14 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
         {/* PAGE 2: Exception Courses (1st Priority Page) */}
         {activeTab === 'course_exceptions' && (
           <div className="p-6 overflow-y-auto flex-1 space-y-6">
-            
+
             {/* Info Banner */}
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
               <BookOpen size={20} className="text-amber-600 shrink-0 mt-0.5" />
               <div className="text-xs text-amber-900 leading-relaxed">
                 <p className="font-bold text-sm mb-1 text-amber-950">Exception Courses Configuration (Priority 1):</p>
                 <p>
-                  Courses added here take the <strong>highest priority</strong> during timetable generation. 
+                  Courses added here take the <strong>highest priority</strong> during timetable generation.
                   If a subject matches an Exception Course, its periods and paired blocks will be generated based on the rule specified below, bypassing Class Type and Credit-based mappings.
                 </p>
               </div>
@@ -825,7 +825,7 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
               <label className="block text-xs font-extrabold text-amber-900 uppercase tracking-wider">
                 Search and Add Exception Course
               </label>
-              
+
               <div className="relative">
                 <div className="relative">
                   <Search className="absolute left-3 top-3 text-gray-400" size={18} />
@@ -912,7 +912,7 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
                               </span>
                             </div>
                             <span className="text-xs text-gray-600 block mt-0.5">{cRule.course_name}</span>
-                            
+
                             {/* Section mapping summary badge */}
                             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                               {selectedDepts.length > 0 ? (
@@ -1218,7 +1218,7 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
               Close
             </button>
           </div>
-          
+
           <button
             onClick={handleSave}
             className="px-6 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-md transition-colors flex items-center gap-2"

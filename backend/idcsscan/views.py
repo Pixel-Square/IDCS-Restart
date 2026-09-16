@@ -2814,7 +2814,7 @@ class LookupAnyView(APIView):
 class CardsDataView(APIView):
     """GET /api/idscan/cards-data/ — list all students and staff ID card status."""
     permission_classes = (IsAuthenticated,)
-    
+
     def get(self, request):
         if not _has_card_management_permission(request.user):
             return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
@@ -2829,13 +2829,13 @@ class CardsDataView(APIView):
         except Exception:
             acad_start = None
             sem_offset = 2
-            
+
         students = StudentProfile.objects.select_related(
             "user", "section__batch__course__department", "section__semester", "home_department"
         ).all()
-        
+
         staff = StaffProfile.objects.select_related("user", "department").all()
-        
+
         data = []
         for s in students:
             profile_image_url = None
@@ -2885,7 +2885,7 @@ class CardsDataView(APIView):
                 "status": "Connected" if s.rfid_uid else "Not Connected",
                 "profile_image_url": profile_image_url,
             })
-            
+
         for s in staff:
             profile_image_url = None
             try:
@@ -2907,15 +2907,15 @@ class CardsDataView(APIView):
                 "status": "Connected" if s.rfid_uid else "Not Connected",
                 "profile_image_url": profile_image_url,
             })
-            
+
         return Response({"results": data}, status=status.HTTP_200_OK)
 
 
 class BulkEntryPeopleView(APIView):
     """GET /api/idscan/bulk-entry/people/
-    
+
     Returns a filtered list of students or staff for bulk RFID assignment.
-    
+
     Query params:
       role      - "STUDENT" or "STAFF" (required)
       dept      - department id (optional)
@@ -3958,7 +3958,7 @@ class BioSecureSectionsListView(APIView):
             'batch__batch_year',
             'managing_department'
         ).all().order_by('batch__name', 'name')
-        
+
         data = []
         for s in sections:
             dept_name = ""

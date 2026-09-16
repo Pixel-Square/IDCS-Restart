@@ -87,7 +87,7 @@ def get_subject_feedback_completion(feedback_form, user):
                     fallback_tas = fallback_tas.filter(elective_subject__regulation=regulation_code)
                 if effective_semester_id:
                     fallback_tas = fallback_tas.filter(elective_subject__semester_id=effective_semester_id)
-                
+
                 # FILTER BY STUDENT YEAR: Only include assignments from student's batch/year
                 # Calculate student's year to ensure we only get assignments for their current year
                 from academics.models import AcademicYear
@@ -101,7 +101,7 @@ def get_subject_feedback_completion(feedback_form, user):
                             fallback_tas = fallback_tas.filter(section__batch=batch)
                     except Exception:
                         pass  # If year calculation fails, don't filter (keep existing behavior)
-                
+
                 eligible_assignment_ids.update(fallback_tas.values_list('id', flat=True))
 
         total_subjects = len(eligible_assignment_ids)
@@ -137,7 +137,7 @@ class FeedbackQuestionSerializer(serializers.ModelSerializer):
         choices=FeedbackQuestion.QUESTION_TYPE_CHOICES,
         required=False,
     )
-    
+
     class Meta:
         model = FeedbackQuestion
         fields = [
@@ -167,7 +167,7 @@ class FeedbackQuestionSerializer(serializers.ModelSerializer):
             return RoleAssignment.objects.filter(user=user, role__name__iexact='IQAC').exists()
         except Exception:
             return False
-    
+
     def _user_can_create_own_type(self, user) -> bool:
         """Check if user can create Own Type questions (IQAC or HOD)."""
         if not user or not getattr(user, 'is_authenticated', False):
@@ -192,7 +192,7 @@ class FeedbackQuestionSerializer(serializers.ModelSerializer):
             ).exists()
         except Exception:
             return False
-        
+
     def validate(self, data):
         """Ensure at least one answer method is enabled."""
         request = self.context.get('request')
@@ -258,14 +258,14 @@ class FeedbackQuestionSerializer(serializers.ModelSerializer):
             data['options'] = normalized
 
         data['question_type'] = question_type
-        
+
         # Ensure the question collects *something*.
         # For radio questions, selecting an option counts even if allow_comment is False.
         if question_type != 'radio' and not allow_rating and not allow_comment:
             raise serializers.ValidationError({
                 'allow_rating': 'At least one answer method (rating or comment) must be enabled.'
             })
-        
+
         # Set answer_type for backward compatibility.
         # Note: radio / rating_radio_comment include option selection; comment is optional.
         if question_type == 'text':
@@ -281,32 +281,32 @@ class FeedbackQuestionSerializer(serializers.ModelSerializer):
                 data['answer_type'] = 'STAR'
             elif allow_comment:
                 data['answer_type'] = 'TEXT'
-            
+
         return data
 
 
 class FeedbackFormSerializer(serializers.ModelSerializer):
     """Serializer for FeedbackForm with nested questions."""
-    
+
     questions = serializers.SerializerMethodField()
     created_by_name = serializers.CharField(source='created_by.username', read_only=True)
-    
+
     # Class information fields (legacy)
     semester_number = serializers.IntegerField(source='semester.number', read_only=True, allow_null=True)
     section_name = serializers.CharField(source='section.name', read_only=True, allow_null=True)
     regulation_name = serializers.CharField(source='regulation.name', read_only=True, allow_null=True)
-    
+
     # Multi-class fields
     years = serializers.ListField(child=serializers.IntegerField(), required=False)
     semesters = serializers.ListField(child=serializers.IntegerField(), required=False)
     sections = serializers.ListField(child=serializers.IntegerField(), required=False)
-    
+
     # Display label (computed)
     target_display = serializers.SerializerMethodField()
     context_display = serializers.SerializerMethodField()
     class_context_display = serializers.SerializerMethodField()
     is_submitted = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = FeedbackForm
         fields = [
@@ -433,17 +433,17 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
             return mapping.get(value, str(value))
 
         entries = self._get_section_display_entries(obj)
-        
+
         # Filter entries to only student's year and semester
         filtered_entries = []
         for item in entries:
             item_year = item.get('year')
             item_sem = item.get('semester_number')
-            
+
             # Keep only if year matches
             if item_year != student_year:
                 continue
-            
+
             # Keep only if semester matches (or semester not specified)
             if student_semester_id and item_sem:
                 from academics.models import Semester
@@ -453,15 +453,15 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
                         continue
                 except Semester.DoesNotExist:
                     pass
-            
+
             filtered_entries.append(item)
-        
+
         grouped = {}
         for item in filtered_entries:
             dept = item.get('department_label') or 'Department'
             year = item.get('year') if item.get('year') and item.get('year') != 99 else obj.year
             sem = item.get('semester_number')
-            
+
             key = (str(dept), year, sem)
             grouped.setdefault(key, [])
             section_name = item.get('section_name')
@@ -484,7 +484,7 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
             dept_obj = getattr(obj, 'department', None)
             dept = (dept_obj.short_name or dept_obj.code or dept_obj.name) if dept_obj else 'Department'
             year_label = f"{ordinal(student_year)} Year"
-            
+
             if student_semester_id:
                 from academics.models import Semester
                 try:
@@ -495,7 +495,7 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
                     lines.append(f"{dept} - {year_label}")
             else:
                 lines.append(f"{dept} - {year_label}")
-        
+
         return lines
 
     def get_class_context_display(self, obj):
@@ -566,7 +566,7 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
 
     def get_context_display(self, obj):
         """Generate consolidated class targeting display for cards and detail headers.
-        
+
         For student views: Show ONLY the student's own year/semester.
         For IQAC/other views: Show ALL years/semesters (combined view).
         """
@@ -579,13 +579,13 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
         is_student_view = self.context.get('is_student_view', False)
         student_year = self.context.get('year')
         student_semester_id = self.context.get('semester_id')
-        
+
         # For student view, use filtered class context display
         if is_student_view and student_year is not None:
             class_lines = self.get_class_context_display_for_student(obj, student_year, student_semester_id)
             if class_lines:
                 return class_lines[0]
-        
+
         # For IQAC/other views, show full combined display
         class_lines = self.get_class_context_display(obj)
         if class_lines:
@@ -594,7 +594,7 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
         parts = []
 
         year_names = {1: '1st', 2: '2nd', 3: '3rd', 4: '4th'}
-        
+
         # For student view, show only student's year; for others, show all years
         if is_student_view and student_year is not None:
             parts.append(f"{year_names.get(student_year, str(student_year))} Year")
@@ -632,7 +632,7 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
             if is_student_view:
                 student_section_id = self.context.get('section_id')
                 if student_section_id:
-                    filtered_sections = [s for s in sections_display 
+                    filtered_sections = [s for s in sections_display
                                         if str(student_section_id) in str(obj.sections or [])]
                     if filtered_sections:
                         parts.append(', '.join(filtered_sections))
@@ -642,7 +642,7 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
             parts.append(f"Section {obj.section.name}")
 
         return ' - '.join(parts) if parts else 'Student Feedback'
-    
+
     def get_target_display(self, obj):
         """Return generic target label; detailed class context is in context_display."""
         if obj.target_type == 'STAFF':
@@ -650,26 +650,26 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
         if obj.target_type == 'STUDENT':
             return 'Student Feedback'
         return 'Feedback'
-    
+
     def get_is_submitted(self, obj):
         """Check if the current user has already submitted feedback for this form.
-        
+
         For OPEN_FEEDBACK: Returns True if any response exists.
         For SUBJECT_FEEDBACK: Returns True only if all subjects are completed.
         """
         request = self.context.get('request')
         if not request or not request.user.is_authenticated:
             return False
-        
+
         from .models import FeedbackResponse
-        
+
         # For OPEN_FEEDBACK, just check if any response exists
         if obj.type == 'OPEN_FEEDBACK':
             return FeedbackResponse.objects.filter(
                 feedback_form=obj,
                 user=request.user
             ).exists()
-        
+
         # For SUBJECT_FEEDBACK, check if all subjects are completed
         elif obj.type == 'SUBJECT_FEEDBACK':
             try:
@@ -688,16 +688,16 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
                 logger = logging.getLogger(__name__)
                 logger.error(f"[is_submitted] Error checking submission status: {e}")
                 return False
-        
+
         return False
 class FeedbackFormCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating a FeedbackForm with questions."""
-    
+
     questions = FeedbackQuestionSerializer(many=True, write_only=True)
     years = serializers.ListField(child=serializers.IntegerField(), required=False, allow_empty=True)
     semesters = serializers.ListField(child=serializers.IntegerField(), required=False, allow_empty=True)
     sections = serializers.ListField(child=serializers.IntegerField(), required=False, allow_empty=True)
-    
+
     class Meta:
         model = FeedbackForm
         fields = [
@@ -709,7 +709,7 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
             'anonymous',
             'form_name',
         ]
-    
+
     def validate(self, data):
         """Validate mandatory fields and question payload consistency."""
         if not data.get('department'):
@@ -735,7 +735,7 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'questions': 'At least one question is required.'
             })
-        
+
         # Ensure multi-class fields are lists (not None)
         if 'years' not in data or data['years'] is None:
             data['years'] = []
@@ -777,9 +777,9 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
                         )
                     })
             data['questions'] = questions
-        
+
         return data
-    
+
     def create(self, validated_data):
         """Create feedback form with questions in a transaction."""
         questions_data = validated_data.pop('questions')
@@ -788,22 +788,22 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
         # Legacy DB compatibility: feedback_forms.comment_mode is NOT NULL in some deployments.
         # Keep it aligned with the common comment toggle.
         validated_data.setdefault('comment_mode', 'common' if common_comment_enabled else 'question_wise')
-        
+
         # Auto-set is_subject_based based on type if not provided
         if 'is_subject_based' not in validated_data:
             validated_data['is_subject_based'] = (validated_data.get('type') == 'SUBJECT_FEEDBACK')
-        
+
         with transaction.atomic():
             # Create the feedback form
             feedback_form = FeedbackForm.objects.create(**validated_data)
-            
+
             # Create questions
             for idx, question_data in enumerate(questions_data):
                 # Determine allow_rating and allow_comment from answer_type if not explicitly provided
                 allow_rating = question_data.get('allow_rating', True)
                 allow_comment = False if common_comment_enabled else question_data.get('allow_comment', True)
                 answer_type = question_data.get('answer_type', 'BOTH')
-                
+
                 # Backward compatibility: if answer_type is provided but allow_* fields aren't
                 if answer_type == 'STAR' and 'allow_rating' not in question_data:
                     allow_rating = True
@@ -814,7 +814,7 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
                 elif answer_type == 'BOTH':
                     # Both enabled by default
                     pass
-                
+
                 question_type = (question_data.get('question_type') or 'rating').strip()
                 options = question_data.get('options', []) or []
 
@@ -879,13 +879,13 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
                 else:
                     # Ensure no stray options if provided.
                     created_question.options.all().delete()
-        
+
         return feedback_form
 
 
 class FeedbackResponseSerializer(serializers.Serializer):
     """Serializer for individual feedback responses (for submission)."""
-    
+
     question = serializers.IntegerField(required=True)
     answer_star = serializers.IntegerField(required=False, min_value=1, max_value=5)
     answer_text = serializers.CharField(required=False, allow_blank=True)
@@ -894,12 +894,12 @@ class FeedbackResponseSerializer(serializers.Serializer):
 
 class FeedbackSubmissionSerializer(serializers.Serializer):
     """Serializer for submitting feedback responses."""
-    
+
     feedback_form_id = serializers.IntegerField()
     responses = FeedbackResponseSerializer(many=True)
     teaching_assignment_id = serializers.IntegerField(required=False, allow_null=True)  # For subject feedback
     common_comment = serializers.CharField(required=False, allow_blank=True, allow_null=True)
-    
+
     def validate_feedback_form_id(self, value):
         """Validate that feedback form exists and is active."""
         try:
@@ -909,7 +909,7 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
             return value
         except FeedbackForm.DoesNotExist:
             raise serializers.ValidationError('Feedback form not found.')
-    
+
     def validate(self, data):
         """Validate responses match questions and answer types."""
         feedback_form_id = data.get('feedback_form_id')
@@ -928,22 +928,22 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
             if feedback_form.type == 'SUBJECT_FEEDBACK':
                 if not common_comment_value:
                     raise serializers.ValidationError({'common_comment': 'Overall comment is mandatory.'})
-        
+
         if not responses:
             raise serializers.ValidationError({
                 'responses': 'At least one response is required.'
             })
-        
+
         # Get all questions for this form
         questions = FeedbackQuestion.objects.filter(
             feedback_form_id=feedback_form_id
         )
-        
+
         if not questions.exists():
             raise serializers.ValidationError({
                 'feedback_form_id': 'This feedback form has no questions.'
             })
-        
+
         # Build question dict with allow_rating and allow_comment info
         question_ids = list(questions.values_list('id', flat=True))
         options_by_question = {}
@@ -961,20 +961,20 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
             }
             for q in questions
         }
-        
+
         # Validate each response
         errors = []
         for idx, response in enumerate(responses):
             question_id = response.get('question')
-            
+
             if not question_id:
                 errors.append(f'Response {idx + 1}: Missing question ID')
                 continue
-            
+
             if question_id not in question_dict:
                 errors.append(f'Question {question_id} does not belong to this form')
                 continue
-            
+
             question_info = question_dict[question_id]
             allow_rating = question_info['allow_rating']
             allow_comment = question_info['allow_comment']
@@ -1020,7 +1020,7 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
                 if selected_option_int not in (question_info.get('option_ids') or set()):
                     errors.append(f'Question {question_id}: Selected option is invalid')
                 continue
-            
+
             # Validate based on what's allowed
             if allow_rating and not allow_comment:
                 # Only rating allowed
@@ -1037,14 +1037,14 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
                     errors.append(f'Question {question_id} requires a star rating (1-5)')
                 elif not isinstance(answer_star, int) or answer_star < 1 or answer_star > 5:
                     errors.append(f'Question {question_id}: Star rating must be between 1 and 5')
-        
+
         if errors:
             raise serializers.ValidationError({
                 'responses': errors
             })
-        
+
         return data
-    
+
     def save(self, user):
         """Save feedback responses for the user."""
         feedback_form_id = self.validated_data['feedback_form_id']
@@ -1055,17 +1055,17 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
 
         feedback_form = FeedbackForm.objects.get(id=feedback_form_id)
         common_comment_enabled = bool(getattr(feedback_form, 'common_comment_enabled', False))
-        
+
         # Get teaching assignment object if provided (for subject feedback)
         teaching_assignment = None
-        
+
         if teaching_assignment_id:
             try:
                 from academics.models import TeachingAssignment
                 teaching_assignment = TeachingAssignment.objects.get(id=teaching_assignment_id)
             except TeachingAssignment.DoesNotExist:
                 pass
-        
+
         # Resolve option-id -> option-text in one query (keeps export stable even if IDs change).
         selected_option_ids = []
         for response_data in responses:
@@ -1099,11 +1099,11 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
                 # This ensures PE/OE/EE subjects are queryable in reports
                 subject = None
                 elective_subject = None
-                
+
                 if teaching_assignment:
                     # Prefer curriculum_row's subject reference
                     if teaching_assignment.curriculum_row:
-                        # CurriculumDepartment doesn't have a direct subject FK, 
+                        # CurriculumDepartment doesn't have a direct subject FK,
                         # so we'll store the teaching_assignment which points to it
                         pass
                     # Check for elective_subject
@@ -1125,5 +1125,5 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
                     elective_subject=elective_subject,
                     selected_option_text=selected_option_text,
                 )
-        
+
         return FeedbackForm.objects.get(id=feedback_form_id)

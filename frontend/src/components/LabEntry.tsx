@@ -992,7 +992,7 @@ export default function LabEntry({
     if (!showAbsenteesOnly) return students;
     return students.filter((s) => Boolean((draft.sheet.rowsByStudentId?.[String(s.id)] as any)?.absent));
   }, [students, showAbsenteesOnly, draft.sheet.rowsByStudentId]);
-  
+
   // Table visibility and blocking logic:
   // - BEFORE Mark Manager confirm: table is HIDDEN
   // - AFTER Mark Manager confirm: table is VISIBLE
@@ -2442,9 +2442,9 @@ export default function LabEntry({
       ) : students.length === 0 ? (
         <div style={{ color: '#6b7280' }}>Select a Teaching Assignment to load students.</div>
       ) : !tableVisible ? (
-        <div style={{ 
-          padding: '20px', 
-          textAlign: 'center', 
+        <div style={{
+          padding: '20px',
+          textAlign: 'center',
           background: '#fff7ed',
           borderRadius: 12,
           border: '1px solid #fcd34d',
@@ -3220,14 +3220,14 @@ export default function LabEntry({
 
                     // CRITICAL: Refresh lock status IMMEDIATELY to update UI
                     await refreshMarkLock({ silent: false });
-                    
+
                     // Update local draft state after successful confirmation
                     setDraft(nextDraft);
-                    
+
                     // Success feedback and automatically open Request Edit modal
                     alert('✅ Mark Manager saved and locked successfully! You can now proceed with mark entry.\n\nIf you need to make changes later, use the Request Edit option.');
                     setTimeout(() => setMarkManagerAnimating(false), 1500);
-                    
+
                     // Open Request Edit modal so user can immediately request changes if needed
                     if (editRequestsEnabled) {
                       setMarkManagerModal({ mode: 'request' });

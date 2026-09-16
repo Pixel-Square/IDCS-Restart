@@ -56,7 +56,7 @@ export default function SubjectWiseAnalysis({
   const kpis = [
     { label: 'Total Students', value: `${m.students}`, icon: Users },
     { label: 'Average Marks %', value: m.average_marks_pct != null ? `${m.average_marks_pct}%` : '—', icon: TrendingUp },
-    { label: 'Pass %', value: m.pass_pct != null ? `${m.pass_pct}%` : '—', icon: Award },
+    // Pass % KPI removed as per requirements
     { label: 'Attendance', value: m.attendance_pct != null ? `${m.attendance_pct}%` : 'N/A', icon: Clock },
     { label: 'Faculty', value: facultyLabel, icon: UserCheck },
   ];
@@ -238,7 +238,7 @@ export default function SubjectWiseAnalysis({
                 <th className="py-3 px-4 text-center">Section</th>
                 <th className="py-3 px-4 text-center">Assessment</th>
                 <th className="py-3 px-4 text-center">Percentage</th>
-                <th className="py-3 px-4 text-center">Result</th>
+                <th className="py-3 px-4 text-center">Remarks</th>
                 <th className="py-3 px-4 text-center">Attendance</th>
                 <th className="py-3 px-4 text-right">Action</th>
               </tr>
@@ -257,8 +257,8 @@ export default function SubjectWiseAnalysis({
                       {s.marks_pct != null ? `${s.marks_pct}%` : '—'}
                     </td>
                     <td className="py-3 px-4 text-center">
-                      <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${s.result === 'Pass' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-600'}`}>
-                        {s.result || '—'}
+                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-gray-100 text-gray-800">
+                        {s.remark || '—'}
                       </span>
                     </td>
                     <td className="py-3 px-4 text-center text-slate-700">

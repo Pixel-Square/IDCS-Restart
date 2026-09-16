@@ -25,7 +25,7 @@ def validate_class_type_code(value: str):
     code = (value or '').strip()
     if not code:
         return
-    
+
     # Check standard choices (case-insensitive)
     choice_codes = [c[0].upper() for c in CLASS_TYPE_CHOICES]
     if code.upper() in choice_codes:
@@ -155,48 +155,48 @@ class Regulation(models.Model):
 
 class DepartmentGroup(models.Model):
     """Group model to organize departments into logical groups.
-    
+
     This model allows departments to be grouped together for curriculum
     management purposes. For example, grouping all engineering departments
     or all science departments together.
     """
-    
+
     code = models.CharField(max_length=32, unique=True)
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         verbose_name = 'Department Group'
         verbose_name_plural = 'Department Groups'
         ordering = ('code',)
-    
+
     def __str__(self):
         return f"{self.code} - {self.name}"
 
 
 class DepartmentGroupMapping(models.Model):
     """Mapping between department groups and individual departments.
-    
+
     This model creates a many-to-many relationship between DepartmentGroup
     and Department from the academics app. A department can belong to multiple
     groups, and a group can contain multiple departments.
     """
-    
+
     group = models.ForeignKey(DepartmentGroup, on_delete=models.CASCADE, related_name='department_mappings')
     department = models.ForeignKey('academics.Department', on_delete=models.CASCADE, related_name='group_mappings')
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         verbose_name = 'Department Group Mapping'
         verbose_name_plural = 'Department Group Mappings'
         unique_together = ('group', 'department')
         ordering = ('group', 'department')
-    
+
     def __str__(self):
         return f"{self.group.code} -> {self.department.code}"
 

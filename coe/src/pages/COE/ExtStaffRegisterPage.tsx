@@ -48,18 +48,18 @@ type Step = 'email' | 'signup' | 'form' | 'success' | 'already-registered';
 
 export default function ExtStaffRegisterPage() {
   const { formCode } = useParams<{ formCode: string }>();
-  
+
   // Step management
   const [step, setStep] = useState<Step>('email');
-  
+
   // Form data
   const [formData, setFormData] = useState<FormData | null>(null);
-  
+
   // Email step state
   const [email, setEmail] = useState('');
   const [emailError, setEmailError] = useState<string | null>(null);
   const [checkingEmail, setCheckingEmail] = useState(false);
-  
+
   // Signup step state
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -69,11 +69,11 @@ export default function ExtStaffRegisterPage() {
   const [signingUp, setSigningUp] = useState(false);
   const [userId, setUserId] = useState<number | null>(null);
   const [extUid, setExtUid] = useState<string | null>(null);
-  
+
   // Skip email state
   const [skipEmail, setSkipEmail] = useState(false);
   const [fullName, setFullName] = useState('');
-  
+
   // Form filling step state
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -82,7 +82,7 @@ export default function ExtStaffRegisterPage() {
   const [values, setValues] = useState<Record<string, string>>({});
   const [files, setFiles] = useState<Record<string, File>>({});
   const [result, setResult] = useState<SubmissionResult | null>(null);
-  
+
   // College autocomplete state
   const [collegeQuery, setCollegeQuery] = useState('');
   const [collegeResults, setCollegeResults] = useState<CollegeResult[]>([]);
@@ -99,7 +99,7 @@ export default function ExtStaffRegisterPage() {
       setCollegeResults([]);
       return;
     }
-    
+
     setCollegeSearching(true);
     try {
       const res = await fetch(`/api/colleges/search/?q=${encodeURIComponent(query)}`);
@@ -124,7 +124,7 @@ export default function ExtStaffRegisterPage() {
       return n;
     });
     setShowCollegeDropdown(true);
-    
+
     // Debounce search
     if (collegeSearchTimeout.current) {
       clearTimeout(collegeSearchTimeout.current);
@@ -163,7 +163,7 @@ export default function ExtStaffRegisterPage() {
 
   useEffect(() => {
     if (!formCode) return;
-    
+
     const loadForm = async () => {
       setLoading(true);
       setError(null);
@@ -185,7 +185,7 @@ export default function ExtStaffRegisterPage() {
         setLoading(false);
       }
     };
-    
+
     void loadForm();
   }, [formCode]);
 
@@ -201,24 +201,24 @@ export default function ExtStaffRegisterPage() {
       setEmailError('Please enter a valid email address');
       return;
     }
-    
+
     setCheckingEmail(true);
     setEmailError(null);
-    
+
     try {
       const res = await fetch(`/api/academics/ext-staff-form/public/${formCode}/check-email/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim().toLowerCase() }),
       });
-      
+
       const data = await res.json();
-      
+
       if (!res.ok) {
         setEmailError(data.error || data.detail || 'Failed to check email');
         return;
       }
-      
+
       if (data.exists) {
         setStep('already-registered');
       } else {
@@ -235,57 +235,57 @@ export default function ExtStaffRegisterPage() {
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     const errors: Record<string, string> = {};
-    
+
     // Validate full name if skipping email
     if (skipEmail) {
       if (!fullName.trim()) {
         errors.full_name = 'Full name is required';
       }
     }
-    
+
     if (!password) {
       errors.password = 'Password is required';
     } else if (password.length < 6) {
       errors.password = 'Password must be at least 6 characters';
     }
-    
+
     if (!confirmPassword) {
       errors.confirm_password = 'Please confirm your password';
     } else if (password !== confirmPassword) {
       errors.confirm_password = 'Passwords do not match';
     }
-    
+
     if (Object.keys(errors).length > 0) {
       setSignupErrors(errors);
       return;
     }
-    
+
     setSigningUp(true);
     setSignupErrors({});
-    
+
     try {
       const payload: Record<string, any> = {
         password,
         confirm_password: confirmPassword,
       };
-      
+
       if (skipEmail) {
         payload.skip_email = true;
         payload.full_name = fullName.trim();
       } else {
         payload.email = email.trim().toLowerCase();
       }
-      
+
       const res = await fetch(`/api/academics/ext-staff-form/public/${formCode}/signup/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      
+
       const data = await res.json();
-      
+
       if (!res.ok) {
         if (data.errors) {
           setSignupErrors(data.errors);
@@ -294,7 +294,7 @@ export default function ExtStaffRegisterPage() {
         }
         return;
       }
-      
+
       // Store user_id and ext_uid for profile submission
       setUserId(data.user_id);
       setExtUid(data.ext_uid);
@@ -339,7 +339,7 @@ export default function ExtStaffRegisterPage() {
     const errors: Record<string, string> = {};
     formData.fields.forEach((field) => {
       if (field.field === 'email') return; // Skip email validation
-      
+
       // Special validation for college_name - must be selected from dropdown
       if (field.field === 'college_name' && field.enabled) {
         if (!selectedCollege) {
@@ -347,7 +347,7 @@ export default function ExtStaffRegisterPage() {
         }
         return;
       }
-      
+
       if (field.required) {
         // For file fields, check the files state
         if (field.type === 'file') {
@@ -373,15 +373,15 @@ export default function ExtStaffRegisterPage() {
 
     try {
       const submitData = new FormData();
-      
+
       // Add user_id from signup
       submitData.append('user_id', userId.toString());
-      
+
       // Add text fields
       Object.entries(values).forEach(([key, value]) => {
         submitData.append(key, value);
       });
-      
+
       // Add files
       Object.entries(files).forEach(([key, file]) => {
         submitData.append(key, file);
@@ -532,7 +532,7 @@ export default function ExtStaffRegisterPage() {
             </div>
             <h2 className="mt-4 text-2xl font-bold text-gray-800">Account Created Successfully!</h2>
             <p className="mt-2 text-gray-600">{result.message}</p>
-            
+
             {/* Prominent External ID Display */}
             <div className="mt-6 p-4 bg-green-50 border-2 border-green-200 rounded-xl">
               <div className="flex items-center justify-center gap-2 text-green-700">
@@ -546,7 +546,7 @@ export default function ExtStaffRegisterPage() {
                 Please save this ID for future reference
               </p>
             </div>
-            
+
             <div className="mt-6 bg-gray-50 rounded-lg p-4 text-left">
               <h3 className="font-semibold text-gray-800 mb-2">Your Account Details:</h3>
               <div className="space-y-2 text-sm">
@@ -584,7 +584,7 @@ export default function ExtStaffRegisterPage() {
               <h2 className="text-lg font-semibold text-gray-800">Enter Your Email</h2>
               <p className="text-sm text-gray-500 mt-1">We'll check if you're already registered</p>
             </div>
-            
+
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Email Address <span className="text-red-500">*</span>
@@ -606,7 +606,7 @@ export default function ExtStaffRegisterPage() {
                 <p className="mt-1 text-sm text-red-500">{emailError}</p>
               )}
             </div>
-            
+
             <button
               type="submit"
               disabled={checkingEmail}
@@ -624,7 +624,7 @@ export default function ExtStaffRegisterPage() {
                 </>
               )}
             </button>
-            
+
             <div className="mt-4 pt-4 border-t border-gray-200">
               <button
                 type="button"
@@ -666,13 +666,13 @@ export default function ExtStaffRegisterPage() {
                 </p>
               )}
             </div>
-            
+
             {signupErrors.form && (
               <div className="mb-4 p-3 bg-red-50 border border-red-100 rounded-lg text-sm text-red-700">
                 {signupErrors.form}
               </div>
             )}
-            
+
             {skipEmail && (
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -700,7 +700,7 @@ export default function ExtStaffRegisterPage() {
                 )}
               </div>
             )}
-            
+
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Password <span className="text-red-500">*</span>
@@ -734,7 +734,7 @@ export default function ExtStaffRegisterPage() {
                 <p className="mt-1 text-sm text-red-500">{signupErrors.password}</p>
               )}
             </div>
-            
+
             <div className="mb-6">
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Confirm Password <span className="text-red-500">*</span>
@@ -768,7 +768,7 @@ export default function ExtStaffRegisterPage() {
                 <p className="mt-1 text-sm text-red-500">{signupErrors.confirm_password}</p>
               )}
             </div>
-            
+
             <div className="flex gap-3">
               <button
                 type="button"
@@ -807,12 +807,12 @@ export default function ExtStaffRegisterPage() {
   // Step 3: Form filling
   // Filter out email field since it's already captured
   const formFields = formData?.fields.filter(f => f.field !== 'email') || [];
-  
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#fdf2f4] to-[#f8f9fa]">
       {/* Sticky Logo Header */}
       <LogoHeader sticky />
-      
+
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Title Header */}
         <div className="bg-[#6f1d34] rounded-t-xl px-6 py-4 text-white">
@@ -912,7 +912,7 @@ export default function ExtStaffRegisterPage() {
                         <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-green-500" />
                       )}
                     </div>
-                    
+
                     {/* Dropdown results */}
                     {showCollegeDropdown && collegeQuery.length >= 2 && (
                       <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-auto">
@@ -938,7 +938,7 @@ export default function ExtStaffRegisterPage() {
                         ) : null}
                       </div>
                     )}
-                    
+
                     {/* Helper text */}
                     {!selectedCollege && collegeQuery.length < 2 && (
                       <p className="mt-1 text-xs text-gray-500">

@@ -207,18 +207,18 @@ def calculate_weighted_mark(
 ) -> Optional[Decimal]:
     """
     Calculate weighted mark from raw mark.
-    
+
     Formula: (raw_mark / max_mark) * weight * (out_of / 100)
-    
+
     Example: raw=45, max=50, weight=15% (of 40)
     weighted = (45/50) * 15 * (40/100) = 0.9 * 15 * 0.4 = 5.4
-    
+
     But typically weight is already the target value (e.g., 5% of 40 = 2.0 max)
     So: weighted = (raw_mark / max_mark) * (weight / 100 * out_of)
     """
     if max_mark <= 0 or raw_mark is None:
         return None
-    
+
     percentage = raw_mark / max_mark
     weighted = percentage * (weight / 100) * out_of
     return round2(weighted)
@@ -232,22 +232,22 @@ def calculate_co_weighted_marks(
 ) -> Dict[str, Decimal]:
     """
     Calculate weighted marks per CO for a student's exam.
-    
+
     Returns: {"SSA1_CO1": 2.3, "SSA1_CO2": 2.4, ...}
     """
     result = {}
-    
+
     if student_mark.is_absent or student_mark.is_exempted:
         return result
-    
+
     exam = exam_assignment.exam
     weight = float(exam_assignment.weight)
     max_marks = float(exam_assignment.max_marks)
     covered_cos = exam_assignment.covered_cos or []
-    
+
     if not covered_cos or weight <= 0:
         return result
-    
+
     # Get CO marks from student
     co_marks = {
         1: float(student_mark.co1_mark or 0),
@@ -256,13 +256,13 @@ def calculate_co_weighted_marks(
         4: float(student_mark.co4_mark or 0),
         5: float(student_mark.co5_mark or 0),
     }
-    
+
     # Calculate max marks per CO (divide equally among covered COs)
     max_per_co = max_marks / len(covered_cos)
-    
+
     # Weight per CO (divide weight equally)
     weight_per_co = weight / len(covered_cos)
-    
+
     for co in covered_cos:
         if 1 <= co <= 5:
             raw = co_marks.get(co, 0)
@@ -270,7 +270,7 @@ def calculate_co_weighted_marks(
             if weighted is not None:
                 key = f"{exam}_CO{co}"
                 result[key] = weighted
-    
+
     return result
 
 
@@ -279,13 +279,13 @@ def calculate_internal_totals(
 ) -> Dict[str, Decimal]:
     """
     Calculate CO totals and final mark from weighted_marks dict.
-    
+
     Input: {"SSA1_CO1": 2.3, "SSA1_CO2": 2.4, "CIA1_CO1": 4.8, ...}
     Output: {"co1_total": 7.1, "co2_total": ..., "final_mark": ...}
     """
-    co_totals = {1: Decimal('0'), 2: Decimal('0'), 3: Decimal('0'), 
+    co_totals = {1: Decimal('0'), 2: Decimal('0'), 3: Decimal('0'),
                  4: Decimal('0'), 5: Decimal('0')}
-    
+
     for key, value in weighted_marks.items():
         if value is None:
             continue
@@ -298,7 +298,7 @@ def calculate_internal_totals(
                     co_totals[co_num] += Decimal(str(value))
             except (ValueError, TypeError):
                 continue
-    
+
     result = {
         'co1_total': round2(float(co_totals[1])),
         'co2_total': round2(float(co_totals[2])),
@@ -306,43 +306,43 @@ def calculate_internal_totals(
         'co4_total': round2(float(co_totals[4])),
         'co5_total': round2(float(co_totals[5])),
     }
-    
+
     result['final_mark'] = round2(sum(float(v) for v in co_totals.values()))
-    
+
     return result
 
 
 def compute_section_internal_marks(section) -> List[Dict]:
     """
     Compute internal marks for all students in a section.
-    
+
     Aggregates weighted marks from all exam assignments.
     """
     from academics.models import StudentSectionAssignment
     from ..models import AcV2CqiAttained, AcV2InternalMark, AcV2StudentMark
-    
+
     # Get all exam assignments for this section
     exam_assignments = section.exam_assignments.filter(
         status__in=['PUBLISHED', 'LOCKED']
     ).select_related('section__course__class_type')
-    
+
     if not exam_assignments.exists():
         return []
-    
+
     # Get class type for out_of value
     class_type = section.course.class_type
     out_of = float(class_type.total_internal_marks) if class_type else 40
-    
+
     # Collect all student marks
     student_weighted = {}  # student_id -> {key: value}
     student_info = {}  # student_id -> {reg_no, name}
-    
+
     for ea in exam_assignments:
         marks = AcV2StudentMark.objects.filter(exam_assignment=ea)
-        
+
         for sm in marks:
             sid = str(sm.student_id)
-            
+
             if sid not in student_weighted:
                 student_weighted[sid] = {}
                 student_info[sid] = {
@@ -350,7 +350,7 @@ def compute_section_internal_marks(section) -> List[Dict]:
                     'name': sm.student_name,
                     'student_id': sm.student_id,
                 }
-            
+
             # Calculate weighted marks for this exam
             wm = calculate_co_weighted_marks(sm, ea, class_type, out_of)
             student_weighted[sid].update(wm)
@@ -463,13 +463,13 @@ def compute_section_internal_marks(section) -> List[Dict]:
                     key = f"{ea.exam}_CO{co_n}"
                     student_weighted[sid][key] = mapped
                     co_totals[co_n] = Decimal(str(round(float(co_totals[co_n]) + mapped, 2)))
-    
+
     # Update or create internal marks
     results = []
     for sid, weighted in student_weighted.items():
         info = student_info[sid]
         totals = calculate_internal_totals(weighted)
-        
+
         internal_mark, created = AcV2InternalMark.objects.update_or_create(
             section=section,
             student_id=info['student_id'],
@@ -486,7 +486,7 @@ def compute_section_internal_marks(section) -> List[Dict]:
                 'max_mark': out_of,
             }
         )
-        
+
         results.append({
             'id': str(internal_mark.id),
             'reg_no': info['reg_no'],
@@ -494,5 +494,5 @@ def compute_section_internal_marks(section) -> List[Dict]:
             'weighted_marks': weighted,
             **totals,
         })
-    
+
     return results

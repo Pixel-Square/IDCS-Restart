@@ -29,16 +29,16 @@ def get_student_topics_from_excel(ssa_assignment, reg_no):
     topics = []
     if not ssa_assignment.student_topic_file or not ssa_assignment.student_topic_file.name:
         return topics
-        
+
     try:
         # Open workbook from the stored file
         wb = openpyxl.load_workbook(ssa_assignment.student_topic_file.file, data_only=True)
         sheet = wb.active
-        
+
         # Assume Row 1 is headers: Reg No, Student Name, Topic 1, Topic 2, etc.
         # Find which column contains Reg No. Usually it's col 1.
         reg_no = str(reg_no).strip().lower()
-        
+
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if row[0] and str(row[0]).strip().lower() == reg_no:
                 # Topics start from column 3 (index 2)
@@ -48,7 +48,7 @@ def get_student_topics_from_excel(ssa_assignment, reg_no):
                 break
     except Exception as e:
         logger.error(f"Error reading topics from excel for {reg_no}: {e}")
-        
+
     return topics
 
 def generate_cover_page_pdf(student_data: dict) -> bytes:
@@ -56,11 +56,11 @@ def generate_cover_page_pdf(student_data: dict) -> bytes:
     Generate a professional cover page PDF with student details matching the college template.
     """
     buffer = io.BytesIO()
-    
+
     # Setup canvas
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
-    
+
     # 1. College Header Image
     header_path = os.path.join(os.path.dirname(__file__), 'static', 'ssa', 'college_logo_header.png')
     if os.path.exists(header_path):
@@ -68,39 +68,39 @@ def generate_cover_page_pdf(student_data: dict) -> bytes:
         img_w = width * 0.85
         img_h = img_w * (214 / 730)
         c.drawImage(header_path, (width - img_w) / 2, height - img_h - 1*cm, width=img_w, height=img_h)
-    
+
     current_y = height - 2*inch - 1*cm
-    
+
     # 2. Department Name
     c.setFont("Helvetica-Bold", 14)
     c.drawCentredString(width / 2.0, current_y, f"DEPARTMENT OF {student_data.get('department', 'ARTIFICIAL INTELLIGENCE AND DATA SCIENCE').upper()}")
     current_y -= 1*cm
-    
+
     # 3. SSA Title
     c.setFont("Helvetica-Bold", 13)
     c.drawCentredString(width / 2.0, current_y, student_data.get('assignment_type', 'SELF STUDY ASSIGNMENT – I').upper())
     current_y -= 1.2*cm
-    
+
     # 4. Course Code - Course Name Box
     box_w = width * 0.85
     box_h = 1*cm
     box_x = (width - box_w) / 2
     c.rect(box_x, current_y - box_h/2, box_w, box_h)
-    
+
     course_str = f"{student_data.get('course_code', 'N/A')} - {student_data.get('course_name', 'N/A')}"
     if student_data.get('class_type'):
         course_str += f" ({student_data.get('class_type').title()})"
     c.setFont("Helvetica-Bold", 12)
     c.drawCentredString(width / 2.0, current_y - 0.15*cm, course_str.upper())
-    
+
     current_y -= 2*cm
-    
+
     # 5. Student Details Box
     details_box_w = width * 0.85
     details_box_h = 4.5*cm
     details_box_y = current_y - details_box_h
     c.rect((width - details_box_w) / 2, details_box_y, details_box_w, details_box_h)
-    
+
     labels = ["Name", "Register No.", "Year / Semester", "Date of Submission"]
     values = [
         student_data.get('student_name', ''),
@@ -108,7 +108,7 @@ def generate_cover_page_pdf(student_data: dict) -> bytes:
         f"{student_data.get('year', '')} / {student_data.get('semester', '')}",
         student_data.get('submission_date', '')
     ]
-    
+
     text_y = current_y - 1*cm
     for label, val in zip(labels, values):
         c.setFont("Helvetica-Bold", 12)
@@ -117,14 +117,14 @@ def generate_cover_page_pdf(student_data: dict) -> bytes:
         c.setFont("Helvetica", 12)
         c.drawString(box_x + 5*cm, text_y, str(val))
         text_y -= 1*cm
-        
+
     current_y = details_box_y - 1.5*cm
-    
+
     # 6. Marks Awarded
     c.setFont("Helvetica-Bold", 12)
     c.drawString(box_x, current_y, "Marks Awarded:")
     current_y -= 0.5*cm
-    
+
     # 7. Marks Table
     marks_data = [
         ["CO", "Why this stack chosen for\nIDCS (5 Marks)", "Benefits, Pros and Cons\n(5 Marks)", "Comparison with Other Stack\n(5 Marks)", "Technical Explanation and\nPractical Relevance (5 Marks)", f"Total\n({student_data.get('max_marks', 20)})"],
@@ -141,18 +141,18 @@ def generate_cover_page_pdf(student_data: dict) -> bytes:
     ]))
     t.wrapOn(c, width, height)
     t.drawOn(c, box_x, current_y - 3*cm)
-    
+
     current_y -= 4.5*cm
-    
+
     # 8. Assignment Topic Table
     topics = student_data.get('topics', [])
     if not topics:
         topics = [""]
-        
+
     topic_data = [["Assignment Topic", "CO", "POs\naddressed"]]
     for topic in topics:
         topic_data.append([topic, "", ""])
-        
+
     t2 = Table(topic_data, colWidths=[box_w - 4*cm, 2*cm, 2*cm])
     t2.setStyle(TableStyle([
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
@@ -161,26 +161,26 @@ def generate_cover_page_pdf(student_data: dict) -> bytes:
         ('FONTSIZE', (0,0), (-1,-1), 10),
         ('GRID', (0,0), (-1,-1), 1, black),
     ]))
-    
+
     # Calculate required height for topics table (header row ~1cm + topic rows ~1cm each)
     t2_h = 1*cm + len(topics)*1*cm
-    
+
     t2.wrapOn(c, width, height)
     t2.drawOn(c, box_x, current_y - t2_h)
-    
+
     current_y -= (t2_h + 3*cm)
-    
+
     # 9. Signatures
     c.setFont("Helvetica-Bold", 12)
     c.drawString(box_x, current_y, "Student Signature")
     c.drawRightString(box_x + box_w, current_y, "Staff Signature")
-    
+
     c.showPage()
     c.save()
-    
+
     pdf_bytes = buffer.getvalue()
     buffer.close()
-    
+
     return pdf_bytes
 
 def merge_cover_with_submission(cover_pdf_bytes: bytes, submission_file) -> bytes:
@@ -189,32 +189,32 @@ def merge_cover_with_submission(cover_pdf_bytes: bytes, submission_file) -> byte
     """
     try:
         cover_reader = PdfReader(io.BytesIO(cover_pdf_bytes))
-        
+
         # Check if submission_file is bytes or file-like
         if hasattr(submission_file, 'read'):
             submission_file.seek(0)
             submission_bytes = submission_file.read()
         else:
             submission_bytes = submission_file
-            
+
         submission_reader = PdfReader(io.BytesIO(submission_bytes))
-        
+
         writer = PdfWriter()
-        
+
         # Add cover page
         for page in cover_reader.pages:
             writer.add_page(page)
-            
+
         # Add submission pages
         for page in submission_reader.pages:
             writer.add_page(page)
-            
+
         output_buffer = io.BytesIO()
         writer.write(output_buffer)
-        
+
         merged_bytes = output_buffer.getvalue()
         output_buffer.close()
-        
+
         return merged_bytes
     except Exception as e:
         logger.error(f"Error merging PDFs: {e}")
@@ -234,14 +234,14 @@ def create_student_submission_pdf(student_profile, ssa_assignment, submission_fi
         exam_assignment = ssa_assignment.exam_assignment
         section = exam_assignment.section
         teaching_assignment = section.teaching_assignment if hasattr(section, 'teaching_assignment') else None
-        
+
         # Try to extract semester info
         semester = section.semester if hasattr(section, 'semester') else None
         if not semester and teaching_assignment and hasattr(teaching_assignment, 'semester'):
             semester = teaching_assignment.semester
-            
+
         course = section.course if hasattr(section, 'course') else (teaching_assignment.course if teaching_assignment and hasattr(teaching_assignment, 'course') else None)
-        
+
         # Safely get department
         department_name = "N/A"
         if hasattr(student_profile, 'home_department') and student_profile.home_department:
@@ -255,7 +255,7 @@ def create_student_submission_pdf(student_profile, ssa_assignment, submission_fi
                     department_name = course.department.name
             except Exception:
                 pass
-                
+
         # Get faculty name safely
         faculty_name = "N/A"
         if teaching_assignment and hasattr(teaching_assignment, 'faculty_user') and teaching_assignment.faculty_user:
@@ -263,15 +263,15 @@ def create_student_submission_pdf(student_profile, ssa_assignment, submission_fi
             faculty_name = f"{getattr(faculty_user, 'first_name', '')} {getattr(faculty_user, 'last_name', '')}".strip()
             if not faculty_name:
                 faculty_name = str(faculty_user)
-        
+
         # Get year mapping based on semester
         sem_num = getattr(semester, 'semester_number', None) if semester else None
         year_val = (sem_num + 1) // 2 if sem_num else "N/A"
-        
+
         exam_name = "SSA Assignment"
         if hasattr(exam_assignment, 'exam'):
             exam_name = getattr(exam_assignment.exam, 'name', str(exam_assignment.exam))
-                
+
         # Gather data
         student_data = {
             'student_name': str(student_profile.user) if hasattr(student_profile, 'user') else "N/A",
@@ -290,12 +290,12 @@ def create_student_submission_pdf(student_profile, ssa_assignment, submission_fi
             'max_marks': exam_assignment.max_marks,
             'topics': topics or []
         }
-        
+
         cover_pdf_bytes = generate_cover_page_pdf(student_data)
         merged_pdf_bytes = merge_cover_with_submission(cover_pdf_bytes, submission_file)
-        
+
         file_name = f"SSA_{student_data['register_number']}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
-        
+
         return ContentFile(merged_pdf_bytes, name=file_name)
     except Exception as e:
         logger.error(f"Error creating student submission PDF: {e}")

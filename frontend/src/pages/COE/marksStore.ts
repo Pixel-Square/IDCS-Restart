@@ -33,7 +33,7 @@ export async function hydrateMarksStore(): Promise<void> {
     const res = await fetchWithAuth('/api/coe/student-marks/');
     if (!res.ok) return;
     const json = await res.json();
-    
+
     // Convert array of entries to map
     const map: MarksMap = {};
     for (const entry of json.entries || []) {

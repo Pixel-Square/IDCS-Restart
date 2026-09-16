@@ -157,8 +157,8 @@ function SessionCard({ session }: { session: BypassSession }) {
                 )}
               </div>
               <p className="text-xs text-gray-500 mt-0.5">
-                Faculty: {session.faculty?.name || '—'} · 
-                Admin: {session.admin.name} · 
+                Faculty: {session.faculty?.name || '—'} ·
+                Admin: {session.admin.name} ·
                 {new Date(session.started_at).toLocaleString()}
                 {session.ended_at && <> · Duration: {formatDuration(session.duration_seconds)}</>}
               </p>

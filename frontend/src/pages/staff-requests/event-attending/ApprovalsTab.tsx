@@ -88,7 +88,7 @@ export default function ApprovalsTab({ pendingForms, processedForms, onProcessed
                       if (typeof v === 'string' && (v.startsWith('{') || v.startsWith('['))) {
                          try { parsedV = JSON.parse(v); } catch(e) {}
                       }
-                      
+
                       const extractFiles = (obj: any): {url: string, name: string}[] => {
                         if (!obj || typeof obj !== 'object') return [];
                         if (Array.isArray(obj)) return obj.flatMap(extractFiles);
@@ -105,7 +105,7 @@ export default function ApprovalsTab({ pendingForms, processedForms, onProcessed
                       };
 
                       const files = extractFiles(parsedV);
-                      
+
                       if (files.length > 0) {
                         return (
                           <div key={k}><span className="text-gray-500 capitalize">{k.replace(/_/g, ' ')}:</span>
@@ -117,13 +117,13 @@ export default function ApprovalsTab({ pendingForms, processedForms, onProcessed
                           </div>
                         );
                       }
-                      
+
                       const displayVal = typeof parsedV === 'object' ? JSON.stringify(parsedV) : String(v);
                       return (
                         <div key={k}><span className="text-gray-500 capitalize">{k.replace(/_/g, ' ')}:</span> <span className="font-medium truncate max-w-full inline-block align-bottom" title={displayVal}>{displayVal}</span></div>
                       );
                     })}
-                    
+
                     {form.event_proof && (
                       <div>
                         <span className="text-gray-500 capitalize">Event Proof:</span>
@@ -215,7 +215,7 @@ export default function ApprovalsTab({ pendingForms, processedForms, onProcessed
                         <h6 className="text-xs font-semibold text-gray-500 uppercase">Approval Logs</h6>
                         {form.approval_logs.map(log => (
                           <div key={log.id} className="text-xs bg-white border border-gray-100 rounded p-2">
-                            <span className="font-semibold text-gray-800">{log.approver.name} ({log.action})</span> 
+                            <span className="font-semibold text-gray-800">{log.approver.name} ({log.action})</span>
                             <span className="text-gray-400 ml-2">{new Date(log.action_date).toLocaleString()}</span>
                             {log.comments && <p className="text-gray-600 mt-1 italic">"{log.comments}"</p>}
                           </div>
