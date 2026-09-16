@@ -988,8 +988,7 @@ class AcV2ExamAssignment(models.Model):
             except Exception:
                 co_num = 1
             num_items = int(c_val.get('num_items') or 1)
-            raw_max = float(c_val.get('max_marks') or 0)
-            per_item_max = round(raw_max / num_items, 2) if num_items > 0 else raw_max
+            per_item_max = float(c_val.get('max_marks') or 0)
             for i in range(num_items):
                 questions.append({
                     'id': f'q{q_idx}',

@@ -4932,20 +4932,44 @@ def faculty_course_info(request, ta_id):
                         ).first()
                     )
                     if qp_match and isinstance(qp_match.pattern, dict):
-                        qp_marks = qp_match.pattern.get('marks', [])
-                        qp_cos = qp_match.pattern.get('cos', [])
-                        qp_enabled = qp_match.pattern.get('enabled', [True] * len(qp_marks))
-                        derived_max = sum(
-                            m for i, m in enumerate(qp_marks)
-                            if i < len(qp_enabled) and qp_enabled[i]
-                        )
-                        covered_cos = sorted(set(
-                            co
-                            for i, c in enumerate(qp_cos)
-                            if c is not None and i < len(qp_enabled) and qp_enabled[i]
-                            for co in (c if isinstance(c, list) else [c])
-                            if isinstance(co, int)
-                        ))
+                        qp_mm = qp_match.pattern.get('mark_manager')
+                        if qp_mm and isinstance(qp_mm, dict) and qp_mm.get('enabled'):
+                            mm_cos = qp_mm.get('cos', {})
+                            mm_total = 0
+                            mm_covered = []
+                            if isinstance(mm_cos, dict):
+                                for co_k, co_v in mm_cos.items():
+                                    if isinstance(co_v, dict) and co_v.get('enabled'):
+                                        try:
+                                            c_num = int(co_k)
+                                            mm_covered.append(c_num)
+                                        except Exception:
+                                            pass
+                                        num_items = int(co_v.get('num_items') or 1)
+                                        mm_total += float(co_v.get('max_marks') or 0) * num_items
+                            if qp_mm.get('cia_enabled') and float(qp_mm.get('cia_max_marks') or 0) > 0:
+                                mm_total += float(qp_mm.get('cia_max_marks') or 0)
+                            if mm_total > 0:
+                                derived_max = mm_total
+                            if mm_covered:
+                                covered_cos = sorted(set(mm_covered))
+
+                        if not derived_max:
+                            qp_marks = qp_match.pattern.get('marks', [])
+                            qp_cos = qp_match.pattern.get('cos', [])
+                            qp_enabled = qp_match.pattern.get('enabled', [True] * len(qp_marks))
+                            derived_max = sum(
+                                m for i, m in enumerate(qp_marks)
+                                if i < len(qp_enabled) and qp_enabled[i]
+                            )
+                            if not covered_cos:
+                                covered_cos = sorted(set(
+                                    co
+                                    for i, c in enumerate(qp_cos)
+                                    if c is not None and i < len(qp_enabled) and qp_enabled[i]
+                                    for co in (c if isinstance(c, list) else [c])
+                                    if isinstance(co, int)
+                                ))
                     if not covered_cos:
                         covered_cos = ea_conf.get('default_cos', [])
 
@@ -4980,6 +5004,16 @@ def faculty_course_info(request, ta_id):
                 if _new_kind == 'cqi' and covered_cos and (ea_obj.covered_cos or []) != covered_cos:
                     ea_obj.covered_cos = covered_cos
                     ea_update_fields.append('covered_cos')
+                elif _new_kind != 'cqi':
+                    p_resolved = ea_obj.get_qp_pattern()
+                    if isinstance(p_resolved, dict) and p_resolved.get('questions'):
+                        p_total = sum(float(q.get('max_marks') or 0) for q in p_resolved['questions'])
+                        if p_total > 0 and float(ea_obj.max_marks or 0) != round(p_total, 2):
+                            ea_obj.max_marks = round(p_total, 2)
+                            ea_update_fields.append('max_marks')
+                    elif derived_max and float(ea_obj.max_marks or 0) != round(derived_max, 2):
+                        ea_obj.max_marks = round(derived_max, 2)
+                        ea_update_fields.append('max_marks')
                 if ea_update_fields:
                     ea_obj.save(update_fields=ea_update_fields)
                 # Get per-CO weights from class type config
@@ -5492,6 +5526,17 @@ def faculty_exam_info(request, exam_id):
                 'name': matched_pattern.name if matched_pattern else (ea.exam_display_name or ea.exam or ''),
                 'questions': questions,
             }
+
+    if qp_pattern_response and qp_pattern_response.get('questions'):
+        q_sum = sum(float(q.get('max_marks') or 0) for q in qp_pattern_response['questions'])
+        if q_sum > 0:
+            q_sum_rounded = round(q_sum, 2)
+            if float(ea.max_marks or 0) != q_sum_rounded:
+                ea.max_marks = q_sum_rounded
+                try:
+                    ea.save(update_fields=['max_marks'])
+                except Exception:
+                    pass
 
     # Resolve CQI config for THIS specific exam assignment (not just first CQI).
     # Look up the AcV2CqiExam whose exam_code or exam_display_name matches ea.exam / ea.exam_display_name.

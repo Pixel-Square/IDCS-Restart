@@ -234,7 +234,7 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
       const coCfg = cfg.cos[coNum];
       if (!coCfg.enabled) continue;
       const numItems = coCfg.num_items || 1;
-      const perItem = numItems > 0 ? Math.round((coCfg.max_marks / numItems) * 100) / 100 : coCfg.max_marks;
+      const perItem = Number(coCfg.max_marks) || 0;
       for (let i = 0; i < numItems; i++) {
         rows.push({ title: `CO${coNum} - ${commonItemName} ${i + 1}`, max_marks: perItem, btl_level: null, co_number: coNum, enabled: true, special_split: false, special_split_sources: [] });
       }
@@ -256,7 +256,7 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
     ? (markManager.cia_enabled ? Number(markManager.cia_max_marks) || 0 : 0) +
       Object.values(markManager.cos)
         .filter(c => c.enabled)
-        .reduce((s, c) => s + (Number(c.max_marks) || 0), 0)
+        .reduce((s, c) => s + ((Number(c.max_marks) || 0) * (Number(c.num_items) || 1)), 0)
     : props.localRows.filter(r => r.enabled).reduce((s, r) => s + (Number(r.max_marks) || 0), 0);
 
   const handleSaveClick = async () => {
@@ -582,7 +582,7 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
                         </div>
 
                         <div className="mt-3 flex items-center gap-4 text-sm">
-                          <span className={`font-medium px-2 py-0.5 rounded ${totalMarks > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>Total: {markManager.cia_enabled ? markManager.cia_max_marks + Object.values(markManager.cos).filter(c => c.enabled).reduce((s, c) => s + c.max_marks, 0) : Object.values(markManager.cos).filter(c => c.enabled).reduce((s, c) => s + c.max_marks, 0)} marks</span>
+                          <span className={`font-medium px-2 py-0.5 rounded ${totalMarks > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>Total: {totalMarks} marks</span>
                         </div>
                       </div>
                     )}

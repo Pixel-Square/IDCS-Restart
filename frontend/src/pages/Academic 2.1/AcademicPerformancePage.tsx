@@ -2399,13 +2399,29 @@ return (
               ) : (
                 <div>
                   {/* Avg / Pass metric cards */}
-                  <div className="grid grid-cols-1 gap-4 mb-6">
-                    <div className="bg-indigo-50/60 border border-indigo-100 rounded-2xl p-5 text-center">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                    <div className="bg-indigo-50/60 border border-indigo-100 rounded-2xl p-5 text-center flex flex-col justify-center items-center">
                       <p className="text-xs font-bold text-indigo-500 uppercase tracking-wider">Average Marks</p>
                       <h3 className="text-3xl font-black text-indigo-700 mt-1">
                         {studentChartsData?.avg_pct !== undefined && studentChartsData?.avg_pct !== null
                           ? `${studentChartsData.avg_pct}%`
                           : '—'}
+                      </h3>
+                    </div>
+                    
+                    <div className="bg-emerald-50/60 border border-emerald-100 rounded-2xl p-5 text-center flex flex-col justify-center items-center">
+                      <p className="text-xs font-bold text-emerald-500 uppercase tracking-wider">Overall Remarks</p>
+                      <h3 className="text-2xl font-black text-emerald-700 mt-1">
+                        {(() => {
+                          const pct = studentChartsData?.avg_pct;
+                          if (pct === undefined || pct === null) return '—';
+                          if (pct >= 90) return 'Excellent';
+                          if (pct >= 80) return 'Very Good';
+                          if (pct >= 70) return 'Good';
+                          if (pct >= 60) return 'Satisfactory';
+                          if (pct >= 50) return 'Needs Improvement';
+                          return 'Needs Significant Improvement';
+                        })()}
                       </h3>
                     </div>
                   </div>

@@ -785,10 +785,7 @@ export default function MarkEntryPage() {
         const coCfg = examData.mark_manager.cos[coNum];
         if (!coCfg?.enabled) continue;
         const numItems = coCfg.num_items || 1;
-        const perItem =
-          numItems > 0
-            ? Math.round(((coCfg.max_marks || 0) / numItems) * 100) / 100
-            : coCfg.max_marks || 0;
+        const perItem = Number(coCfg.max_marks) || 0;
         for (let i = 0; i < numItems; i++) {
           genQuestions.push({
             id: `q_${qIdx++}`,
@@ -813,6 +810,13 @@ export default function MarkEntryPage() {
     // Normalise qp_pattern: if empty object or missing questions, set null
     if (examData.qp_pattern && (!examData.qp_pattern.questions || examData.qp_pattern.questions.length === 0)) {
       examData.qp_pattern = null;
+    }
+
+    if (examData.qp_pattern?.questions && examData.qp_pattern.questions.length > 0) {
+      const sumQMarks = examData.qp_pattern.questions.reduce((sum, q) => sum + (Number(q.max_marks) || 0), 0);
+      if (sumQMarks > 0) {
+        examData.max_marks = Math.round(sumQMarks * 100) / 100;
+      }
     }
 
     return examData;
@@ -913,7 +917,8 @@ export default function MarkEntryPage() {
       : [];
 
   // Mark Manager entry settings
-  const wholeNumber = !!examInfo?.mark_manager?.whole_number;
+  const hasDecimals = (questions.some(q => (Number(q.max_marks) || 0) % 1 !== 0)) || ((Number(examInfo?.max_marks) || 0) % 1 !== 0);
+  const wholeNumber = !hasDecimals && !!examInfo?.mark_manager?.whole_number;
   const arrowKeysIncDec = examInfo?.mark_manager?.arrow_keys !== false && !!examInfo?.mark_manager?.arrow_keys;
   type SheetCellPos = { row: number; col: number };
   const [sheetSelection, setSheetSelection] = useState<null | { anchor: SheetCellPos; focus: SheetCellPos; dragging: boolean }>(null);
@@ -1409,8 +1414,9 @@ export default function MarkEntryPage() {
   const buildMarksPayload = (sourceStudents: Student[]) => sourceStudents.map(s => {
     const sanitizedCoMarks = getSanitizedCoMarks(s.co_marks);
     const totalFromCoMarks = Object.values(sanitizedCoMarks).reduce((sum, m) => sum + m, 0);
+    const roundedTotal = Math.round(totalFromCoMarks * 100) / 100;
     const normalizedMark = normalizeMarkInputValue(s.mark);
-    const finalMark = normalizedMark !== null ? normalizedMark : (Object.keys(sanitizedCoMarks).length > 0 ? totalFromCoMarks : null);
+    const finalMark = normalizedMark !== null ? normalizedMark : (Object.keys(sanitizedCoMarks).length > 0 ? roundedTotal : null);
     return {
       student_id: s.id,
       mark: finalMark,
@@ -1442,7 +1448,8 @@ export default function MarkEntryPage() {
         delete co_marks[qId];
         const sanitizedCoMarks = getSanitizedCoMarks(co_marks);
         const total = Object.values(sanitizedCoMarks).reduce((sum, m) => sum + m, 0);
-        return { ...s, co_marks: sanitizedCoMarks, mark: Object.keys(sanitizedCoMarks).length > 0 ? total : null, saved: false };
+        const roundedTotal = Math.round(total * 100) / 100;
+        return { ...s, co_marks: sanitizedCoMarks, mark: Object.keys(sanitizedCoMarks).length > 0 ? roundedTotal : null, saved: false };
       }));
       setHasChanges(true);
       triggerAutoSave();
@@ -1460,7 +1467,8 @@ export default function MarkEntryPage() {
         delete co_marks[qId];
         const sanitizedCoMarks = getSanitizedCoMarks(co_marks);
         const total = Object.values(sanitizedCoMarks).reduce((sum, m) => sum + m, 0);
-        return { ...s, co_marks: sanitizedCoMarks, mark: Object.keys(sanitizedCoMarks).length > 0 ? total : null, saved: false };
+        const roundedTotal = Math.round(total * 100) / 100;
+        return { ...s, co_marks: sanitizedCoMarks, mark: Object.keys(sanitizedCoMarks).length > 0 ? roundedTotal : null, saved: false };
       }));
       setHasChanges(true);
       triggerAutoSave();
@@ -1472,7 +1480,8 @@ export default function MarkEntryPage() {
       const co_marks = { ...s.co_marks, [qId]: normalizedValue };
       const sanitizedCoMarks = getSanitizedCoMarks(co_marks);
       const total = Object.values(sanitizedCoMarks).reduce((sum, m) => sum + m, 0);
-      return { ...s, co_marks: sanitizedCoMarks, mark: Object.keys(sanitizedCoMarks).length > 0 ? total : null, saved: false };
+      const roundedTotal = Math.round(total * 100) / 100;
+      return { ...s, co_marks: sanitizedCoMarks, mark: Object.keys(sanitizedCoMarks).length > 0 ? roundedTotal : null, saved: false };
     }));
     setHasChanges(true);
     triggerAutoSave();
@@ -1555,7 +1564,8 @@ export default function MarkEntryPage() {
         if (u.nextCoMarks) {
           const sanitizedCoMarks = getSanitizedCoMarks(u.nextCoMarks as Record<string, number | null | undefined>);
           const total = Object.values(sanitizedCoMarks).reduce((sum, m) => sum + m, 0);
-          return { ...s, co_marks: sanitizedCoMarks as any, mark: Object.keys(sanitizedCoMarks).length > 0 ? total : null, saved: false };
+          const roundedTotal = Math.round(total * 100) / 100;
+          return { ...s, co_marks: sanitizedCoMarks as any, mark: Object.keys(sanitizedCoMarks).length > 0 ? roundedTotal : null, saved: false };
         }
         return { ...s, mark: u.nextMark ?? null, saved: false };
       });
@@ -1634,7 +1644,8 @@ export default function MarkEntryPage() {
           }
           const sanitizedCoMarks = getSanitizedCoMarks(nextCoMarks);
           const total = Object.values(sanitizedCoMarks).reduce((sum, m) => sum + m, 0);
-          return { ...s, co_marks: sanitizedCoMarks, mark: Object.keys(sanitizedCoMarks).length > 0 ? total : null, saved: false };
+          const roundedTotal = Math.round(total * 100) / 100;
+          return { ...s, co_marks: sanitizedCoMarks, mark: Object.keys(sanitizedCoMarks).length > 0 ? roundedTotal : null, saved: false };
         }));
       });
       setHasChanges(true);

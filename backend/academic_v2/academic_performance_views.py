@@ -2099,9 +2099,9 @@ class StudentReportPDFView(APIView):
             # Header
             y_pos = A4[1] - 15*mm
             if os.path.exists(krct_logo):
-                canvas.drawImage(krct_logo, 15*mm, y_pos - 15*mm, width=50*mm, height=15*mm, preserveAspectRatio=True, anchor='nw')
+                canvas.drawImage(krct_logo, 15*mm, y_pos - 15*mm, width=50*mm, height=15*mm, preserveAspectRatio=True, anchor='nw', mask='auto')
             if os.path.exists(idcs_logo):
-                canvas.drawImage(idcs_logo, A4[0] - 45*mm, y_pos - 15*mm, width=30*mm, height=15*mm, preserveAspectRatio=True, anchor='ne')
+                canvas.drawImage(idcs_logo, A4[0] - 45*mm, y_pos - 15*mm, width=30*mm, height=15*mm, preserveAspectRatio=True, anchor='ne', mask='auto')
             
             # Draw subtle line under header
             canvas.setStrokeColor(colors.HexColor('#E2E8F0'))

@@ -121,7 +121,7 @@ function markManagerToRows(config: MarkManagerConfig): QuestionRow[] {
     const coCfg = config.cos[coNum];
     if (!coCfg.enabled) continue;
     const numItems = coCfg.num_items || 1;
-    const perItemMarks = numItems > 0 ? Math.round((coCfg.max_marks / numItems) * 100) / 100 : coCfg.max_marks;
+    const perItemMarks = Number(coCfg.max_marks) || 0;
     for (let i = 0; i < numItems; i++) {
       rows.push({
         title: `CO${coNum} - Item ${i + 1}`,
