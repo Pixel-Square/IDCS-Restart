@@ -126,14 +126,13 @@ export const createAuditQuestion = (data: any) =>
 export const updateAuditQuestion = (id: number, data: any) =>
   req(`${BASE}/questions/${id}/`, { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(data) });
 
-export const deleteAuditQuestion = (id: number, _password?: string) =>
-  req(`${BASE}/questions/${id}/`, { method: 'DELETE' });
+export const deleteAuditQuestion = (id: number, password?: string) =>
+  req(`${BASE}/questions/${id}/`, { method: 'DELETE', headers: jsonHeaders, body: JSON.stringify({ password }) });
 
 export const importAuditQuestions = async (file: File) => {
-  const text = await file.text();
-  let data: any;
-  try { data = JSON.parse(text); } catch { throw new Error('Invalid JSON file'); }
-  return req(`${BASE}/questions/import/`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) });
+  const formData = new FormData();
+  formData.append('file', file);
+  return req(`${BASE}/questions/import/`, { method: 'POST', body: formData });
 };
 
 export const fetchAuditQuestionSets = (): Promise<AuditQuestionSet[]> =>
@@ -148,8 +147,8 @@ export const createAuditQuestionSet = (data: any) =>
 export const updateAuditQuestionSet = (id: number, data: any) =>
   req(`${BASE}/question-sets/${id}/`, { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(data) });
 
-export const deleteAuditQuestionSet = (id: number, _password?: string) =>
-  req(`${BASE}/question-sets/${id}/`, { method: 'DELETE' });
+export const deleteAuditQuestionSet = (id: number, password?: string) =>
+  req(`${BASE}/question-sets/${id}/`, { method: 'DELETE', headers: jsonHeaders, body: JSON.stringify({ password }) });
 
 export const fetchAuditRubrics = (): Promise<AuditRubric[]> =>
   req(`${BASE}/rubrics/`).then((d) => d?.results ?? d ?? []);
@@ -165,8 +164,8 @@ export const uploadAuditRubric = async (name: string, file: File) => {
   return res.json();
 };
 
-export const deleteAuditRubric = (id: number, _password?: string) =>
-  req(`${BASE}/rubrics/${id}/`, { method: 'DELETE' });
+export const deleteAuditRubric = (id: number, password?: string) =>
+  req(`${BASE}/rubrics/${id}/`, { method: 'DELETE', headers: jsonHeaders, body: JSON.stringify({ password }) });
 
 export const getAuditRubricDownloadUrl = (id: number) => `${BASE}/rubrics/${id}/download/`;
 
@@ -175,8 +174,8 @@ export const fetchAuditCycles = (): Promise<AuditCycle[]> =>
 
 export const fetchAuditAssignments = (cycle?: string, role?: string): Promise<AuditAssignment[]> => {
   const params = new URLSearchParams();
-  if (cycle) params.append('cycle', cycle);
-  if (role) params.append('role', role);
+  if (cycle) params.append('cycle_id', cycle);
+  if (role) params.append('scope', role);
   return req(`${BASE}/assignments/?${params.toString()}`).then((d) => d?.results ?? d ?? []);
 };
 
@@ -186,8 +185,8 @@ export const createAuditAssignment = (data: any) =>
 export const fetchAuditAssignmentDetail = (id: number): Promise<AuditAssignmentDetail> =>
   req(`${BASE}/assignments/${id}/`);
 
-export const deleteAuditAssignment = (id: number, _password?: string) =>
-  req(`${BASE}/assignments/${id}/`, { method: 'DELETE' });
+export const deleteAuditAssignment = (id: number, password?: string) =>
+  req(`${BASE}/assignments/${id}/`, { method: 'DELETE', headers: jsonHeaders, body: JSON.stringify({ password }) });
 
 export const removeAuditAuditor = (assignId: number, staffId: number) =>
   req(`${BASE}/assignments/${assignId}/auditors/${staffId}/`, { method: 'DELETE' });

@@ -538,7 +538,7 @@ export default function ExamAssignmentAdminPage() {
                           />
                           <div>
                             <span className="text-sm font-semibold text-gray-800">Admin Define</span>
-                            <p className="text-[11px] text-gray-500">Admin configures COs, items & marks here</p>
+                            <p className="text-[11px] text-gray-500">Configured in QP Pattern Editor page</p>
                           </div>
                         </label>
                         <label className={`flex items-center gap-2 px-4 py-2 border rounded-lg cursor-pointer select-none transition-colors ${markManager.mode === 'user_define' ? 'bg-blue-50 border-blue-400 ring-1 ring-blue-400' : 'hover:bg-gray-50'}`}>
@@ -557,152 +557,16 @@ export default function ExamAssignmentAdminPage() {
                         </label>
                       </div>
 
-                      {/* Entry settings */}
-                      <div className="flex flex-wrap items-center gap-4">
-                        <label className={`flex items-center gap-2 px-3 py-2 border rounded-lg cursor-pointer select-none transition-colors ${markManager.whole_number ? 'bg-amber-50 border-amber-300 ring-1 ring-amber-300' : 'hover:bg-gray-50'}`}>
-                          <input
-                            type="checkbox"
-                            checked={markManager.whole_number}
-                            disabled={!isEditing}
-                            onChange={e => { setMarkManager(prev => ({ ...prev, whole_number: e.target.checked })); markDirty(); }}
-                            className="w-4 h-4 accent-amber-600"
-                          />
-                          <div>
-                            <span className="text-sm font-medium text-gray-800">Whole Number</span>
-                            <p className="text-[10px] text-gray-500">No decimals allowed in mark entry</p>
-                          </div>
-                        </label>
-                        <label className={`flex items-center gap-2 px-3 py-2 border rounded-lg cursor-pointer select-none transition-colors ${markManager.arrow_keys ? 'bg-indigo-50 border-indigo-300 ring-1 ring-indigo-300' : 'hover:bg-gray-50'}`}>
-                          <input
-                            type="checkbox"
-                            checked={markManager.arrow_keys}
-                            disabled={!isEditing}
-                            onChange={e => { setMarkManager(prev => ({ ...prev, arrow_keys: e.target.checked })); markDirty(); }}
-                            className="w-4 h-4 accent-indigo-600"
-                          />
-                          <div>
-                            <span className="text-sm font-medium text-gray-800">Arrow Keys Inc/Dec</span>
-                            <p className="text-[10px] text-gray-500">Up/Down arrows change value; unchecked = navigate cells</p>
-                          </div>
-                        </label>
-                      </div>
+                      {markManager.mode === 'admin_define' && (
+                        <div className="bg-teal-50 border border-teal-200 rounded-lg p-3 text-sm text-teal-800">
+                          Admin configures the Mark Manager parameters (COs, number of experiments, and max marks) in the <strong>QP Pattern Editor page</strong> under <em>Class Type → QP Type → Exam Assignment edit popup</em>.
+                        </div>
+                      )}
 
                       {markManager.mode === 'user_define' && (
                         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">
                           Faculty will see the Mark Manager setup when they open this exam for mark entry. They can select COs, set number of items and max marks, then confirm to generate the question table.
                         </div>
-                      )}
-
-                      {markManager.mode === 'admin_define' && (
-                      <>
-                      {/* CO checkboxes row */}
-                      <div className="flex flex-wrap items-center gap-3">
-                        {[1, 2, 3, 4, 5].map(co => (
-                          <label key={co} className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg cursor-pointer select-none transition-colors ${markManager.cos[co]?.enabled ? 'bg-teal-50 border-teal-300' : 'hover:bg-gray-50'}`}>
-                            <input
-                              type="checkbox"
-                              checked={markManager.cos[co]?.enabled || false}
-                              disabled={!isEditing}
-                              onChange={e => {
-                                setMarkManager(prev => ({
-                                  ...prev,
-                                  cos: { ...prev.cos, [co]: { ...prev.cos[co], enabled: e.target.checked } },
-                                }));
-                                markDirty();
-                              }}
-                              className="w-4 h-4 accent-teal-600"
-                            />
-                            <span className="text-sm font-medium">CO-{co}</span>
-                          </label>
-                        ))}
-                        <label className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg cursor-pointer select-none transition-colors ${markManager.cia_enabled ? 'bg-teal-50 border-teal-300' : 'hover:bg-gray-50'}`}>
-                          <input
-                            type="checkbox"
-                            checked={markManager.cia_enabled}
-                            disabled={!isEditing}
-                            onChange={e => { setMarkManager(prev => ({ ...prev, cia_enabled: e.target.checked })); markDirty(); }}
-                            className="w-4 h-4 accent-teal-600"
-                          />
-                          <span className="text-sm font-medium">Exam</span>
-                        </label>
-                      </div>
-
-                      {/* Config cards */}
-                      <div className="grid grid-cols-3 gap-4">
-                        {markManager.cia_enabled && (
-                          <div className="border rounded-lg p-4 bg-gray-50">
-                            <h4 className="text-sm font-bold text-gray-800 mb-1">Exam</h4>
-                            <label className="block text-xs text-gray-500 mb-1">Max marks</label>
-                            {isEditing ? (
-                              <input
-                                type="number" min={0}
-                                value={markManager.cia_max_marks}
-                                onChange={e => { setMarkManager(prev => ({ ...prev, cia_max_marks: Number(e.target.value) || 0 })); markDirty(); }}
-                                className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
-                              />
-                            ) : (
-                              <div className="text-sm font-semibold text-gray-900">{markManager.cia_max_marks}</div>
-                            )}
-                          </div>
-                        )}
-                        {[1, 2, 3, 4, 5].filter(co => markManager.cos[co]?.enabled).map(co => (
-                          <div key={co} className="border rounded-lg p-4 bg-gray-50">
-                            <h4 className="text-sm font-bold text-gray-800 mb-2">CO-{co}</h4>
-                            <div className="space-y-2">
-                              <div>
-                                <label className="block text-xs text-teal-600 mb-0.5">No. of experiments</label>
-                                {isEditing ? (
-                                  <input
-                                    type="number" min={1} max={20}
-                                    value={markManager.cos[co].num_items}
-                                    onChange={e => {
-                                      setMarkManager(prev => ({
-                                        ...prev,
-                                        cos: { ...prev.cos, [co]: { ...prev.cos[co], num_items: Number(e.target.value) || 1 } },
-                                      }));
-                                      markDirty();
-                                    }}
-                                    className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
-                                  />
-                                ) : (
-                                  <div className="text-sm font-semibold text-gray-900">{markManager.cos[co].num_items}</div>
-                                )}
-                              </div>
-                              <div>
-                                <label className="block text-xs text-teal-600 mb-0.5">Max marks</label>
-                                {isEditing ? (
-                                  <input
-                                    type="number" min={0}
-                                    value={markManager.cos[co].max_marks}
-                                    onChange={e => {
-                                      setMarkManager(prev => ({
-                                        ...prev,
-                                        cos: { ...prev.cos, [co]: { ...prev.cos[co], max_marks: Number(e.target.value) || 0 } },
-                                      }));
-                                      markDirty();
-                                    }}
-                                    className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
-                                  />
-                                ) : (
-                                  <div className="text-sm font-semibold text-gray-900">{markManager.cos[co].max_marks}</div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* Preview total */}
-                      <div className="flex items-center gap-4 text-sm">
-                        <span className={`font-medium px-2 py-0.5 rounded ${totalMarks > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                          Total: {totalMarks} marks
-                        </span>
-                        <span className="text-xs text-gray-400">
-                          {Object.values(markManager.cos).filter(c => c.enabled).reduce((s, c) => s + c.num_items, 0)} items across {Object.values(markManager.cos).filter(c => c.enabled).length} COs
-                          {markManager.cia_enabled ? ' + Exam' : ''}
-                        </span>
-                      </div>
-                      </>
                       )}
                     </div>
                   )}

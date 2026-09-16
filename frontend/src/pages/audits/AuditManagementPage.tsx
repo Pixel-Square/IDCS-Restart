@@ -22,6 +22,7 @@ import {
   uploadAuditRubric,
 } from '../../services/audits'
 import { downloadAuditReportPdf, downloadConsolidatedAuditPdf } from '../../utils/auditReportPdf'
+import { downloadAuditQuestionTemplate } from '../../utils/auditExcelTemplate'
 import ErrorToast from '../../components/ErrorToast'
 import { usePasswordConfirm } from '../../components/PasswordConfirm'
 import AuditATRPage from './AuditATRPage'
@@ -1002,6 +1003,12 @@ export default function AuditManagementPage() {
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <p className="text-sm text-gray-500">{questions.length} active question(s).</p>
                 <div className="flex items-center gap-2">
+                  <button
+                    onClick={downloadAuditQuestionTemplate}
+                    className="inline-flex items-center gap-2 px-4 py-2 border rounded-lg text-sm text-blue-600 border-blue-200 bg-blue-50 hover:bg-blue-100"
+                  >
+                    <Download size={16} /> Download Template
+                  </button>
                   <input ref={importRef} type="file" accept=".xlsx" onChange={onImport} className="hidden" />
                   <button
                     onClick={() => importRef.current?.click()}

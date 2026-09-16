@@ -645,9 +645,11 @@ interface FacultyRequestSetting {
   notify_on_request_sent: boolean;
   notify_on_step_approved: boolean;
   notify_on_final_approved: boolean;
+  notify_on_published: boolean;
   request_sent_template: string;
   step_approved_template: string;
   final_approved_template: string;
+  published_template: string;
   updated_at: string;
 }
 
@@ -666,12 +668,14 @@ function FacultyRequestSection() {
   const [notifyOnSent, setNotifyOnSent] = useState(false);
   const [notifyOnStep, setNotifyOnStep] = useState(false);
   const [notifyOnFinal, setNotifyOnFinal] = useState(false);
+  const [notifyOnPublished, setNotifyOnPublished] = useState(false);
 
   const [tplSent, setTplSent] = useState('');
   const [tplStep, setTplStep] = useState('');
   const [tplFinal, setTplFinal] = useState('');
+  const [tplPublished, setTplPublished] = useState('');
 
-  const [activeTpl, setActiveTpl] = useState<'sent' | 'step' | 'final' | null>(null);
+  const [activeTpl, setActiveTpl] = useState<'sent' | 'step' | 'final' | 'published' | null>(null);
 
   const tokensRequest: { key: string; label: string }[] = useMemo(() => ([
     { key: '{faculty_name}', label: 'faculty_name' },
@@ -699,6 +703,7 @@ function FacultyRequestSection() {
     if (activeTpl === 'sent') setTplSent(apply);
     if (activeTpl === 'step') setTplStep(apply);
     if (activeTpl === 'final') setTplFinal(apply);
+    if (activeTpl === 'published') setTplPublished(apply);
   };
 
   const load = useCallback(async () => {
@@ -712,13 +717,20 @@ function FacultyRequestSection() {
       setRequestEnabled(Boolean(data.faculty_request_enabled));
       setRequireMobile(Boolean(data.require_mobile_verification));
       setRequirePhoto(Boolean(data.require_profile_photo));
-      setNotifyEnabled(Boolean(data.notify_on_request_sent || data.notify_on_step_approved || data.notify_on_final_approved));
+      setNotifyEnabled(Boolean(
+        data.notify_on_request_sent ||
+        data.notify_on_step_approved ||
+        data.notify_on_final_approved ||
+        data.notify_on_published
+      ));
       setNotifyOnSent(Boolean(data.notify_on_request_sent));
       setNotifyOnStep(Boolean(data.notify_on_step_approved));
       setNotifyOnFinal(Boolean(data.notify_on_final_approved));
+      setNotifyOnPublished(Boolean(data.notify_on_published));
       setTplSent(String(data.request_sent_template || ''));
       setTplStep(String(data.step_approved_template || ''));
       setTplFinal(String(data.final_approved_template || ''));
+      setTplPublished(String(data.published_template || ''));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load faculty request settings');
     } finally {
@@ -743,9 +755,11 @@ function FacultyRequestSection() {
           notify_on_request_sent: notifyEnabled && notifyOnSent,
           notify_on_step_approved: notifyEnabled && notifyOnStep,
           notify_on_final_approved: notifyEnabled && notifyOnFinal,
+          notify_on_published: notifyEnabled && notifyOnPublished,
           request_sent_template: tplSent,
           step_approved_template: tplStep,
           final_approved_template: tplFinal,
+          published_template: tplPublished,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -808,18 +822,22 @@ function FacultyRequestSection() {
         </div>
 
         {/* Notification toggles */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pl-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pl-1">
           <div className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-lg">
-            <span className="text-sm text-gray-700">Request sent</span>
+            <span className="text-sm text-gray-700 font-medium">Request sent</span>
             <AndroidSwitch disabled={!requestEnabled || !notifyEnabled} checked={notifyOnSent} onChange={setNotifyOnSent} />
           </div>
           <div className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-lg">
-            <span className="text-sm text-gray-700">Step approved</span>
+            <span className="text-sm text-gray-700 font-medium">Step approved</span>
             <AndroidSwitch disabled={!requestEnabled || !notifyEnabled} checked={notifyOnStep} onChange={setNotifyOnStep} />
           </div>
           <div className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-lg">
-            <span className="text-sm text-gray-700">Final approval</span>
+            <span className="text-sm text-gray-700 font-medium">Final approval</span>
             <AndroidSwitch disabled={!requestEnabled || !notifyEnabled} checked={notifyOnFinal} onChange={setNotifyOnFinal} />
+          </div>
+          <div className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-lg">
+            <span className="text-sm text-gray-700 font-medium">Published</span>
+            <AndroidSwitch disabled={!requestEnabled || !notifyEnabled} checked={notifyOnPublished} onChange={setNotifyOnPublished} />
           </div>
         </div>
 
@@ -828,7 +846,7 @@ function FacultyRequestSection() {
           <div>
             <div className="flex items-center justify-between">
               <label className="text-xs font-medium text-gray-600">Message template — Request sent</label>
-              <button type="button" onClick={() => setActiveTpl('sent')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'sent' ? 'bg-gray-100' : 'bg-white'}`}>Insert tokens</button>
+              <button type="button" onClick={() => setActiveTpl('sent')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'sent' ? 'bg-gray-100 font-semibold' : 'bg-white'}`}>Insert tokens</button>
             </div>
             <textarea
               value={tplSent}
@@ -844,7 +862,7 @@ function FacultyRequestSection() {
           <div>
             <div className="flex items-center justify-between">
               <label className="text-xs font-medium text-gray-600">Message template — Step approved</label>
-              <button type="button" onClick={() => setActiveTpl('step')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'step' ? 'bg-gray-100' : 'bg-white'}`}>Insert tokens</button>
+              <button type="button" onClick={() => setActiveTpl('step')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'step' ? 'bg-gray-100 font-semibold' : 'bg-white'}`}>Insert tokens</button>
             </div>
             <textarea
               value={tplStep}
@@ -860,7 +878,7 @@ function FacultyRequestSection() {
           <div>
             <div className="flex items-center justify-between">
               <label className="text-xs font-medium text-gray-600">Message template — Final approval</label>
-              <button type="button" onClick={() => setActiveTpl('final')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'final' ? 'bg-gray-100' : 'bg-white'}`}>Insert tokens</button>
+              <button type="button" onClick={() => setActiveTpl('final')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'final' ? 'bg-gray-100 font-semibold' : 'bg-white'}`}>Insert tokens</button>
             </div>
             <textarea
               value={tplFinal}
@@ -868,6 +886,22 @@ function FacultyRequestSection() {
               onChange={e => setTplFinal(e.target.value)}
               rows={4}
               disabled={!requestEnabled || !notifyEnabled || !notifyOnFinal}
+              placeholder="Sample will be used if empty"
+              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-400"
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium text-gray-600">Message template — Published</label>
+              <button type="button" onClick={() => setActiveTpl('published')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'published' ? 'bg-gray-100 font-semibold' : 'bg-white'}`}>Insert tokens</button>
+            </div>
+            <textarea
+              value={tplPublished}
+              onFocus={() => setActiveTpl('published')}
+              onChange={e => setTplPublished(e.target.value)}
+              rows={4}
+              disabled={!requestEnabled || !notifyEnabled || !notifyOnPublished}
               placeholder="Sample will be used if empty"
               className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-400"
             />
@@ -887,17 +921,17 @@ function FacultyRequestSection() {
             <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Faculty / Request</div>
             <div className="flex flex-wrap gap-2">
               {tokensRequest.map(t => (
-                <button key={t.key} type="button" onClick={() => insertToken(t.key)} className="px-2.5 py-1 text-xs rounded-full border border-gray-200 bg-gray-50 hover:bg-gray-100">
+                <button key={t.key} type="button" onClick={() => insertToken(t.key)} className="px-2.5 py-1 text-xs rounded-full border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-colors">
                   {t.label}
                 </button>
               ))}
             </div>
           </div>
           <div>
-            <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Approval</div>
+            <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Approval / Published</div>
             <div className="flex flex-wrap gap-2">
               {tokensApproval.map(t => (
-                <button key={t.key} type="button" onClick={() => insertToken(t.key)} className="px-2.5 py-1 text-xs rounded-full border border-gray-200 bg-gray-50 hover:bg-gray-100">
+                <button key={t.key} type="button" onClick={() => insertToken(t.key)} className="px-2.5 py-1 text-xs rounded-full border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-colors">
                   {t.label}
                 </button>
               ))}

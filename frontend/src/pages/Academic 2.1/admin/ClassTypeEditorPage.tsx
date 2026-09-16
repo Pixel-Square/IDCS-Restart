@@ -16,6 +16,7 @@ interface ExamAssignment {
   weight: number;  // Legacy - sum of co_weights
   co_weights: Record<string, number>;  // Per-CO weights: { "1": 2.5, "2": 2.5 }
   mark_manager_enabled?: boolean;
+  mark_manager_mode?: 'admin_define' | 'user_define';
   mm_exam_weight?: number; // Used only when Mark Manager "Exam" is checked by faculty
   mm_co_weights_with_exam?: Record<string, number>; // CO weights when faculty uses Mark Manager with Exam
   mm_co_weights_without_exam?: Record<string, number>; // CO weights when faculty uses Mark Manager without Exam
@@ -40,7 +41,7 @@ interface ExamTemplate {
   name: string;
   qp_type: string;
   default_weight: number;
-  pattern?: { cos?: number[]; marks?: number[]; enabled?: boolean[]; mark_manager?: { enabled?: boolean } | null };
+  pattern?: { cos?: number[]; marks?: number[]; enabled?: boolean[]; mark_manager?: { enabled?: boolean; mode?: 'admin_define' | 'user_define' } | null };
 }
 
 interface QpType {
@@ -123,7 +124,9 @@ export default function ClassTypeEditorPage() {
         // Auto-detect Mark Manager templates (older saved data may not have the flag)
         const tpl = examTemplates.find(t => t.qp_type === ex.qp_type || t.qp_type === ex.exam);
         const detectedMm = !!tpl?.pattern?.mark_manager?.enabled;
+        const detectedMode = tpl?.pattern?.mark_manager?.mode || 'admin_define';
         const isMm = ex.mark_manager_enabled ?? detectedMm;
+        const mmMode = ex.mark_manager_mode || (isMm ? detectedMode : undefined);
 
         if (!isMm) return ex;
 
@@ -131,6 +134,7 @@ export default function ClassTypeEditorPage() {
         return {
           ...ex,
           mark_manager_enabled: true,
+          mark_manager_mode: mmMode,
           mm_exam_weight: Number(ex.mm_exam_weight) || 0,
           mm_co_weights_with_exam: ex.mm_co_weights_with_exam || { ...base },
           mm_co_weights_without_exam: ex.mm_co_weights_without_exam || { ...base },
@@ -149,12 +153,12 @@ export default function ClassTypeEditorPage() {
     }
   }, [selectedClassType, examTemplates]);
 
-  const handleChange = (field: string, value: unknown) => {
+  const handleChange = (field: keyof ClassType, value: unknown) => {
     setLocalData(prev => ({ ...prev, [field]: value }));
     setIsDirty(true);
   };
 
-  const handleExamChange = (index: number, field: string, value: unknown) => {
+  const handleExamChange = (index: number, field: keyof ExamAssignment, value: unknown) => {
     const exams = [...(localData.exam_assignments || [])];
     exams[index] = { ...exams[index], [field]: value };
     handleChange('exam_assignments', exams);
@@ -162,16 +166,10 @@ export default function ClassTypeEditorPage() {
 
   const pickExamTemplate = (tpl: ExamTemplate) => {
     const exams = [...(localData.exam_assignments || [])];
-    // Derive actual COs from QP pattern instead of hardcoding [1..5]
-    let derivedCos: number[] = [1, 2, 3, 4, 5];
-    if (tpl.pattern && Array.isArray(tpl.pattern.cos)) {
-      const enabled = tpl.pattern.enabled || tpl.pattern.cos.map(() => true);
-      const uniqueCos = new Set<number>();
-      tpl.pattern.cos.forEach((co, i) => {
-        if (co != null && typeof co === 'number' && (i < enabled.length ? enabled[i] : true)) {
-          uniqueCos.add(co);
-        }
-      });
+    // Derive COs from pattern if available
+    let derivedCos = [1, 2, 3, 4, 5];
+    if (tpl.pattern?.cos && Array.isArray(tpl.pattern.cos)) {
+      const uniqueCos = new Set(tpl.pattern.cos.filter((c): c is number => c != null && typeof c === 'number'));
       if (uniqueCos.size > 0) derivedCos = [...uniqueCos].sort((a, b) => a - b);
     }
     // Initialize co_weights with equal distribution of default_weight across COs
@@ -185,6 +183,7 @@ export default function ClassTypeEditorPage() {
     }
 
     const isMarkManager = !!tpl.pattern?.mark_manager?.enabled;
+    const mmMode = tpl.pattern?.mark_manager?.mode || 'admin_define';
     const mmCoWeightsWith: Record<string, number> = { ...coWeights };
     const mmCoWeightsWithout: Record<string, number> = { ...coWeights };
     exams.push({
@@ -194,6 +193,7 @@ export default function ClassTypeEditorPage() {
       weight: defaultWeight,  // Legacy (we keep this as total weight for display)
       co_weights: coWeights,
       mark_manager_enabled: isMarkManager,
+      mark_manager_mode: isMarkManager ? mmMode : undefined,
       mm_exam_weight: 0,
       mm_co_weights_with_exam: mmCoWeightsWith,
       mm_co_weights_without_exam: mmCoWeightsWithout,
@@ -552,7 +552,7 @@ export default function ClassTypeEditorPage() {
                                         )}
                                       </td>
                                       <td className="px-3 py-2">
-                                        {exam.mark_manager_enabled ? (
+                                        {exam.mark_manager_enabled && exam.mark_manager_mode === 'user_define' ? (
                                           <div className="space-y-2">
                                             <div>
                                               <div className="text-[10px] text-gray-500 mb-1">Without Exam</div>

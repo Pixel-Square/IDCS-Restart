@@ -1,17 +1,27 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-// ─── Types matching backend AuditReportView response ──────────────────────────
+// ─── Types matching backend build_question_rows() output ──────────────────────
 
 export interface AuditReportQuestion {
   question_id: number;
-  question_text: string;
-  category: string;
-  max_marks: number;
-  marks?: number | null;
+  sl_no: number;
+  details: string;
+  documents_checklist?: string;
+  detailed_description?: string;
+  max_marks: string | number;
+  marks?: string | number | null;
   comments?: string | null;
-  atr?: string | null;
-  atr_status?: string | null;
+  below_60?: boolean;
+  atr_action_taken?: string;
+  atr_status?: string;
+  score_updated_at?: string | null;
+  atr_submitted_at?: string | null;
+  // Legacy aliases (ignored safely)
+  question_text?: string;
+  category?: string;
+  atr?: string;
+  atr_status_legacy?: string;
 }
 
 export interface AuditReportData {
@@ -68,6 +78,21 @@ function fmtDate(iso?: string | null): string {
   }
 }
 
+/** Safely get the display text for a question — handles both old and new API shapes. */
+function qText(q: AuditReportQuestion): string {
+  return (q.details || q.question_text || '').trim() || '—';
+}
+
+/** Safely get the ATR action taken — handles both old and new API shapes. */
+function qAtr(q: AuditReportQuestion): string {
+  return (q.atr_action_taken || q.atr || '').trim() || '—';
+}
+
+/** Safely get the ATR status. */
+function qAtrStatus(q: AuditReportQuestion): string {
+  return (q.atr_status || '').trim() || '—';
+}
+
 function addHeader(doc: jsPDF, title: string, subtitle: string) {
   const pageW = doc.internal.pageSize.getWidth();
 
@@ -100,7 +125,7 @@ export function downloadAuditReportPdf(report: AuditReportData): void {
   const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
   const pageW = doc.internal.pageSize.getWidth();
 
-  const deptLabel = `${report.department.code} – ${report.department.name}`;
+  const deptLabel = `${report.department?.code ?? ''} – ${report.department?.name ?? ''}`;
   const cycleLabel = report.cycle_label || `Cycle ${report.cycle}`;
 
   let y = addHeader(doc, deptLabel, cycleLabel);
@@ -123,7 +148,7 @@ export function downloadAuditReportPdf(report: AuditReportData): void {
     ['Total Marks', `${report.total_marks} / ${report.max_marks}`],
     ['Score', pct(report.percentage)],
     ['Below 60% Count', String(report.below_60_count ?? '—')],
-    ['Auditors', report.auditors.map((a) => a.name || a.staff_id).join(', ') || '—'],
+    ['Auditors', (report.auditors ?? []).map((a) => a.name || a.staff_id).join(', ') || '—'],
     ['Remarks', report.remarks || '—'],
   ];
 
@@ -132,7 +157,7 @@ export function downloadAuditReportPdf(report: AuditReportData): void {
     doc.setFont('helvetica', 'bold');
     doc.text(`${label}:`, col1, rowY);
     doc.setFont('helvetica', 'normal');
-    doc.text(value, col1 + 38, rowY);
+    doc.text(String(value ?? '—'), col1 + 38, rowY);
   });
 
   metaRight.forEach(([label, value], i) => {
@@ -140,7 +165,7 @@ export function downloadAuditReportPdf(report: AuditReportData): void {
     doc.setFont('helvetica', 'bold');
     doc.text(`${label}:`, col2, rowY);
     doc.setFont('helvetica', 'normal');
-    const lines = doc.splitTextToSize(value, 70);
+    const lines = doc.splitTextToSize(String(value ?? '—'), 70);
     doc.text(lines, col2 + 35, rowY);
   });
 
@@ -152,49 +177,53 @@ export function downloadAuditReportPdf(report: AuditReportData): void {
   doc.text('Question-wise Scores', col1, y);
   y += 4;
 
-  // Group by category
-  const categories = Array.from(new Set((report.questions || []).map((q) => q.category)));
+  const questions: AuditReportQuestion[] = report.questions || [];
 
-  const rows: any[] = [];
-  categories.forEach((cat) => {
-    const catQ = report.questions.filter((q) => q.category === cat);
-    rows.push([{ content: cat.toUpperCase(), colSpan: 5, styles: { fillColor: [219, 234, 254], fontStyle: 'bold', textColor: [30, 64, 175] } }]);
-    catQ.forEach((q) => {
-      rows.push([
-        q.question_id,
-        { content: q.question_text, styles: { cellWidth: 'wrap' } },
-        q.max_marks,
-        q.marks !== undefined && q.marks !== null ? q.marks : '—',
-        q.comments || '—',
-      ]);
-    });
+  const rows: any[] = questions.map((q) => {
+    const marksVal = q.marks !== undefined && q.marks !== null ? String(q.marks) : '—';
+    const maxVal = q.max_marks !== undefined && q.max_marks !== null ? String(q.max_marks) : '—';
+    const below = q.below_60 === true;
+    return [
+      { content: String(q.sl_no ?? q.question_id ?? ''), styles: { halign: 'center' as const } },
+      { content: qText(q), styles: { cellWidth: 'wrap' as const } },
+      { content: maxVal, styles: { halign: 'center' as const } },
+      {
+        content: marksVal,
+        styles: {
+          halign: 'center' as const,
+          textColor: below ? [220, 38, 38] : [0, 0, 0],
+          fontStyle: (below ? 'bold' : 'normal') as 'bold' | 'normal',
+        },
+      },
+      { content: q.comments || '—' },
+    ];
   });
 
   autoTable(doc, {
     startY: y,
-    head: [['#', 'Question', 'Max', 'Marks', 'Comments']],
+    head: [['S.No', 'Details / Parameter', 'Max', 'Marks', 'Auditor\'s Comment']],
     body: rows,
-    styles: { fontSize: 8, cellPadding: 2 },
+    styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
     headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' },
     columnStyles: {
-      0: { cellWidth: 10 },
-      1: { cellWidth: 80 },
-      2: { cellWidth: 15, halign: 'center' },
-      3: { cellWidth: 15, halign: 'center' },
-      4: { cellWidth: 50 },
+      0: { cellWidth: 12 },
+      1: { cellWidth: 75 },
+      2: { cellWidth: 14, halign: 'center' },
+      3: { cellWidth: 14, halign: 'center' },
+      4: { cellWidth: 55 },
     },
     margin: { left: 14, right: 14 },
-    didDrawPage: (data) => {
+    didDrawPage: () => {
       // Re-draw header on each page
       addHeader(doc, deptLabel, cycleLabel);
-      data.settings.startY = 32;
     },
   });
 
   // ── ATR section if present ────────────────────────────────────────────────
-  const atrRows = (report.questions || []).filter((q) => q.atr);
+  const atrRows = questions.filter(
+    (q) => (q.atr_action_taken && q.atr_action_taken.trim()) || (q.atr && (q.atr as string).trim()),
+  );
   if (atrRows.length > 0) {
-    const finalY = (doc as any).lastAutoTable?.finalY ?? 200;
     doc.addPage();
     let ay = addHeader(doc, deptLabel, cycleLabel);
 
@@ -205,24 +234,25 @@ export function downloadAuditReportPdf(report: AuditReportData): void {
 
     autoTable(doc, {
       startY: ay,
-      head: [['#', 'Question', 'Action Taken', 'ATR Status']],
+      head: [['S.No', 'Parameter / Question', 'Marks', 'Action Taken', 'ATR Status']],
       body: atrRows.map((q) => [
-        q.question_id,
-        q.question_text,
-        q.atr || '—',
-        q.atr_status || '—',
+        { content: String(q.sl_no ?? q.question_id ?? ''), styles: { halign: 'center' as const } },
+        qText(q),
+        { content: q.marks !== undefined && q.marks !== null ? String(q.marks) : '—', styles: { halign: 'center' as const } },
+        qAtr(q),
+        { content: qAtrStatus(q), styles: { halign: 'center' as const } },
       ]),
-      styles: { fontSize: 8, cellPadding: 2 },
+      styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
       headStyles: { fillColor: [5, 150, 105], textColor: 255, fontStyle: 'bold' },
       columnStyles: {
-        0: { cellWidth: 10 },
-        1: { cellWidth: 70 },
-        2: { cellWidth: 80 },
-        3: { cellWidth: 25, halign: 'center' },
+        0: { cellWidth: 12 },
+        1: { cellWidth: 60 },
+        2: { cellWidth: 14, halign: 'center' },
+        3: { cellWidth: 70 },
+        4: { cellWidth: 24, halign: 'center' },
       },
       margin: { left: 14, right: 14 },
     });
-    void finalY; // suppress unused warning
   }
 
   // ── Footer ────────────────────────────────────────────────────────────────
@@ -239,7 +269,7 @@ export function downloadAuditReportPdf(report: AuditReportData): void {
     );
   }
 
-  const fileName = `AuditReport_${report.department.code}_${cycleLabel.replace(/\s+/g, '_')}.pdf`;
+  const fileName = `AuditReport_${report.department?.code ?? 'dept'}_${cycleLabel.replace(/\s+/g, '_')}.pdf`;
   doc.save(fileName);
 }
 
@@ -296,7 +326,9 @@ export function downloadConsolidatedAuditPdf(consolidated: any[]): void {
         d.max_marks ?? '—',
         pct(d.percentage ?? d.score_pct),
         d.status || '—',
-        d.atr_submitted !== undefined ? `${d.atr_submitted} / ${(d.atr_submitted || 0) + (d.atr_pending || 0)}` : '—',
+        d.atr_submitted !== undefined
+          ? `${d.atr_submitted} / ${(d.atr_submitted || 0) + (d.atr_pending || 0)}`
+          : '—',
       ]),
       styles: { fontSize: 9, cellPadding: 3 },
       headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' },

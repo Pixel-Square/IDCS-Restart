@@ -450,6 +450,17 @@ def create_edit_request(exam_assignment, user, reason: str) -> dict:
         exam_assignment.has_pending_edit_request = True
         exam_assignment.save(update_fields=['has_pending_edit_request'])
 
+    try:
+        from ..views import _send_faculty_request_notification
+        _send_faculty_request_notification(
+            event_type='REQUEST_SENT',
+            edit_request=request,
+            faculty_user=user,
+            remarks=reason,
+        )
+    except Exception:
+        pass
+
     return {
         'success': True,
         'request_id': str(request.id),

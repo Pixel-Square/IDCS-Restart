@@ -36,6 +36,10 @@ export interface SubjectOption {
   name: string;
   department?: string;
   semester?: number;
+  semesterNum?: number;
+  academicYears?: string[];
+  departments?: string[];
+  sections?: string[];
 }
 
 export interface GlobalDashboardFilters {

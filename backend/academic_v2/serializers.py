@@ -34,6 +34,7 @@ from .models import (
     AcV2CqiOperator,
     AcV2CqiEditRequest,
     AcV2PublishSetting,
+    AcV2FacultyRequestSetting,
 )
 
 
@@ -989,6 +990,27 @@ class AcV2AcademicNotificationSettingSerializer(serializers.ModelSerializer):
             'every_publish_template',
             'cqi_announce_enabled',
             'cqi_announce_template',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'key', 'created_at', 'updated_at']
+
+
+class AcV2FacultyRequestSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AcV2FacultyRequestSetting
+        fields = [
+            'id', 'key',
+            'faculty_request_enabled',
+            'require_mobile_verification',
+            'require_profile_photo',
+            'notify_on_request_sent',
+            'notify_on_step_approved',
+            'notify_on_final_approved',
+            'notify_on_published',
+            'request_sent_template',
+            'step_approved_template',
+            'final_approved_template',
+            'published_template',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'key', 'created_at', 'updated_at']

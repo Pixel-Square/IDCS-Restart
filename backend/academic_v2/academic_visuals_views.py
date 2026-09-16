@@ -209,7 +209,7 @@ class AcademicVisualDynamicOptionsView(APIView):
             seen_subs = set()
 
             ta_qs = TeachingAssignment.objects.select_related(
-                'subject', 'section', 'academic_year', 'staff', 'staff__department'
+                'subject', 'subject__course__department', 'section', 'academic_year', 'staff', 'staff__department'
             ).filter(subject__isnull=False)
 
             sub_ta_map = {}
@@ -226,6 +226,7 @@ class AcademicVisualDynamicOptionsView(APIView):
                     sub_ta_map[s_id]["academic_years"].add(ta.academic_year.name)
                 if ta.section and ta.section.name:
                     sub_ta_map[s_id]["sections"].add(ta.section.name)
+                # Map to staff department (teaching)
                 if ta.staff and ta.staff.department:
                     d_code = str(ta.staff.department.code or '').strip()
                     d_short = str(ta.staff.department.short_name or '').strip()
@@ -233,6 +234,14 @@ class AcademicVisualDynamicOptionsView(APIView):
                         sub_ta_map[s_id]["departments"].add(d_code)
                     if d_short:
                         sub_ta_map[s_id]["departments"].add(d_short)
+                # Map to subject's core course department
+                if ta.subject and ta.subject.course and ta.subject.course.department:
+                    c_code = str(ta.subject.course.department.code or '').strip()
+                    c_short = str(ta.subject.course.department.short_name or '').strip()
+                    if c_code:
+                        sub_ta_map[s_id]["departments"].add(c_code)
+                    if c_short:
+                        sub_ta_map[s_id]["departments"].add(c_short)
                 if ta.subject and ta.subject.semester:
                     sem_str = str(ta.subject.semester).strip()
                     sub_ta_map[s_id]["semesters"].add(sem_str)

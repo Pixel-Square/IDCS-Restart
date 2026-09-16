@@ -47,6 +47,7 @@ from .models import (
     AcV2AcademicNotificationSetting,
     AcV2PublishSetting,
     AcV2GoogleSheetLink,
+    AcV2FacultyRequestSetting,
 )
 from .serializers import (
     AcV2VersionSerializer,
@@ -72,6 +73,7 @@ from .serializers import (
     AcV2CqiTokenSerializer,
     AcV2CqiOperatorSerializer,
     AcV2PublishSettingSerializer,
+    AcV2FacultyRequestSettingSerializer,
 )
 from .models import AcV2PassMarkSetting, AcV2GoogleSheetsOAuthCredential
 from .google_sheets_service import (
@@ -1466,6 +1468,154 @@ def admin_publish_settings(request):
     if not _has_admin_bypass_access(request.user):
         return Response({'detail': 'Permission denied'}, status=403)
     serializer = AcV2PublishSettingSerializer(obj, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
+
+
+def _send_faculty_request_notification(
+    *,
+    event_type: str,  # 'REQUEST_SENT' | 'STEP_APPROVED' | 'FINAL_APPROVED' | 'PUBLISHED'
+    edit_request=None,
+    exam_assignment=None,
+    faculty_user=None,
+    actor_user=None,
+    step_name: str = '',
+    remarks: str = '',
+    request_type_override: str = '',
+):
+    """
+    Send WhatsApp message to faculty based on faculty request settings.
+    Dispatches in a background daemon thread so HTTP response is non-blocking.
+    """
+    import threading
+    import logging
+    logger = logging.getLogger('academic_v2.faculty_request_notifications')
+
+    def _bg_worker():
+        try:
+            cfg, _ = AcV2FacultyRequestSetting.objects.get_or_create(
+                key='DEFAULT',
+                defaults={
+                    'faculty_request_enabled': True,
+                    'require_mobile_verification': False,
+                    'require_profile_photo': False,
+                    'notify_on_request_sent': True,
+                    'notify_on_step_approved': True,
+                    'notify_on_final_approved': True,
+                    'notify_on_published': True,
+                },
+            )
+            if not getattr(cfg, 'faculty_request_enabled', False):
+                return
+
+            template = ''
+            if event_type == 'REQUEST_SENT' and getattr(cfg, 'notify_on_request_sent', False):
+                template = getattr(cfg, 'request_sent_template', '') or ''
+            elif event_type == 'STEP_APPROVED' and getattr(cfg, 'notify_on_step_approved', False):
+                template = getattr(cfg, 'step_approved_template', '') or ''
+            elif event_type == 'FINAL_APPROVED' and getattr(cfg, 'notify_on_final_approved', False):
+                template = getattr(cfg, 'final_approved_template', '') or ''
+            elif event_type == 'PUBLISHED' and getattr(cfg, 'notify_on_published', False):
+                template = getattr(cfg, 'published_template', '') or ''
+
+            if not template.strip():
+                return
+
+            target_user = faculty_user
+            if not target_user and edit_request:
+                target_user = getattr(edit_request, 'requested_by', None)
+            if not target_user and exam_assignment:
+                target_user = getattr(getattr(exam_assignment, 'section', None), 'faculty_user', None)
+
+            if not target_user:
+                return
+
+            from OBE.services.edit_request_notifications import _resolve_staff_whatsapp_number
+            from accounts.services.sms import send_whatsapp
+
+            phone = _resolve_staff_whatsapp_number(target_user)
+            if not phone:
+                logger.warning(f'No WhatsApp phone found for faculty {target_user}')
+                return
+
+            f_name = target_user.get_full_name() or target_user.username or str(target_user)
+            f_id = getattr(target_user, 'staff_id', '') or getattr(getattr(target_user, 'staff_profile', None), 'staff_id', '') or target_user.username or ''
+
+            dept = ''
+            sp = getattr(target_user, 'staff_profile', None)
+            if sp:
+                dept = str(getattr(sp, 'department', '') or getattr(sp, 'effective_department', '') or '')
+            if not dept and exam_assignment:
+                sec = getattr(exam_assignment, 'section', None)
+                dept = str(getattr(sec, 'managing_department', '') or getattr(getattr(sec, 'course', None), 'department', '') or '')
+
+            req_type = request_type_override
+            if not req_type and edit_request:
+                ea = getattr(edit_request, 'exam_assignment', None)
+                if ea:
+                    exam_label = str(getattr(ea, 'exam_display_name', '') or getattr(ea, 'exam', '') or 'Marks')
+                    req_type = f"Mark Edit Request ({exam_label})"
+                else:
+                    req_type = "Faculty Edit Request"
+            elif not req_type and exam_assignment:
+                exam_label = str(getattr(exam_assignment, 'exam_display_name', '') or getattr(exam_assignment, 'exam', '') or 'Exam')
+                course = getattr(getattr(exam_assignment, 'section', None), 'course', None)
+                cc = str(getattr(course, 'subject_code', '') or getattr(course, 'course_code', '') or '')
+                req_type = f"Marks Publish ({cc} - {exam_label})" if cc else f"Marks Publish ({exam_label})"
+
+            now = timezone.now()
+            req_date = now.strftime('%d %b %Y, %I:%M %p')
+            if edit_request and getattr(edit_request, 'requested_at', None):
+                req_date = timezone.localtime(edit_request.requested_at).strftime('%d %b %Y, %I:%M %p')
+
+            appr_by = ''
+            if actor_user:
+                appr_by = actor_user.get_full_name() or actor_user.username or str(actor_user)
+
+            appr_date = timezone.localtime(now).strftime('%d %b %Y, %I:%M %p')
+
+            msg = template.replace('{faculty_name}', f_name)
+            msg = msg.replace('{faculty_id}', str(f_id))
+            msg = msg.replace('{mobile_number}', str(phone))
+            msg = msg.replace('{request_type}', str(req_type or 'Faculty Request'))
+            msg = msg.replace('{request_date}', str(req_date))
+            msg = msg.replace('{department}', str(dept or 'N/A'))
+            msg = msg.replace('{step_name}', str(step_name or 'N/A'))
+            msg = msg.replace('{approved_by}', str(appr_by or 'N/A'))
+            msg = msg.replace('{approval_date}', str(appr_date))
+            msg = msg.replace('{remarks}', str(remarks or 'N/A'))
+
+            send_whatsapp(phone, msg)
+            logger.info(f'Faculty request notification [{event_type}] sent to {phone}')
+        except Exception as exc:
+            logger.exception(f'Failed sending faculty request notification: {exc}')
+
+    t = threading.Thread(target=_bg_worker, daemon=True)
+    t.start()
+
+
+@api_view(['GET', 'PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def admin_faculty_request_settings(request):
+    """Get or update Faculty Request settings (singleton)."""
+    obj, _ = AcV2FacultyRequestSetting.objects.get_or_create(
+        key='DEFAULT',
+        defaults={
+            'faculty_request_enabled': True,
+            'require_mobile_verification': False,
+            'require_profile_photo': False,
+            'notify_on_request_sent': True,
+            'notify_on_step_approved': True,
+            'notify_on_final_approved': True,
+            'notify_on_published': True,
+        },
+    )
+    if request.method == 'GET':
+        return Response(AcV2FacultyRequestSettingSerializer(obj).data)
+    if not _has_admin_bypass_access(request.user):
+        return Response({'detail': 'Permission denied'}, status=403)
+    serializer = AcV2FacultyRequestSettingSerializer(obj, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
     serializer.save()
     return Response(serializer.data)
@@ -3374,6 +3524,16 @@ class AcV2EditRequestViewSet(viewsets.ModelViewSet):
                     edit_request.status = 'PENDING'
                 edit_request.approval_history = history
                 edit_request.save(update_fields=['current_stage', 'status', 'approval_history'])
+                try:
+                    _send_faculty_request_notification(
+                        event_type='STEP_APPROVED',
+                        edit_request=edit_request,
+                        actor_user=request.user,
+                        step_name=f"{required_role} Approval",
+                        remarks=notes,
+                    )
+                except Exception:
+                    pass
                 return Response({'success': True, 'status': edit_request.status, 'current_stage': edit_request.current_stage})
 
         # Final approve (no workflow or last stage)
@@ -3408,9 +3568,30 @@ class AcV2EditRequestViewSet(viewsets.ModelViewSet):
                 ea.has_pending_edit_request = False
                 ea.save(update_fields=['edit_window_until', 'edit_window_until_publish', 'has_pending_edit_request'])
 
+            try:
+                _send_faculty_request_notification(
+                    event_type='FINAL_APPROVED',
+                    edit_request=edit_request,
+                    actor_user=request.user,
+                    step_name='Final Approval (Until Publish)',
+                    remarks=notes,
+                )
+            except Exception:
+                pass
+
             return Response({'success': True, 'status': edit_request.status, 'approved_until': None, 'edit_mode': 'UNTIL_PUBLISH'})
 
         edit_request.approve(request.user, window_minutes, notes)
+        try:
+            _send_faculty_request_notification(
+                event_type='FINAL_APPROVED',
+                edit_request=edit_request,
+                actor_user=request.user,
+                step_name='Final Approval',
+                remarks=notes,
+            )
+        except Exception:
+            pass
         return Response({'success': True, 'status': edit_request.status, 'approved_until': edit_request.approved_until.isoformat() if edit_request.approved_until else None})
 
     @action(detail=True, methods=['post'])
@@ -5002,23 +5183,54 @@ def faculty_courses_status(request):
 # FACULTY EXAM INFO (for MarkEntryPage)
 # ============================================================================
 
+def _get_faculty_exam_assignment(exam_id, user, extra_select_related=None):
+    """Retrieve an AcV2ExamAssignment validating access for faculty or admin/bypass."""
+    from django.db.models import Q
+    from django.http import Http404
+
+    base_fields = [
+        'section',
+        'section__course',
+        'section__course__semester',
+        'section__course__class_type',
+        'section__teaching_assignment',
+        'section__teaching_assignment__section',
+        'section__teaching_assignment__section__semester',
+        'section__teaching_assignment__section__managing_department',
+        'section__teaching_assignment__curriculum_row',
+        'section__teaching_assignment__elective_subject',
+    ]
+    if extra_select_related:
+        base_fields = list(set(base_fields + list(extra_select_related)))
+
+    ea_qs = AcV2ExamAssignment.objects.select_related(*base_fields)
+    if _has_admin_bypass_access(user):
+        return get_object_or_404(ea_qs, id=exam_id)
+
+    ea = ea_qs.filter(id=exam_id).filter(
+        Q(section__faculty_user=user) |
+        Q(section__teaching_assignment__faculty=user) |
+        Q(section__teaching_assignment__staff__user=user)
+    ).first()
+
+    if not ea:
+        raise Http404("Exam assignment not found")
+
+    # Auto-sync section.faculty_user if missing or mismatched
+    if ea.section and ea.section.faculty_user != user:
+        ea.section.faculty_user = user
+        ea.section.save(update_fields=['faculty_user'])
+
+    return ea
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def faculty_exam_info(request, exam_id):
     """Return exam information for a specific AcV2ExamAssignment."""
     from academics.models import TeachingAssignment
 
-    ea_qs = AcV2ExamAssignment.objects.select_related(
-        'section__teaching_assignment__section',
-        'section__teaching_assignment__section__semester',
-        'section__teaching_assignment__section__managing_department',
-        'section__teaching_assignment__curriculum_row',
-        'section__teaching_assignment__elective_subject',
-    )
-    if _has_admin_bypass_access(request.user):
-        ea = get_object_or_404(ea_qs, id=exam_id)
-    else:
-        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
+    ea = _get_faculty_exam_assignment(exam_id, request.user)
     ea = _ensure_due_auto_publish(ea)
 
     ta = ea.section.teaching_assignment
@@ -5080,83 +5292,112 @@ def faculty_exam_info(request, exam_id):
     draft = ea.draft_data if isinstance(ea.draft_data, dict) else {}
     question_btls = draft.get('question_btls', {})
 
-    # Check if user has a course-specific pattern (from Mark Manager)
-    user_pattern = draft.get('user_pattern')
+    # Resolve global or class-type QP pattern first
+    qp_type = ''
+    try:
+        qp_type = (ea.section.course.question_paper_type or '').strip()
+    except Exception:
+        qp_type = ''
+    if not qp_type:
+        qp_type = (getattr(cr, 'question_paper_type', None) or getattr(es, 'question_paper_type', None) or '').strip()
+    if not qp_type:
+        qp_type = (ea.qp_type or '').strip() or (ea.exam or '').strip() or ''
 
-    # Build qp_pattern with questions array
+    exam_key = (ea.exam_display_name or ea.exam or '').strip()
+
+    ct = None
+    try:
+        ct = ea.section.course.class_type
+    except Exception:
+        ct = None
+
+    def _norm_k(s):
+        if not s:
+            return ''
+        return str(s).strip().lower().replace('-', '_').replace(' ', '_').replace('__', '_')
+
+    possible_qp_types = set(filter(None, [
+        qp_type,
+        getattr(ea, 'qp_type', None),
+        (getattr(ea.section.course, 'question_paper_type', None) if getattr(ea, 'section', None) and getattr(ea.section, 'course', None) else None),
+    ]))
+    norm_qp_types = set(_norm_k(x) for x in possible_qp_types if x)
+
+    possible_exam_keys = set(filter(None, [
+        ea.exam,
+        ea.exam_display_name,
+        exam_key,
+    ]))
+    norm_exam_keys = set(_norm_k(x) for x in possible_exam_keys if x)
+
+    candidate_qs = AcV2QpPattern.objects.filter(is_active=True)
+    if ct is not None:
+        scoped_patterns = list(candidate_qs.filter(
+            Q(class_type=ct) | Q(class_type__name__iexact=ct.name)
+        ).order_by('-updated_at'))
+    else:
+        scoped_patterns = []
+    global_patterns = list(candidate_qs.filter(class_type__isnull=True).order_by('-updated_at'))
+
+    matched_pattern = None
+
+    # 1) Match within class-type patterns by qp_type & exam
+    for p in scoped_patterns:
+        p_qp = _norm_k(p.qp_type)
+        p_name = _norm_k(p.name)
+        if (p_qp in norm_qp_types or not norm_qp_types) and (p_name in norm_exam_keys or not norm_exam_keys):
+            matched_pattern = p
+            break
+    if not matched_pattern and scoped_patterns:
+        for p in scoped_patterns:
+            if _norm_k(p.name) in norm_exam_keys:
+                matched_pattern = p
+                break
+
+    # 2) Match within global patterns
+    if not matched_pattern:
+        for p in global_patterns:
+            p_qp = _norm_k(p.qp_type)
+            p_name = _norm_k(p.name)
+            if (p_qp in norm_qp_types or not norm_qp_types) and (p_name in norm_exam_keys or not norm_exam_keys):
+                matched_pattern = p
+                break
+    if not matched_pattern and global_patterns:
+        for p in global_patterns:
+            if _norm_k(p.name) in norm_exam_keys:
+                matched_pattern = p
+                break
+
+    pattern_data = matched_pattern.pattern if (matched_pattern and isinstance(matched_pattern.pattern, dict)) else {}
+    mm_from_pattern = pattern_data.get('mark_manager') if isinstance(pattern_data.get('mark_manager'), dict) else None
+
+    # Check if mark manager is user_define mode
+    is_user_define_mode = False
+    if mm_from_pattern and mm_from_pattern.get('enabled'):
+        raw_mode = str(mm_from_pattern.get('mode') or '').strip().lower()
+        if raw_mode in ('user_define', 'user_defined', 'user'):
+            is_user_define_mode = True
+
+    # Also check ct.exam_assignments if not in pattern
+    if not mm_from_pattern and ct and isinstance(ct.exam_assignments, list):
+        for ea_cfg in ct.exam_assignments:
+            if isinstance(ea_cfg, dict) and ea_cfg.get('mark_manager_enabled'):
+                cfg_name = _norm_k(ea_cfg.get('exam_display_name') or ea_cfg.get('name') or ea_cfg.get('exam') or '')
+                if cfg_name in norm_exam_keys:
+                    cfg_mode = str(ea_cfg.get('mark_manager_mode') or '').strip().lower()
+                    if cfg_mode in ('user_define', 'user_defined', 'user'):
+                        is_user_define_mode = True
+
+    # Check if user has a course-specific pattern (from Mark Manager user_define mode)
+    user_pattern = draft.get('user_pattern') if is_user_define_mode else None
+
     qp_pattern_response = None
     mark_manager = None
 
-    if user_pattern and isinstance(user_pattern, dict):
-        # Use course-specific pattern from Mark Manager (stored in draft_data)
-        p = user_pattern
-        titles = p.get('titles', [])
-        marks_list = p.get('marks', [])
-        cos = p.get('cos', [])
-        btls = p.get('btls', [])
-        enabled = p.get('enabled', [])
-        questions = []
-        for i in range(len(titles)):
-            if i < len(enabled) and not enabled[i]:
-                continue
-            questions.append({
-                'id': f'q{i}',
-                'question_number': titles[i] if i < len(titles) else str(i + 1),
-                'max_marks': marks_list[i] if i < len(marks_list) else 0,
-                'btl_level': btls[i] if i < len(btls) else None,
-                'co_number': cos[i] if i < len(cos) else 0,
-            })
-        if questions:
-            qp_pattern_response = {
-                'id': 'user_defined',
-                'name': 'User Defined',
-                'questions': questions,
-            }
-        # Mark manager config from user's pattern
-        mm = p.get('mark_manager')
-        if mm and isinstance(mm, dict):
-            mark_manager = mm
-    else:
-        # Fall back to global QP pattern
-        qp_type = ''
-        try:
-            qp_type = (ea.section.course.question_paper_type or '').strip()
-        except Exception:
-            qp_type = ''
-        if not qp_type:
-            qp_type = (getattr(cr, 'question_paper_type', None) or getattr(es, 'question_paper_type', None) or '').strip()
-        if not qp_type:
-            qp_type = (ea.qp_type or '').strip() or (ea.exam or '').strip() or ''
-
-        exam_key = (ea.exam_display_name or ea.exam or '').strip()
-
-        ct = None
-        try:
-            ct = ea.section.course.class_type
-        except Exception:
-            ct = None
-
-        base_qs = AcV2QpPattern.objects.filter(qp_type=qp_type, is_active=True)
-        matched_pattern = None
-
-        # 1) Class Type + QP Type + Exam name match
-        if ct is not None:
-            scoped = base_qs.filter(class_type=ct)
-            if exam_key:
-                matched_pattern = scoped.filter(name__iexact=exam_key).order_by('-updated_at').first()
-            else:
-                matched_pattern = scoped.order_by('-updated_at').first()
-
-        # 3) Global + QP Type + Exam name match
-        if not matched_pattern:
-            global_qs = base_qs.filter(class_type__isnull=True)
-            if exam_key:
-                matched_pattern = global_qs.filter(name__iexact=exam_key).order_by('-updated_at').first()
-            else:
-                matched_pattern = global_qs.order_by('-updated_at').first()
-
-        if matched_pattern and isinstance(matched_pattern.pattern, dict):
-            p = matched_pattern.pattern
+    if is_user_define_mode:
+        # User defined mode
+        if user_pattern and isinstance(user_pattern, dict):
+            p = user_pattern
             titles = p.get('titles', [])
             marks_list = p.get('marks', [])
             cos = p.get('cos', [])
@@ -5175,14 +5416,60 @@ def faculty_exam_info(request, exam_id):
                 })
             if questions:
                 qp_pattern_response = {
-                    'id': str(matched_pattern.id),
-                    'name': matched_pattern.name,
+                    'id': 'user_defined',
+                    'name': 'User Defined',
                     'questions': questions,
                 }
-            # Include mark_manager config from QP pattern for user_define mode
             mm = p.get('mark_manager')
-            if mm and isinstance(mm, dict) and mm.get('enabled'):
-                mark_manager = mm
+            if mm and isinstance(mm, dict):
+                mark_manager = { **mm, 'mode': 'user_define', 'confirmed': True }
+        if not mark_manager:
+            mark_manager = { **(mm_from_pattern or {}), 'enabled': True, 'mode': 'user_define', 'confirmed': False }
+    else:
+        # Admin defined or standard pattern
+        if mm_from_pattern and mm_from_pattern.get('enabled'):
+            mark_manager = { **mm_from_pattern, 'mode': 'admin_define', 'confirmed': True }
+
+        questions = []
+        if matched_pattern and isinstance(matched_pattern.pattern, dict):
+            p = matched_pattern.pattern
+            titles = p.get('titles', [])
+            marks_list = p.get('marks', [])
+            cos = p.get('cos', [])
+            btls = p.get('btls', [])
+            enabled = p.get('enabled', [])
+            for i in range(len(titles)):
+                if i < len(enabled) and not enabled[i]:
+                    continue
+                questions.append({
+                    'id': f'q{i}',
+                    'question_number': titles[i] if i < len(titles) else str(i + 1),
+                    'max_marks': marks_list[i] if i < len(marks_list) else 0,
+                    'btl_level': btls[i] if i < len(btls) else None,
+                    'co_number': cos[i] if i < len(cos) else 0,
+                })
+
+        # If questions not built yet but mark_manager is enabled (admin_define), generate questions
+        if not questions and mark_manager:
+            gen_res = ea._generate_pattern_from_mark_manager(mark_manager)
+            if gen_res and gen_res.get('questions'):
+                questions = gen_res['questions']
+
+        # Fallback to ea.get_qp_pattern()
+        if not questions:
+            resolved_p = ea.get_qp_pattern()
+            if isinstance(resolved_p, dict) and resolved_p.get('questions'):
+                questions = resolved_p['questions']
+                if not mark_manager and resolved_p.get('mark_manager'):
+                    mark_manager = resolved_p['mark_manager']
+                    mark_manager['mode'] = 'admin_define'
+
+        if questions:
+            qp_pattern_response = {
+                'id': str(matched_pattern.id) if matched_pattern else 'admin_defined',
+                'name': matched_pattern.name if matched_pattern else (ea.exam_display_name or ea.exam or ''),
+                'questions': questions,
+            }
 
     # Resolve CQI config for THIS specific exam assignment (not just first CQI).
     # Look up the AcV2CqiExam whose exam_code or exam_display_name matches ea.exam / ea.exam_display_name.
@@ -5487,11 +5774,7 @@ def _ensure_due_auto_publish(exam_assignment):
 @permission_classes([IsAuthenticated])
 def faculty_exam_publish(request, exam_id):
     """Publish an exam (locks if publish control is enabled)."""
-    ea_qs = AcV2ExamAssignment.objects.select_related('section__course__semester')
-    if _has_admin_bypass_access(request.user):
-        ea = get_object_or_404(ea_qs, id=exam_id)
-    else:
-        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
+    ea = _get_faculty_exam_assignment(exam_id, request.user)
 
     cycle_state = _get_exam_cycle_state(
         ea,
@@ -5560,6 +5843,18 @@ def faculty_exam_publish(request, exam_id):
             import logging
             logging.getLogger('academic_v2.notifications').error(f'Publish notification hook failed: {e}')
 
+        try:
+            _send_faculty_request_notification(
+                event_type='PUBLISHED',
+                exam_assignment=ea,
+                faculty_user=getattr(ea.section, 'faculty_user', None) or request.user,
+                actor_user=request.user,
+                remarks='Exam Marks Published',
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger('academic_v2.faculty_request_notifications').error(f'Faculty publish notification hook failed: {e}')
+
     t_notify = threading.Thread(target=_bg_notify, daemon=True)
     t_notify.start()
 
@@ -5570,11 +5865,7 @@ def faculty_exam_publish(request, exam_id):
 @permission_classes([IsAuthenticated])
 def faculty_exam_request_edit(request, exam_id):
     """Request edit access for a published/locked exam."""
-    ea = get_object_or_404(
-        AcV2ExamAssignment.objects.select_related('section__course__semester'),
-        id=exam_id,
-        section__faculty_user=request.user,
-    )
+    ea = _get_faculty_exam_assignment(exam_id, request.user)
 
     reason = request.data.get('reason', '')
     if not reason:
@@ -5753,13 +6044,7 @@ def faculty_exam_marks(request, exam_id):
     """GET: List students with current marks. POST: Save marks."""
     from academics.models import TeachingAssignment, StudentSectionAssignment
 
-    ea_qs = AcV2ExamAssignment.objects.select_related(
-        'section__teaching_assignment__section',
-    )
-    if _has_admin_bypass_access(request.user):
-        ea = get_object_or_404(ea_qs, id=exam_id)
-    else:
-        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
+    ea = _get_faculty_exam_assignment(exam_id, request.user)
     ea = _ensure_due_auto_publish(ea)
 
     ta = ea.section.teaching_assignment
@@ -5928,11 +6213,7 @@ def faculty_exam_confirm_mark_manager(request, exam_id):
     Faculty confirms their Mark Manager CO setup (user_define mode).
     Generates question rows from their config and updates the QP pattern + ExamAssignment.
     """
-    ea_qs = AcV2ExamAssignment.objects.select_related('section')
-    if _has_admin_bypass_access(request.user):
-        ea = get_object_or_404(ea_qs, id=exam_id)
-    else:
-        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
+    ea = _get_faculty_exam_assignment(exam_id, request.user)
 
     # Use the same editability check as mark saving — respects publish control settings,
     # open_from gating, edit windows, and draft/published status uniformly.
@@ -8016,15 +8297,7 @@ def faculty_exam_export_template(request, exam_id):
     from io import BytesIO
     from django.http import HttpResponse
 
-    ea_qs = AcV2ExamAssignment.objects.select_related(
-        'section__teaching_assignment__section',
-        'section__teaching_assignment__curriculum_row',
-        'section__teaching_assignment__elective_subject',
-    )
-    if _has_admin_bypass_access(request.user):
-        ea = get_object_or_404(ea_qs, id=exam_id)
-    else:
-        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
+    ea = _get_faculty_exam_assignment(exam_id, request.user)
 
     ta = ea.section.teaching_assignment
     acad_sec = ta.section
@@ -8240,11 +8513,7 @@ def faculty_exam_cqi_draft(request, exam_id):
     Maps exam assignment to its teaching assignment and reuses the
     course-level CQI draft handler.
     """
-    ea_qs = AcV2ExamAssignment.objects.select_related('section__teaching_assignment')
-    if _has_admin_bypass_access(request.user):
-        ea = get_object_or_404(ea_qs, id=exam_id)
-    else:
-        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
+    ea = _get_faculty_exam_assignment(exam_id, request.user)
     raw_req = getattr(request, '_request', request)
     raw_req.user = request.user
     return faculty_course_cqi_draft(raw_req, ea.section.teaching_assignment_id)
@@ -8258,11 +8527,7 @@ def faculty_exam_cqi_published(request, exam_id):
     Maps exam assignment to its teaching assignment and reuses the
     course-level CQI published handler.
     """
-    ea_qs = AcV2ExamAssignment.objects.select_related('section__teaching_assignment')
-    if _has_admin_bypass_access(request.user):
-        ea = get_object_or_404(ea_qs, id=exam_id)
-    else:
-        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
+    ea = _get_faculty_exam_assignment(exam_id, request.user)
     raw_req = getattr(request, '_request', request)
     raw_req.user = request.user
     return faculty_course_cqi_published(raw_req, ea.section.teaching_assignment_id)
@@ -8276,11 +8541,7 @@ def faculty_exam_cqi_publish(request, exam_id):
     Maps exam assignment to its teaching assignment and reuses the
     course-level CQI publish handler.
     """
-    ea_qs = AcV2ExamAssignment.objects.select_related('section__teaching_assignment')
-    if _has_admin_bypass_access(request.user):
-        ea = get_object_or_404(ea_qs, id=exam_id)
-    else:
-        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
+    ea = _get_faculty_exam_assignment(exam_id, request.user)
     raw_req = getattr(request, '_request', request)
     raw_req.user = request.user
     return faculty_course_cqi_publish(raw_req, ea.section.teaching_assignment_id)
@@ -8925,11 +9186,7 @@ def faculty_exam_import_marks(request, exam_id):
     import openpyxl
     from io import BytesIO
 
-    ea_qs = AcV2ExamAssignment.objects.select_related('section__teaching_assignment__section')
-    if _has_admin_bypass_access(request.user):
-        ea = get_object_or_404(ea_qs, id=exam_id)
-    else:
-        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
+    ea = _get_faculty_exam_assignment(exam_id, request.user)
 
     # Check if import is allowed: Allow if the exam is editable
     if not _has_admin_bypass_access(request.user) and not ea.is_editable():

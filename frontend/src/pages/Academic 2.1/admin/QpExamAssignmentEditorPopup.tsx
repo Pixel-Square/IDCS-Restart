@@ -151,9 +151,11 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
 
   const exam = props.selectedExamAssignmentItem.exam;
   const markManager = props.markManager;
-  const coNumbers = Array.from(
+  const fallbackCoCount = Math.max(1, Number(props.selectedClassTypeDefaultCoCount || 5));
+  const derivedCourseCos = Array.from(
     new Set((props.courseOutcomeNumbers || []).map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)),
   ).sort((a, b) => a - b);
+  const coNumbers = derivedCourseCos.length > 0 ? derivedCourseCos : Array.from({ length: fallbackCoCount }, (_, i) => i + 1);
 
   const applyCheckedCos = (rowIndex: number, checkedValues: number[]) => {
     const normalized = Array.from(new Set(checkedValues.filter((n) => Number.isFinite(n) && n > 0))).sort((a, b) => a - b);
@@ -179,34 +181,34 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
     const viewportPadding = 8;
     const left = Math.max(
       viewportPadding,
-      Math.min(rect.right - pickerWidth, window.innerWidth - pickerWidth - viewportPadding),
+      Math.min(rect.left, window.innerWidth - pickerWidth - viewportPadding),
     );
-    const top = Math.min(rect.bottom + 6, window.innerHeight - 280);
-    setActiveCoPickerRow(rowIndex);
+    const top = rect.bottom + 4;
     setCoPickerPos({ top, left });
+    setActiveCoPickerRow(rowIndex);
   };
 
   useEffect(() => {
     if (activeCoPickerRow == null) return;
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target as HTMLElement | null;
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
       if (!target) return;
-      const clickedPicker = coPickerRef.current?.contains(target);
-      const clickedButton = target.closest('[data-co-picker-btn="true"]');
-      if (!clickedPicker && !clickedButton) {
-        closeCoPicker();
-      }
+      if (coPickerRef.current && coPickerRef.current.contains(target)) return;
+      if (target.closest('[data-co-picker-btn="true"]')) return;
+      closeCoPicker();
     };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeCoPicker();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeCoPicker();
     };
-    const onViewportChange = () => closeCoPicker();
-    document.addEventListener('mousedown', onPointerDown);
+    const onViewportChange = () => {
+      closeCoPicker();
+    };
+    document.addEventListener('mousedown', onMouseDown);
     document.addEventListener('keydown', onKeyDown);
     window.addEventListener('resize', onViewportChange);
     window.addEventListener('scroll', onViewportChange, true);
     return () => {
-      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('mousedown', onMouseDown);
       document.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('resize', onViewportChange);
       window.removeEventListener('scroll', onViewportChange, true);
@@ -250,7 +252,12 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
   }, [markManager]);
   const isCurrentlyEditing = localEditing;
   const isCqi = String(exam.exam || exam.exam_display_name || '').toUpperCase().startsWith('CQI') || exam.kind === 'cqi';
-  const totalMarks = props.localRows.filter(r => r.enabled).reduce((s, r) => s + (Number(r.max_marks) || 0), 0);
+  const totalMarks = markManager.enabled
+    ? (markManager.cia_enabled ? Number(markManager.cia_max_marks) || 0 : 0) +
+      Object.values(markManager.cos)
+        .filter(c => c.enabled)
+        .reduce((s, c) => s + (Number(c.max_marks) || 0), 0)
+    : props.localRows.filter(r => r.enabled).reduce((s, r) => s + (Number(r.max_marks) || 0), 0);
 
   const handleSaveClick = async () => {
     if (!props.onSave) return;
@@ -438,15 +445,19 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
               {/* Toolbar */}
               <div className="p-3 border-b bg-gray-50 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-3">
-                  <span className="text-sm font-semibold text-gray-800">Question Table</span>
+                  <span className="text-sm font-semibold text-gray-800">
+                    {markManager.enabled ? 'Mark Manager Configuration' : 'Question Table'}
+                  </span>
                   <span className={`text-xs px-2 py-0.5 rounded font-medium ${totalMarks > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
                     Total: {totalMarks} marks
                   </span>
-                  <span className="text-xs text-gray-400">
-                    {props.localRows.filter(r => r.enabled).length} enabled / {props.localRows.length} rows
-                  </span>
+                  {!markManager.enabled && (
+                    <span className="text-xs text-gray-400">
+                      {props.localRows.filter(r => r.enabled).length} enabled / {props.localRows.length} rows
+                    </span>
+                  )}
                 </div>
-                {isCurrentlyEditing && (
+                {isCurrentlyEditing && !markManager.enabled && (
                   <button
                     onClick={props.onAddQuestion}
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 text-blue-700 rounded text-xs font-medium hover:bg-blue-200"
@@ -580,138 +591,140 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
               </div>
 
               {/* Table */}
-              <div className="overflow-auto max-h-[520px]">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b sticky top-0 z-10">
-                    <tr>
-                      {isCurrentlyEditing && <th className="w-8 px-2 py-2.5 text-gray-400" />}
-                      <th className="w-14 px-2 py-2.5 text-center text-xs font-semibold text-gray-600 uppercase tracking-wide">On</th>
-                      <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Title</th>
-                      <th className="w-20 px-2 py-2.5 text-center text-xs font-semibold text-gray-600 uppercase tracking-wide">Max</th>
-                      <th className="w-28 px-2 py-2.5 text-center text-xs font-semibold text-gray-600 uppercase tracking-wide">BTL</th>
-                      <th className="w-52 px-2 py-2.5 text-center text-xs font-semibold text-gray-600 uppercase tracking-wide">CO</th>
-                      <th className="w-10 px-2 py-2.5" />
-                      {isCurrentlyEditing && <th className="w-10 px-2 py-2.5" />}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {props.localRows.length === 0 ? (
+              {!markManager.enabled && (
+                <div className="overflow-auto max-h-[520px]">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b sticky top-0 z-10">
                       <tr>
-                        <td className="text-center py-12 text-gray-400 text-sm" colSpan={isCurrentlyEditing ? 8 : 7}>
-                          No questions yet.{isCurrentlyEditing && ' Click "Add Row" to create one.'}
-                        </td>
+                        {isCurrentlyEditing && <th className="w-8 px-2 py-2.5 text-gray-400" />}
+                        <th className="w-14 px-2 py-2.5 text-center text-xs font-semibold text-gray-600 uppercase tracking-wide">On</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Title</th>
+                        <th className="w-20 px-2 py-2.5 text-center text-xs font-semibold text-gray-600 uppercase tracking-wide">Max</th>
+                        <th className="w-28 px-2 py-2.5 text-center text-xs font-semibold text-gray-600 uppercase tracking-wide">BTL</th>
+                        <th className="w-52 px-2 py-2.5 text-center text-xs font-semibold text-gray-600 uppercase tracking-wide">CO</th>
+                        <th className="w-10 px-2 py-2.5" />
+                        {isCurrentlyEditing && <th className="w-10 px-2 py-2.5" />}
                       </tr>
-                    ) : (
-                      props.localRows.map((row, idx) => (
-                        <tr key={idx} className={`hover:bg-gray-50 ${!row.enabled ? 'opacity-50' : ''}`}>
-                          {isCurrentlyEditing && (
-                            <td className="px-2 py-2 text-center text-gray-300 cursor-grab">
-                              <GripVertical className="w-4 h-4 inline" />
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {props.localRows.length === 0 ? (
+                        <tr>
+                          <td className="text-center py-12 text-gray-400 text-sm" colSpan={isCurrentlyEditing ? 8 : 7}>
+                            No questions yet.{isCurrentlyEditing && ' Click "Add Row" to create one.'}
+                          </td>
+                        </tr>
+                      ) : (
+                        props.localRows.map((row, idx) => (
+                          <tr key={idx} className={`hover:bg-gray-50 ${!row.enabled ? 'opacity-50' : ''}`}>
+                            {isCurrentlyEditing && (
+                              <td className="px-2 py-2 text-center text-gray-300 cursor-grab">
+                                <GripVertical className="w-4 h-4 inline" />
+                              </td>
+                            )}
+                            <td className="px-2 py-2 text-center">
+                              <input
+                                type="checkbox"
+                                checked={row.enabled}
+                                disabled={!isCurrentlyEditing}
+                                onChange={e => props.onUpdateRow(idx, 'enabled', e.target.checked)}
+                                className="w-4 h-4 accent-blue-600"
+                              />
                             </td>
-                          )}
-                          <td className="px-2 py-2 text-center">
-                            <input
-                              type="checkbox"
-                              checked={row.enabled}
-                              disabled={!isCurrentlyEditing}
-                              onChange={e => props.onUpdateRow(idx, 'enabled', e.target.checked)}
-                              className="w-4 h-4 accent-blue-600"
-                            />
-                          </td>
-                          <td className="px-3 py-1.5">
-                            {isCurrentlyEditing ? (
-                              <input
-                                value={row.title}
-                                onChange={e => props.onUpdateRow(idx, 'title', e.target.value)}
-                                className="w-full px-2 py-1.5 border rounded focus:ring-1 focus:ring-blue-500 text-sm"
-                                placeholder={`Q${idx + 1}`}
-                              />
-                            ) : (
-                              <span className="font-medium">{row.title}</span>
-                            )}
-                          </td>
-                          <td className="px-2 py-1.5 text-center">
-                            {isCurrentlyEditing ? (
-                              <input
-                                type="number"
-                                min={0}
-                                value={row.max_marks}
-                                onChange={e => props.onUpdateRow(idx, 'max_marks', Number(e.target.value))}
-                                className="w-16 px-2 py-1.5 border rounded text-center focus:ring-1 focus:ring-blue-500 text-sm"
-                              />
-                            ) : (
-                              <span className="font-semibold text-gray-700">{row.max_marks}</span>
-                            )}
-                          </td>
-                          <td className="px-2 py-1.5 text-center">
-                            {isCurrentlyEditing ? (
-                              <select
-                                value={row.btl_level ?? ''}
-                                onChange={e => props.onUpdateRow(idx, 'btl_level', e.target.value ? Number(e.target.value) : null)}
-                                className="w-full px-2 py-1.5 border rounded text-sm focus:ring-1 focus:ring-blue-500"
-                              >
-                                <option value="">User Sel.</option>
-                                {BTL_LEVELS.map(l => <option key={l} value={l}>BT{l}</option>)}
-                              </select>
-                            ) : (
-                              row.btl_level
-                                ? <span className="bg-indigo-100 text-indigo-700 text-xs px-1.5 py-0.5 rounded">BT{row.btl_level}</span>
-                                : <span className="text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">User Sel.</span>
-                            )}
-                          </td>
-                          <td className="px-2 py-1.5 text-center">
-                            {isCurrentlyEditing ? (
-                              <button
-                                type="button"
-                                data-co-picker-btn="true"
-                                onClick={(e) => {
-                                  if (coNumbers.length === 0) return;
-                                  if (activeCoPickerRow === idx) {
-                                    closeCoPicker();
-                                    return;
-                                  }
-                                  openCoPicker(idx, e.currentTarget);
-                                }}
-                                disabled={coNumbers.length === 0}
-                                className="w-full px-2 py-1.5 border rounded text-sm text-left bg-white hover:bg-gray-50 focus:ring-1 focus:ring-blue-500 disabled:opacity-60 disabled:cursor-not-allowed"
-                              >
-                                {coNumbers.length === 0 ? 'No COs' : (row.co_number == null ? 'CO' : coLabel(row.co_number))}
-                              </button>
-                            ) : (
-                              row.co_number != null ? (
-                                Array.isArray(row.co_number)
-                                  ? <span className="bg-violet-100 text-violet-700 text-xs px-1.5 py-0.5 rounded font-medium">{coLabel(row.co_number)}</span>
-                                  : <span className="bg-emerald-100 text-emerald-700 text-xs px-1.5 py-0.5 rounded">{coLabel(row.co_number)}</span>
-                              ) : <span className="text-gray-300 text-xs">—</span>
-                            )}
+                            <td className="px-3 py-1.5">
+                              {isCurrentlyEditing ? (
+                                <input
+                                  value={row.title}
+                                  onChange={e => props.onUpdateRow(idx, 'title', e.target.value)}
+                                  className="w-full px-2 py-1.5 border rounded focus:ring-1 focus:ring-blue-500 text-sm"
+                                  placeholder={`Q${idx + 1}`}
+                                />
+                              ) : (
+                                <span className="font-medium">{row.title}</span>
+                              )}
+                            </td>
+                            <td className="px-2 py-1.5 text-center">
+                              {isCurrentlyEditing ? (
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={row.max_marks}
+                                  onChange={e => props.onUpdateRow(idx, 'max_marks', Number(e.target.value))}
+                                  className="w-16 px-2 py-1.5 border rounded text-center focus:ring-1 focus:ring-blue-500 text-sm"
+                                />
+                              ) : (
+                                <span className="font-semibold text-gray-700">{row.max_marks}</span>
+                              )}
+                            </td>
+                            <td className="px-2 py-1.5 text-center">
+                              {isCurrentlyEditing ? (
+                                <select
+                                  value={row.btl_level ?? ''}
+                                  onChange={e => props.onUpdateRow(idx, 'btl_level', e.target.value ? Number(e.target.value) : null)}
+                                  className="w-full px-2 py-1.5 border rounded text-sm focus:ring-1 focus:ring-blue-500"
+                                >
+                                  <option value="">User Sel.</option>
+                                  {BTL_LEVELS.map(l => <option key={l} value={l}>BT{l}</option>)}
+                                </select>
+                              ) : (
+                                row.btl_level
+                                  ? <span className="bg-indigo-100 text-indigo-700 text-xs px-1.5 py-0.5 rounded">BT{row.btl_level}</span>
+                                  : <span className="text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">User Sel.</span>
+                              )}
+                            </td>
+                            <td className="px-2 py-1.5 text-center">
+                              {isCurrentlyEditing ? (
+                                <button
+                                  type="button"
+                                  data-co-picker-btn="true"
+                                  onClick={(e) => {
+                                    if (coNumbers.length === 0) return;
+                                    if (activeCoPickerRow === idx) {
+                                      closeCoPicker();
+                                      return;
+                                    }
+                                    openCoPicker(idx, e.currentTarget);
+                                  }}
+                                  disabled={coNumbers.length === 0}
+                                  className="w-full px-2 py-1.5 border rounded text-sm text-left bg-white hover:bg-gray-50 focus:ring-1 focus:ring-blue-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                  {coNumbers.length === 0 ? 'No COs' : (row.co_number == null ? 'CO' : coLabel(row.co_number))}
+                                </button>
+                              ) : (
+                                row.co_number != null ? (
+                                  Array.isArray(row.co_number)
+                                    ? <span className="bg-violet-100 text-violet-700 text-xs px-1.5 py-0.5 rounded font-medium">{coLabel(row.co_number)}</span>
+                                    : <span className="bg-emerald-100 text-emerald-700 text-xs px-1.5 py-0.5 rounded">{coLabel(row.co_number)}</span>
+                                ) : <span className="text-gray-300 text-xs">—</span>
+                              )}
 
-                          </td>
-                          <td className="px-2 py-1.5 text-center">
-                            <button
-                              onClick={() => props.onOpenQuestionSettings(idx)}
-                              disabled={!isCurrentlyEditing}
-                              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded disabled:opacity-40"
-                              title="Question settings"
-                            >
-                              <Settings2 className="w-4 h-4" />
-                            </button>
-                          </td>
-                          {isCurrentlyEditing && (
+                            </td>
                             <td className="px-2 py-1.5 text-center">
                               <button
-                                onClick={() => props.onRemoveQuestion(idx)}
-                                className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
+                                onClick={() => props.onOpenQuestionSettings(idx)}
+                                disabled={!isCurrentlyEditing}
+                                className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded disabled:opacity-40"
+                                title="Question settings"
                               >
-                                <X className="w-4 h-4" />
+                                <Settings2 className="w-4 h-4" />
                               </button>
                             </td>
-                          )}
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                            {isCurrentlyEditing && (
+                              <td className="px-2 py-1.5 text-center">
+                                <button
+                                  onClick={() => props.onRemoveQuestion(idx)}
+                                  className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </td>
+                            )}
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </div>

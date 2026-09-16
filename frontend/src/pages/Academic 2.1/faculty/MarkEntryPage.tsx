@@ -744,6 +744,80 @@ export default function MarkEntryPage() {
 
   const markEntryCacheKey = examId ? `acv2:mark_entry_cache:${examId}` : null;
 
+  const normalizeExamData = (examData: ExamInfo): ExamInfo => {
+    if (!examData) return examData;
+
+    // Normalize Mark Manager mode
+    if (examData.mark_manager) {
+      const rawMode = String(examData.mark_manager.mode || '').trim().toLowerCase();
+      const isUserDefine = rawMode === 'user_define' || rawMode === 'user_defined';
+      examData.mark_manager.mode = isUserDefine ? 'user_define' : 'admin_define';
+    }
+
+    // If Mark Manager is admin_define and enabled, generate questions if qp_pattern is missing or empty
+    if (
+      examData.mark_manager?.enabled &&
+      examData.mark_manager.mode === 'admin_define' &&
+      (!examData.qp_pattern || !examData.qp_pattern.questions || examData.qp_pattern.questions.length === 0)
+    ) {
+      const genQuestions: Question[] = [];
+      const examTitle = String(examData.mark_manager.cia_label || '').trim() || 'Exam';
+      const commonItemName = String(examData.mark_manager.item_name || '').trim() || 'Item';
+
+      if (examData.mark_manager.cia_enabled && (Number(examData.mark_manager.cia_max_marks) || 0) > 0) {
+        genQuestions.push({
+          id: 'q_cia',
+          question_number: examTitle,
+          max_marks: Number(examData.mark_manager.cia_max_marks) || 0,
+          btl_level: null,
+          co_number: 0,
+          enabled: true,
+        });
+      }
+
+      const coNums = Object.keys(examData.mark_manager.cos || {})
+        .map(Number)
+        .filter((n) => Number.isFinite(n) && n > 0)
+        .sort((a, b) => a - b);
+
+      let qIdx = genQuestions.length;
+      for (const coNum of coNums) {
+        const coCfg = examData.mark_manager.cos[coNum];
+        if (!coCfg?.enabled) continue;
+        const numItems = coCfg.num_items || 1;
+        const perItem =
+          numItems > 0
+            ? Math.round(((coCfg.max_marks || 0) / numItems) * 100) / 100
+            : coCfg.max_marks || 0;
+        for (let i = 0; i < numItems; i++) {
+          genQuestions.push({
+            id: `q_${qIdx++}`,
+            question_number: `CO${coNum} - ${commonItemName} ${i + 1}`,
+            max_marks: perItem,
+            btl_level: null,
+            co_number: coNum,
+            enabled: true,
+          });
+        }
+      }
+
+      if (genQuestions.length > 0) {
+        examData.qp_pattern = {
+          id: examData.qp_pattern?.id || 'admin_defined',
+          name: examData.qp_pattern?.name || examData.name || 'Admin Defined Pattern',
+          questions: genQuestions,
+        };
+      }
+    }
+
+    // Normalise qp_pattern: if empty object or missing questions, set null
+    if (examData.qp_pattern && (!examData.qp_pattern.questions || examData.qp_pattern.questions.length === 0)) {
+      examData.qp_pattern = null;
+    }
+
+    return examData;
+  };
+
   const readMarkEntryCache = (): MarkEntryCachePayload | null => {
     if (!markEntryCacheKey) return null;
     try {
@@ -751,6 +825,7 @@ export default function MarkEntryPage() {
       if (!raw) return null;
       const parsed = JSON.parse(raw) as MarkEntryCachePayload;
       if (!parsed || !parsed.examInfo || !Array.isArray(parsed.students)) return null;
+      parsed.examInfo = normalizeExamData(parsed.examInfo);
       return parsed;
     } catch {
       return null;
@@ -820,13 +895,17 @@ export default function MarkEntryPage() {
   } | null>(null);
   const excelFileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Check if we need to show mark manager setup
-  const needsMarkManagerSetup = examInfo
-    && examInfo.mark_manager
-    && examInfo.mark_manager.enabled
-    && examInfo.mark_manager.mode === 'user_define'
-    && !examInfo.mark_manager.confirmed
-    && (!examInfo.qp_pattern || examInfo.qp_pattern.questions.length === 0);
+  // Helper boolean: Is Mark Manager enabled in User Defined mode?
+  const isUserDefineMm = !!(
+    examInfo?.mark_manager?.enabled &&
+    (examInfo.mark_manager.mode === 'user_define' || (examInfo.mark_manager as any).mode === 'user_defined')
+  );
+
+  // Check if we need to show mark manager setup (ONLY for user_define mode)
+  const needsMarkManagerSetup =
+    isUserDefineMm &&
+    !examInfo.mark_manager?.confirmed &&
+    (!examInfo.qp_pattern || !examInfo.qp_pattern.questions || examInfo.qp_pattern.questions.length === 0);
 
   const questions: Question[] =
     examInfo?.qp_pattern && 'questions' in examInfo.qp_pattern
@@ -1071,7 +1150,7 @@ export default function MarkEntryPage() {
       if (hasChanges) return;
       if (showPublishConfirm) return; // don't refresh while publish modal is open
       if (suppressAutoRefreshAfterWarningRef.current) return; // don't refresh after "Close & Fix"
-      if (mmSetup && examInfo?.mark_manager?.enabled && examInfo.mark_manager.mode === 'user_define' && !examInfo.mark_manager.confirmed) return;
+      if (mmSetup && isUserDefineMm && !examInfo?.mark_manager?.confirmed) return;
       if (!examId) return;
       loadDataRef.current?.().catch(() => undefined);
     };
@@ -1081,7 +1160,7 @@ export default function MarkEntryPage() {
       window.removeEventListener('focus', maybeRefresh);
       document.removeEventListener('visibilitychange', maybeRefresh);
     };
-  }, [examId, hasChanges, showPublishConfirm]);
+  }, [examId, hasChanges, showPublishConfirm, isUserDefineMm, mmSetup, examInfo]);
 
   useEffect(() => {
     if (!examId) return;
@@ -1092,12 +1171,12 @@ export default function MarkEntryPage() {
       if (showPublishConfirm) return;
       if (suppressAutoRefreshAfterWarningRef.current) return;
       if (autoSaveStatus === 'saving') return;
-      if (mmSetup && examInfo?.mark_manager?.enabled && examInfo.mark_manager.mode === 'user_define' && !examInfo.mark_manager.confirmed) return;
+      if (mmSetup && isUserDefineMm && !examInfo?.mark_manager?.confirmed) return;
       loadDataRef.current?.().catch(() => undefined);
     }, 2000);
 
     return () => window.clearInterval(intervalId);
-  }, [examId, hasChanges, showPublishConfirm, autoSaveStatus]);
+  }, [examId, hasChanges, showPublishConfirm, autoSaveStatus, isUserDefineMm, mmSetup, examInfo]);
 
   const loadData = async () => {
     try {
@@ -1141,11 +1220,8 @@ export default function MarkEntryPage() {
 
       const examRes = await examPromise;
       if (!examRes.ok) throw new Error('Failed to load exam');
-      const examData = await examRes.json();
-      // Normalise qp_pattern: if empty object or missing questions, set null
-      if (examData.qp_pattern && (!examData.qp_pattern.questions || examData.qp_pattern.questions.length === 0)) {
-        examData.qp_pattern = null;
-      }
+      const rawExamData = await examRes.json();
+      const examData = normalizeExamData(rawExamData);
       setExamInfo(examData);
       examInfoRef.current = examData;
       setQuestionBtls(normalizeQuestionBtlsMap(examData.question_btls || {}));
@@ -1156,8 +1232,9 @@ export default function MarkEntryPage() {
       setSealAnimationEnabled(Boolean(pc?.seal_animation_enabled));
       setSealWatermarkEnabled(Boolean(pc?.seal_watermark_enabled));
 
-      // Init Mark Manager setup if needed, but do NOT overwrite local edits while the user is actively configuring it.
-      if (examData.mark_manager?.enabled && examData.mark_manager?.mode === 'user_define' && !examData.mark_manager?.confirmed) {
+      // Init Mark Manager setup ONLY for user_define mode if not confirmed yet
+      const isUserMm = examData.mark_manager?.enabled && examData.mark_manager?.mode === 'user_define';
+      if (isUserMm && !examData.mark_manager?.confirmed) {
         if (!mmSetup) {
           // Derive CO numbers from exam data (mark_manager config, covered_cos, qp_pattern questions), fallback to co_count or 5
           let coNumbers: number[] = [];
@@ -1187,6 +1264,9 @@ export default function MarkEntryPage() {
           setMmSetup({ cos, cia_enabled: false, cia_max_marks: 30, cia_weight: 0 });
           setShowMarkManagerToggle(true);
         }
+      } else {
+        setMmSetup(null);
+        setShowMarkManagerToggle(false);
       }
 
       // Unblock after exam details (students can load just after)
@@ -1743,10 +1823,8 @@ export default function MarkEntryPage() {
     try {
       const examRes = await fetchWithAuth(`/api/academic-v2/exams/${examId}/`);
       if (examRes.ok) {
-        const examData = await examRes.json();
-        if (examData.qp_pattern && (!examData.qp_pattern.questions || examData.qp_pattern.questions.length === 0)) {
-          examData.qp_pattern = null;
-        }
+        const rawExamData = await examRes.json();
+        const examData = normalizeExamData(rawExamData);
         setExamInfo(examData);
         const pc = (examData as any)?.publish_control || {};
         setSealImageUrl(resolveMediaUrl(pc?.seal_image));
@@ -1999,9 +2077,9 @@ export default function MarkEntryPage() {
     setImportPreview(null);
   };
 
-  // Mark Manager edit: reopen setup
+  // Mark Manager edit: reopen setup (user_define mode only)
   const editMarkManager = () => {
-    if (!examInfo?.mark_manager) return;
+    if (!examInfo?.mark_manager || !isUserDefineMm) return;
     const mm = examInfo.mark_manager;
     const cos: Record<number, MarkManagerCOConfig> = {};
     const mmCos = mm.cos || {};
@@ -2325,8 +2403,8 @@ export default function MarkEntryPage() {
             />
           )}
 
-          {/* Mark Manager edit (user_define mode, already confirmed) */}
-          {canImport && examInfo.mark_manager?.enabled && examInfo.mark_manager?.mode === 'user_define' && (
+          {/* Mark Manager edit (user_define mode only) */}
+          {canImport && isUserDefineMm && (
             <>
               <button
                 onClick={() => {
@@ -2468,9 +2546,9 @@ export default function MarkEntryPage() {
             )
           )}
 
-          {/* Request Generate — when locked under publish control and Mark Manager is confirmed */}
+          {/* Request Generate — when locked under publish control and Mark Manager is confirmed (user_define mode only) */}
           {!canImport && isLocked && publishControlEnabled &&
-            examInfo.mark_manager?.enabled &&
+            isUserDefineMm &&
             examInfo.mark_manager?.confirmed && !hasPending && (
             <button
               onClick={() => {
@@ -2924,8 +3002,8 @@ export default function MarkEntryPage() {
 
 
 
-      {/* ───── Mark Manager Setup (user_define mode — first time or edit) ───── */}
-      {mmSetup && (
+      {/* ───── Mark Manager Setup (user_define mode only — first time or edit) ───── */}
+      {mmSetup && isUserDefineMm && (
         <div className="bg-white rounded-xl shadow-sm border p-6 space-y-5">
           <div className="flex items-center gap-3">
             <Settings2 className="w-5 h-5 text-teal-600" />

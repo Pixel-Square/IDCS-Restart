@@ -854,6 +854,14 @@ class AcV2ExamAssignment(models.Model):
         except Exception:
             qp_type = ''
         if not qp_type:
+            try:
+                ta = getattr(self.section, 'teaching_assignment', None)
+                cr = getattr(ta, 'curriculum_row', None)
+                es = getattr(ta, 'elective_subject', None)
+                qp_type = (getattr(cr, 'question_paper_type', None) or getattr(es, 'question_paper_type', None) or '').strip()
+            except Exception:
+                qp_type = ''
+        if not qp_type:
             qp_type = (self.qp_type or '').strip() or (self.exam or '').strip() or ''
         exam_key = (self.exam_display_name or self.exam or '').strip()
 
@@ -863,28 +871,81 @@ class AcV2ExamAssignment(models.Model):
         except Exception:
             ct = None
 
-        base_qs = AcV2QpPattern.objects.filter(qp_type=qp_type, is_active=True)
+        def _norm_k(s):
+            if not s:
+                return ''
+            return str(s).strip().lower().replace('-', '_').replace(' ', '_').replace('__', '_')
+
+        possible_qp_types = set(filter(None, [
+            qp_type,
+            getattr(self, 'qp_type', None),
+            (getattr(self.section.course, 'question_paper_type', None) if getattr(self, 'section', None) and getattr(self.section, 'course', None) else None),
+        ]))
+        norm_qp_types = set(_norm_k(x) for x in possible_qp_types if x)
+
+        possible_exam_keys = set(filter(None, [
+            self.exam,
+            self.exam_display_name,
+            exam_key,
+        ]))
+        norm_exam_keys = set(_norm_k(x) for x in possible_exam_keys if x)
+
+        candidate_qs = AcV2QpPattern.objects.filter(is_active=True)
+        scoped_patterns = list(candidate_qs.filter(class_type=ct).order_by('-updated_at')) if ct is not None else []
+        global_patterns = list(candidate_qs.filter(class_type__isnull=True).order_by('-updated_at'))
+
         pattern = None
+        # 1) Match within class-type patterns by qp_type & exam
+        for p in scoped_patterns:
+            p_qp = _norm_k(p.qp_type)
+            p_name = _norm_k(p.name)
+            if (p_qp in norm_qp_types or not norm_qp_types) and (p_name in norm_exam_keys or not norm_exam_keys):
+                pattern = p
+                break
+        if not pattern and scoped_patterns:
+            for p in scoped_patterns:
+                if _norm_k(p.name) in norm_exam_keys:
+                    pattern = p
+                    break
 
-        if ct is not None:
-            scoped = base_qs.filter(class_type=ct)
-            if exam_key:
-                pattern = scoped.filter(name__iexact=exam_key).order_by('-updated_at').first()
-            else:
-                pattern = scoped.order_by('-updated_at').first()
-
+        # 2) Match within global patterns
         if not pattern:
-            # Fallback to global pattern
-            global_qs = base_qs.filter(class_type__isnull=True)
-            if exam_key:
-                pattern = global_qs.filter(name__iexact=exam_key).order_by('-updated_at').first()
-            else:
-                pattern = global_qs.order_by('-updated_at').first()
+            for p in global_patterns:
+                p_qp = _norm_k(p.qp_type)
+                p_name = _norm_k(p.name)
+                if (p_qp in norm_qp_types or not norm_qp_types) and (p_name in norm_exam_keys or not norm_exam_keys):
+                    pattern = p
+                    break
+        if not pattern and global_patterns:
+            for p in global_patterns:
+                if _norm_k(p.name) in norm_exam_keys:
+                    pattern = p
+                    break
 
         p = pattern.pattern if pattern and isinstance(pattern.pattern, dict) else {}
         if isinstance(p, dict):
-            if p.get('questions'):
-                return p
+            titles = p.get('titles', [])
+            marks_list = p.get('marks', [])
+            cos = p.get('cos', [])
+            btls = p.get('btls', [])
+            enabled = p.get('enabled', [])
+            if titles and isinstance(titles, list):
+                questions = []
+                for i in range(len(titles)):
+                    if i < len(enabled) and not enabled[i]:
+                        continue
+                    questions.append({
+                        'id': f'q{i}',
+                        'question_number': titles[i] if i < len(titles) else str(i + 1),
+                        'title': titles[i] if i < len(titles) else str(i + 1),
+                        'max_marks': marks_list[i] if i < len(marks_list) else 0,
+                        'btl_level': btls[i] if i < len(btls) else None,
+                        'co_number': cos[i] if i < len(cos) else 0,
+                        'enabled': True,
+                    })
+                if questions:
+                    return {'questions': questions, 'mark_manager': p.get('mark_manager')}
+
             mm = p.get('mark_manager')
             if mm and isinstance(mm, dict) and mm.get('enabled') and mm.get('cos'):
                 gen_p = self._generate_pattern_from_mark_manager(mm)
@@ -923,8 +984,7 @@ class AcV2ExamAssignment(models.Model):
                 co_num = 1
             num_items = int(c_val.get('num_items') or 1)
             raw_max = float(c_val.get('max_marks') or 0)
-            # In user_define mode, max_marks in config is per-item; in admin_define, check if total or per-item
-            per_item_max = raw_max
+            per_item_max = round(raw_max / num_items, 2) if num_items > 0 else raw_max
             for i in range(num_items):
                 questions.append({
                     'id': f'q{q_idx}',
