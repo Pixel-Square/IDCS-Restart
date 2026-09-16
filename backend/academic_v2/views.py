@@ -4242,12 +4242,23 @@ def faculty_course_info(request, ta_id):
     curriculum_qp_type_code = qp_type_code
 
     # Look up AcV2ClassType - curriculum class_type_code is authoritative.
-    # Do NOT fall back to an arbitrary class type; that would hide setup issues
-    # and can create wrong exam assignments.
-    acv2_ct = (
-        AcV2ClassType.objects.filter(is_active=True, short_code__iexact=class_type_code).first()
-        or AcV2ClassType.objects.filter(is_active=True, name__iexact=class_type_code).first()
-    )
+    # Target version from TA academic year
+    ay = getattr(ta, 'academic_year', None)
+    target_version = AcV2Version.objects.filter(academic_years=ay).first() if ay else None
+    if not target_version:
+        target_version = AcV2Version.objects.filter(is_default=True).first() or AcV2Version.objects.filter(is_active=True).first()
+
+    acv2_ct = None
+    if target_version:
+        acv2_ct = (
+            AcV2ClassType.objects.filter(version=target_version, is_active=True, short_code__iexact=class_type_code).first()
+            or AcV2ClassType.objects.filter(version=target_version, is_active=True, name__iexact=class_type_code).first()
+        )
+    if not acv2_ct:
+        acv2_ct = (
+            AcV2ClassType.objects.filter(is_active=True, short_code__iexact=class_type_code).first()
+            or AcV2ClassType.objects.filter(is_active=True, name__iexact=class_type_code).first()
+        )
     # NOTE: Always show curriculum class_type_code for consistency with course list
     # Use AcV2ClassType only for exam configurations and total_internal_marks
     class_type_info = {
@@ -4259,6 +4270,7 @@ def faculty_course_info(request, ta_id):
     # Count students in this section / teaching assignment
     active_student_profiles = _get_active_students_for_teaching_assignment(ta)
     student_count = len(active_student_profiles)
+    active_student_ids = {str(sp.id) for sp in active_student_profiles} if active_student_profiles else set()
 
     # Build exam list from AcV2ExamAssignment records linked to this TA via AcV2Section
     exams = []
