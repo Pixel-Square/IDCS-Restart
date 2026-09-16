@@ -2064,55 +2064,74 @@ class StudentReportPDFView(APIView):
             logger.exception("Failed to gather marks for student report PDF (student=%s)", student_id)
             marks_data = []
 
+        # Calculate Summary Ribbon
+        _score_pcts = [m.get("score_pct") for m in marks_data if m.get("score_pct") is not None]
+        avg_pct = round(sum(_score_pcts) / len(_score_pcts), 1) if _score_pcts else 0.0
+        from .marks_helper import get_remark
+        remarks = get_remark(avg_pct)
+
         # Generate PDF with ReportLab
         try:
             from reportlab.lib.pagesizes import A4
             from reportlab.lib.units import mm
-            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, PageTemplate, Frame, KeepTogether
             from reportlab.lib import colors
             from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-            from reportlab.lib.enums import TA_CENTER, TA_LEFT
+            from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
             from django.http import HttpResponse
             import io, os
         except ImportError:
             return Response({"detail": "reportlab not installed"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         buffer = io.BytesIO()
+        
+        # Determine logos
+        krct_logo = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', 'frontend', 'src', 'assets', 'krlogo.png')
+        idcs_logo = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', 'frontend', 'src', 'assets', 'idcs-logo.png')
+        
+        def on_page(canvas, doc):
+            canvas.saveState()
+            # Draw professional border
+            canvas.setStrokeColor(colors.HexColor('#CBD5E1'))
+            canvas.setLineWidth(1)
+            canvas.rect(10*mm, 10*mm, A4[0] - 20*mm, A4[1] - 20*mm)
+            
+            # Header
+            y_pos = A4[1] - 15*mm
+            if os.path.exists(krct_logo):
+                canvas.drawImage(krct_logo, 15*mm, y_pos - 15*mm, width=50*mm, height=15*mm, preserveAspectRatio=True, anchor='nw')
+            if os.path.exists(idcs_logo):
+                canvas.drawImage(idcs_logo, A4[0] - 45*mm, y_pos - 15*mm, width=30*mm, height=15*mm, preserveAspectRatio=True, anchor='ne')
+            
+            # Draw subtle line under header
+            canvas.setStrokeColor(colors.HexColor('#E2E8F0'))
+            canvas.line(10*mm, y_pos - 18*mm, A4[0] - 10*mm, y_pos - 18*mm)
+            canvas.restoreState()
+
         doc = SimpleDocTemplate(
             buffer, pagesize=A4,
-            leftMargin=20*mm, rightMargin=20*mm,
-            topMargin=15*mm, bottomMargin=15*mm,
+            leftMargin=15*mm, rightMargin=15*mm,
+            topMargin=40*mm, bottomMargin=15*mm,
         )
+        frame = Frame(15*mm, 15*mm, A4[0] - 30*mm, A4[1] - 60*mm, id='normal')
+        template = PageTemplate(id='test', frames=frame, onPage=on_page)
+        doc.addPageTemplates([template])
+
         elements = []
         styles = getSampleStyleSheet()
         primary_color = colors.HexColor('#4F46E5')
 
-        # --- Try to include project logo ---
-        logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'frontend', 'public', 'logo.png')
-        if not os.path.exists(logo_path):
-            logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'images', 'logo.png')
-        if os.path.exists(logo_path):
-            try:
-                img = Image(logo_path, width=40, height=40)
-                elements.append(img)
-                elements.append(Spacer(1, 6))
-            except Exception:
-                pass
-
         # --- Title ---
-        title_style = ParagraphStyle('PDFTitle', parent=styles['Title'], fontSize=16, alignment=TA_CENTER, textColor=primary_color, spaceAfter=4)
-        elements.append(Paragraph('IDCS &ndash; Academic Performance', title_style))
-        subtitle_style = ParagraphStyle('PDFSubtitle', parent=styles['Normal'], fontSize=10, alignment=TA_CENTER, textColor=colors.grey, spaceAfter=12)
-        elements.append(Paragraph('Individual Student Analysis Report', subtitle_style))
-        elements.append(Spacer(1, 8))
+        title_style = ParagraphStyle('PDFTitle', parent=styles['Title'], fontSize=16, alignment=TA_CENTER, textColor=primary_color, spaceAfter=2, fontName='Helvetica-Bold')
+        elements.append(Paragraph('Individual Student Analysis Report', title_style))
+        subtitle_style = ParagraphStyle('PDFSubtitle', parent=styles['Normal'], fontSize=10, alignment=TA_CENTER, textColor=colors.grey, spaceAfter=14)
+        elements.append(Paragraph(f'Assessment: {exam_type or "All Assessments"}', subtitle_style))
 
         # --- Student Details ---
         dept_lbl = student.home_department.short_name if student.home_department else 'N/A'
         sec_lbl = student.section.name if student.section else 'N/A'
         sem_lbl = str(student.section.semester.number) if (student.section and student.section.semester) else 'N/A'
         ay_lbl = student.batch or (student.section.batch.name if (student.section and student.section.batch) else 'N/A')
-        info_style = ParagraphStyle('StudentInfo', parent=styles['Normal'], fontSize=10, spaceAfter=2)
-        info_bold = ParagraphStyle('StudentInfoBold', parent=styles['Normal'], fontSize=10, spaceAfter=2)
         full_name = student.user.get_full_name() or student.user.username
         reg_no = student.reg_no or str(student.id)
 
@@ -2120,9 +2139,8 @@ class StudentReportPDFView(APIView):
             ['Student Name:', full_name, 'Register No:', reg_no],
             ['Department:', dept_lbl, 'Section:', sec_lbl],
             ['Semester:', sem_lbl, 'Academic Year:', ay_lbl],
-            ['Assessment:', exam_type or 'CIA 1', '', ''],
         ]
-        info_tbl = Table(info_data, colWidths=[85, 160, 85, 160])
+        info_tbl = Table(info_data, colWidths=[25*mm, 60*mm, 25*mm, 60*mm])
         info_tbl.setStyle(TableStyle([
             ('FONTSIZE', (0, 0), (-1, -1), 9),
             ('TEXTCOLOR', (0, 0), (0, -1), colors.grey),
@@ -2131,40 +2149,80 @@ class StudentReportPDFView(APIView):
             ('FONTNAME', (3, 0), (3, -1), 'Helvetica-Bold'),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
             ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#F8FAFC')),
+            ('ROUNDEDCORNERS', [4, 4, 4, 4]),
+            ('BOX', (0,0), (-1,-1), 0.5, colors.HexColor('#E2E8F0')),
         ]))
         elements.append(info_tbl)
+        elements.append(Spacer(1, 10))
+
+        # --- Summary Ribbon ---
+        ribbon_data = [[
+            Paragraph(f'<font color="#64748B" size="8"><b>AVERAGE MARK</b></font><br/>—', ParagraphStyle('r1', alignment=TA_CENTER)),
+            Paragraph(f'<font color="#64748B" size="8"><b>PERCENTAGE</b></font><br/><font size="14"><b>{avg_pct}%</b></font>', ParagraphStyle('r2', alignment=TA_CENTER)),
+            Paragraph(f'<font color="#64748B" size="8"><b>REMARKS</b></font><br/><font size="12"><b>{remarks}</b></font>', ParagraphStyle('r3', alignment=TA_CENTER))
+        ]]
+        ribbon_tbl = Table(ribbon_data, colWidths=[55*mm, 55*mm, 60*mm])
+        ribbon_tbl.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.white),
+            ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        elements.append(ribbon_tbl)
         elements.append(Spacer(1, 14))
 
         # --- Subject Performance Table ---
-        section_title = ParagraphStyle('SectionTitle', parent=styles['Heading3'], fontSize=11, textColor=primary_color, spaceAfter=6)
+        section_title = ParagraphStyle('SectionTitle', parent=styles['Heading3'], fontSize=11, textColor=primary_color, spaceAfter=6, fontName='Helvetica-Bold')
         elements.append(Paragraph('Subject Performance Details', section_title))
 
-        def _score_cell(value):
-            """Marks are numeric, but a placeholder may be stored when no record exists."""
-            try:
-                return f"{float(value):.1f}"
-            except (TypeError, ValueError):
-                text = str(value).strip() if value is not None else ''
-                return text or '\u2014'
+        def _fmt(val):
+            if val is None or val == '—': return '—'
+            try: return f"{float(val):g}"
+            except: return str(val)
 
-        table_data = [['Subject Code', 'Subject Name', 'Marks', 'Remarks']]
+        # Columns: Subject Code | Subject Name | Assessment | Mark/Max | Percentage | Result | Remarks
+        table_data = [['Code', 'Subject Name', 'Assessment', 'Mark/Max', 'Percentage', 'Result', 'Remarks']]
         for md in marks_data:
+            score = md.get('score')
+            max_mark = md.get('max_mark')
+            pct = md.get('score_pct')
+            
+            if score == '—' or score is None:
+                mark_max = '—'
+            else:
+                mark_max = f"{_fmt(score)} / {_fmt(max_mark)}"
+                
+            pct_str = f"{pct}%" if pct is not None else '—'
+            
+            res = '—'
+            try:
+                if score != '—' and score is not None and max_mark != '—' and max_mark is not None:
+                    res = 'Pass' if float(score) >= (float(max_mark) / 2) else 'Fail'
+            except:
+                pass
+            
+            res_p = Paragraph(f"<font color=\"{'#10B981' if res == 'Pass' else '#EF4444' if res == 'Fail' else 'black'}\"><b>{res}</b></font>")
+
             table_data.append([
                 md.get('subject_code', ''),
                 Paragraph(md.get('subject_name', ''), ParagraphStyle('CellWrap', fontSize=8, leading=10)),
-                _score_cell(md.get('score')),
-                md.get('remark', '\u2014'),
+                Paragraph(md.get('assessment', ''), ParagraphStyle('CellWrap', fontSize=8, leading=10)),
+                mark_max,
+                pct_str,
+                res_p,
+                Paragraph(md.get('remark', '—'), ParagraphStyle('CellWrap', fontSize=8, leading=10)),
             ])
 
-        tbl = Table(table_data, colWidths=[75, 190, 50, 155])
+        tbl = Table(table_data, colWidths=[20*mm, 45*mm, 20*mm, 23*mm, 20*mm, 15*mm, 27*mm], repeatRows=1)
         style_cmds = [
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 9),
-            ('FONTSIZE', (0, 1), (-1, -1), 8),
-            ('ALIGN', (2, 0), (2, -1), 'CENTER'),
-            ('ALIGN', (3, 0), (3, -1), 'CENTER'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('ALIGN', (3, 0), (-1, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
@@ -2185,8 +2243,7 @@ class StudentReportPDFView(APIView):
 
         buffer.seek(0)
         response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
-        # Filename is always exactly Academic_Performance_<RegisterNo>.pdf — the
-        # register number is sanitized so the header stays valid.
+        # Filename is always exactly Academic_Performance_<RegisterNo>.pdf
         import re as _re
         raw_reg = str(student.reg_no or student.id)
         reg_token = _re.sub(r'[^A-Za-z0-9._-]+', '_', raw_reg).strip('._-') or str(student.id)

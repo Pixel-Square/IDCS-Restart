@@ -5221,7 +5221,6 @@ def _get_faculty_exam_assignment(exam_id, user, extra_select_related=None):
 
     ea = ea_qs.filter(id=exam_id).filter(
         Q(section__faculty_user=user) |
-        Q(section__teaching_assignment__faculty=user) |
         Q(section__teaching_assignment__staff__user=user)
     ).first()
 
