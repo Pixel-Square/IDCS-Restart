@@ -503,6 +503,83 @@ export async function fetchStudentAnalysisCharts(studentId: string, exam: string
   return response.json();
 }
 
+export interface StudentReportPdfDownload {
+  blob: Blob;
+  filename: string;
+}
+
+/**
+ * Reads a human readable error message out of a failed PDF response.
+ * The endpoint may answer with JSON (`{"detail": ...}`) or, when Django is in
+ * DEBUG mode, with an HTML error page — in that case a generic message is used.
+ */
+async function extractPdfErrorMessage(response: Response): Promise<string> {
+  const fallback = `Failed to generate the PDF report (HTTP ${response.status}).`;
+  try {
+    const text = await response.text();
+    if (!text) return fallback;
+    try {
+      const parsed = JSON.parse(text);
+      const detail = parsed?.detail || parsed?.error || parsed?.message;
+      if (detail) return String(detail);
+    } catch {
+      // Non-JSON body (e.g. an HTML error page) — fall through to the fallback.
+    }
+  } catch {
+    // Ignore body read failures and use the fallback message.
+  }
+  return fallback;
+}
+
+/**
+ * Download the one-page PDF report for a single student.
+ *
+ * Uses the shared `fetchWithAuth` helper (same transport as every other
+ * Academic Performance call) so the request is always sent to the configured
+ * API base with the current access token. The response is returned as a Blob
+ * plus the exact filename required by the report spec:
+ *   Academic_Performance_<RegisterNo>.pdf
+ */
+export async function downloadStudentReportPDF(
+  studentId: string,
+  options: { exam?: string; subject?: string; regNo?: string | null } = {},
+): Promise<StudentReportPdfDownload> {
+  const queryParams = new URLSearchParams();
+  if (options.exam) queryParams.set('exam', options.exam);
+  if (options.subject) queryParams.set('subject', options.subject);
+  const qs = queryParams.toString();
+
+  const url = `${API_BASE}/api/academic-v2/performance/student-report-pdf/${encodeURIComponent(studentId)}/${qs ? `?${qs}` : ''}`;
+
+  // Guard against a hung request so the UI can never stay on "Downloading...".
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 120000);
+  let response: Response;
+  try {
+    response = await fetchWithAuth(url, { signal: controller.signal });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error('The PDF report request timed out. Please try again.');
+    }
+    throw new Error('Unable to reach the report service. Check your connection and try again.');
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+
+  if (!response.ok) {
+    throw new Error(await extractPdfErrorMessage(response));
+  }
+
+  const blob = await response.blob();
+  if (!blob || blob.size === 0) {
+    throw new Error('The generated PDF report was empty. Please try again.');
+  }
+
+  const regNo = String(options.regNo ?? '').trim();
+  const basename = regNo && regNo !== 'N/A' ? regNo : String(studentId);
+  return { blob, filename: `Academic_Performance_${basename}.pdf` };
+}
+
 export interface DepartmentSectionAnalysisRow {
   section: string;
   students: number;

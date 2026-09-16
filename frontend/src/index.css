@@ -45,6 +45,50 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Wide Academic Performance tables: keep Reg No / Name visible while scrolling
+   wide subject columns horizontally. The sticky columns intentionally use solid
+   backgrounds so scrolled cells slide underneath without visual overlap. */
+.ap-table-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+.ap-table-scroll table {
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.ap-sticky-col {
+  position: sticky;
+  left: 0;
+  z-index: 5;
+}
+.ap-sticky-col-2 {
+  position: sticky;
+  z-index: 5;
+}
+thead .ap-sticky-col,
+thead .ap-sticky-col-2 {
+  z-index: 6;
+}
+/* Dashboard switcher: visible thin scrollbar instead of clipped overlap */
+.ap-scroll-x {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+.ap-scroll-x::-webkit-scrollbar {
+  height: 6px;
+}
+.ap-scroll-x::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+.ap-scroll-x::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 /* ── IDCSScan animations ─────────────────────────────────────────── */
 @keyframes shrink-bar {
   from { width: 100%; }

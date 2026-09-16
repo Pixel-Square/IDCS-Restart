@@ -606,6 +606,13 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
 
   if (isIqac && !items.some((item) => item.key === 'academic_audit')) {
     items.push({ key: 'academic_audit', label: 'Academic Audit', to: '/iqac/audits' });
+  } else if (flags.is_staff) {
+    if (!items.some((item) => item.key === 'academic_audit_assessor')) {
+      items.push({ key: 'academic_audit_assessor', label: 'Audit Assessor', to: '/audits/entry' });
+    }
+    if (rolesUpper.includes('HOD') && !items.some((item) => item.key === 'academic_audit_atr')) {
+      items.push({ key: 'academic_audit_atr', label: 'Audit ATR', to: '/audits/atr' });
+    }
   }
 
   // IDCSScan — available to SECURITY, IQAC, and ADMIN roles
@@ -818,7 +825,7 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
             {/* Dynamic Menu Items */}
             {items.map(i => {
               const Icon = ICON_MAP[i.key] || User;
-              const active = i.to !== '#' && loc.pathname.startsWith(i.to);
+              const active = i.to !== '#' && (loc.pathname === i.to || loc.pathname.startsWith(i.to + '/'));
               const isHodGroup = i.key === 'hod_event_management';
               const isHaaGroup = i.key === 'haa_event_management';
               const isFacultyGroup = i.key === 'faculty_directory';

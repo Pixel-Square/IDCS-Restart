@@ -30,22 +30,27 @@ export function safeLazy(
     } catch (error: any) {
       console.error(`[SafeLazy] Failed to load ${componentName}:`, error);
 
-      // Handle Vite chunk hash mismatch after a new build / deployment
+      // Recoverable Vite/webpack chunk-load failures (stale hashed chunk after
+      // a redeploy, flaky network): retry the dynamic import once so the user
+      // is not left on a blank page.
       const isChunkError =
           error?.message?.includes('Failed to fetch dynamically imported module') ||
           error?.message?.includes('Importing a module script failed') ||
           error?.message?.includes('error loading dynamically imported module') ||
           error?.name === 'ChunkLoadError';
 
-        // Graceful fallback UI – render a simple error placeholder.
-        console.error(`[SafeLazy] Chunk load error for ${componentName}:`, error);
-        const Fallback: React.FC = () => React.createElement(
-          'div',
-          { style: { padding: '2rem', textAlign: 'center', color: 'red' } },
-          `Failed to load ${componentName}. Please refresh the page.`
-        );
-        return { default: Fallback };
+      if (isChunkError) {
+        console.info(`[SafeLazy] Retrying load of ${componentName} after chunk error`);
+        const module = await importFn();
+        const component =
+          (module as any)?.default || (module as any)?.[componentName] || module;
+        if (component && (typeof component === 'function' || typeof (component as any)?.$$typeof === 'symbol')) {
+          return { default: component };
+        }
+      }
 
+      // Non-recoverable: rethrow so the nearest error boundary renders a
+      // visible fallback instead of a blank screen.
       throw error;
     }
   });

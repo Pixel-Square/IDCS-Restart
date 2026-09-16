@@ -2058,7 +2058,11 @@ class StudentReportPDFView(APIView):
         exam_type = request.query_params.get('exam', 'CIA 1').strip()
         subject_filter = request.query_params.get('subject', '').strip()
         from .marks_helper import get_student_marks_data
-        marks_data = get_student_marks_data(student, exam_type, subject_filter)
+        try:
+            marks_data = get_student_marks_data(student, exam_type, subject_filter)
+        except Exception:
+            logger.exception("Failed to gather marks for student report PDF (student=%s)", student_id)
+            marks_data = []
 
         # Generate PDF with ReportLab
         try:
@@ -2135,12 +2139,20 @@ class StudentReportPDFView(APIView):
         section_title = ParagraphStyle('SectionTitle', parent=styles['Heading3'], fontSize=11, textColor=primary_color, spaceAfter=6)
         elements.append(Paragraph('Subject Performance Details', section_title))
 
+        def _score_cell(value):
+            """Marks are numeric, but a placeholder may be stored when no record exists."""
+            try:
+                return f"{float(value):.1f}"
+            except (TypeError, ValueError):
+                text = str(value).strip() if value is not None else ''
+                return text or '\u2014'
+
         table_data = [['Subject Code', 'Subject Name', 'Marks', 'Remarks']]
         for md in marks_data:
             table_data.append([
                 md.get('subject_code', ''),
                 Paragraph(md.get('subject_name', ''), ParagraphStyle('CellWrap', fontSize=8, leading=10)),
-                f"{md.get('score', 0):.1f}",
+                _score_cell(md.get('score')),
                 md.get('remark', '\u2014'),
             ])
 
@@ -2162,10 +2174,23 @@ class StudentReportPDFView(APIView):
         tbl.setStyle(TableStyle(style_cmds))
         elements.append(tbl)
 
-        doc.build(elements)
+        try:
+            doc.build(elements)
+        except Exception:
+            logger.exception("Failed to build student report PDF (student=%s)", student_id)
+            return Response(
+                {"detail": "Failed to generate the PDF report. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
         buffer.seek(0)
         response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
-        filename = f"Academic_Performance_{student.reg_no or student.id}.pdf"
+        # Filename is always exactly Academic_Performance_<RegisterNo>.pdf — the
+        # register number is sanitized so the header stays valid.
+        import re as _re
+        raw_reg = str(student.reg_no or student.id)
+        reg_token = _re.sub(r'[^A-Za-z0-9._-]+', '_', raw_reg).strip('._-') or str(student.id)
+        filename = f"Academic_Performance_{reg_token}.pdf"
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
 

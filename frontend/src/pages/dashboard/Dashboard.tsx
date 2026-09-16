@@ -16,8 +16,9 @@ export default function DashboardPage() {
 
     const onMeUpdated = (event: Event) => {
       const detail = (event as CustomEvent).detail;
-      if (!detail) return;
-      setUser(detail);
+      // A null detail means the session ended (logout): clear immediately so
+      // the previous user's dashboard never flashes on navigation.
+      setUser(detail ?? null);
     };
 
     window.addEventListener('idcs:me-updated', onMeUpdated as EventListener);

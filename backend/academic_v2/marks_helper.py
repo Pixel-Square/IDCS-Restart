@@ -65,6 +65,34 @@ def get_student_marks_data(student, exam_type, subject_filter=''):
                 max_refs[model] = float(ref) if ref and float(ref) > 0 else 100.0
             return max_refs[model]
 
+        def _get_record_max(model, m, field):
+            if hasattr(m, 'max_mark') and getattr(m, 'max_mark') is not None:
+                return float(m.max_mark)
+            if hasattr(m, 'max_marks') and getattr(m, 'max_marks') is not None:
+                return float(m.max_marks)
+            
+            try:
+                from academic_v2.models import AcV2ExamAssignment
+                mapping = {
+                    'Cia1Mark': 'CIA 1', 'Cia2Mark': 'CIA 2', 
+                    'ModelExamMark': 'Model Exam', 'LabExamMark': 'Lab Exam',
+                    'Ssa1Mark': 'SSA 1', 'Ssa2Mark': 'SSA 2',
+                    'Review1Mark': 'Review 1', 'Review2Mark': 'Review 2',
+                    'Formative1Mark': 'Formative 1', 'Formative2Mark': 'Formative 2',
+                }
+                exam_name = mapping.get(model.__name__)
+                if exam_name and getattr(m, 'teaching_assignment_id', None):
+                    assignment = AcV2ExamAssignment.objects.filter(
+                        teaching_assignment_id=m.teaching_assignment_id, 
+                        exam__iexact=exam_name
+                    ).first()
+                    if assignment and getattr(assignment, 'max_marks', None):
+                        return float(assignment.max_marks)
+            except Exception:
+                pass
+            
+            return get_max_ref(model, field)
+
         def _score_of(m, field):
             val = getattr(m, field, None)
             if val is None and field != "total_mark":
@@ -75,34 +103,23 @@ def get_student_marks_data(student, exam_type, subject_filter=''):
                 return None
 
         if exam in ("ALL", "ALL ASSESSMENTS"):
-            acc = {}
             for label, model, field in all_models:
-                # Determine total marks for this assessment type using DEFAULT_TOTALS
-                                # Determine total marks for this assessment type dynamically from the model's max observed value
-                total_marks = get_max_ref(model, field)
                 for m in _matches_subject(model.objects.filter(student=student).select_related("subject")):
                     if not m.subject:
                         continue
-                    code = m.subject.code
-                    if code not in acc:
-                        acc[code] = {"name": m.subject.name, "scores": [], "pcts": []}
                     score = _score_of(m, field)
                     if score is not None:
-                        acc[code]["scores"].append(score)
-                        acc[code]["pcts"].append((score / total_marks) * 100.0)
-            for code, data in acc.items():
-                if not data["scores"]:
-                    continue
-                avg_score = round(sum(data["scores"]) / len(data["scores"]), 1)
-                avg_pct = round(sum(data["pcts"]) / len(data["pcts"]), 1)
-                marks_data.append({
-                    "subject_code": code,
-                    "subject_name": data["name"],
-                    "assessment": "All Assessments",
-                    "score": avg_score,
-                    "score_pct": avg_pct,
-                    "remark": get_remark(avg_pct),
-                })
+                        total_marks = _get_record_max(model, m, field)
+                        pct = (score / total_marks) * 100.0 if total_marks > 0 else 0.0
+                        marks_data.append({
+                            "subject_code": m.subject.code,
+                            "subject_name": m.subject.name,
+                            "assessment": label,
+                            "score": score,
+                            "max_mark": total_marks,
+                            "score_pct": round(pct, 1),
+                            "remark": get_remark(pct),
+                        })
         else:
             selected_model = Cia1Mark
             selected_field = "mark"
@@ -113,21 +130,20 @@ def get_student_marks_data(student, exam_type, subject_filter=''):
                     assessment_label = key
                     break
 
-            # Determine total marks for the selected assessment
-                            # Determine total marks for the selected assessment dynamically
-                total_marks = get_max_ref(selected_model, selected_field)
             for m in _matches_subject(selected_model.objects.filter(student=student).select_related("subject")):
                 if not m.subject:
                     continue
                 score = _score_of(m, selected_field)
                 if score is not None:
-                    pct = (score / total_marks) * 100.0
+                    total_marks = _get_record_max(selected_model, m, selected_field)
+                    pct = (score / total_marks) * 100.0 if total_marks > 0 else 0.0
                     marks_data.append({
                         "subject_code": m.subject.code,
                         "subject_name": m.subject.name,
                         "assessment": assessment_label,
                         "score": score,
-                        "score_pct": pct,
+                        "max_mark": total_marks,
+                        "score_pct": round(pct, 1),
                         "remark": get_remark(pct),
                     })
                 else:
@@ -136,6 +152,7 @@ def get_student_marks_data(student, exam_type, subject_filter=''):
                         "subject_name": m.subject.name,
                         "assessment": assessment_label,
                         "score": '—',
+                        "max_mark": '—',
                         "score_pct": None,
                         "remark": '—',
                     })

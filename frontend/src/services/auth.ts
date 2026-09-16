@@ -288,6 +288,17 @@ export function logout(){
   localStorage.removeItem('roles')
   localStorage.removeItem('permissions')
   localStorage.removeItem('me')
+  localStorage.removeItem('role')
+  localStorage.removeItem('impersonation_notice')
+  // Notify every mounted component that the session ended so in-memory user
+  // state is cleared immediately. Without this, components seeded from
+  // localStorage keep rendering the previous user's dashboard briefly after
+  // logout / navigation.
+  try {
+    window.dispatchEvent(new CustomEvent('idcs:me-updated', { detail: null }));
+  } catch (_) {
+    // ignore — storage is already cleared
+  }
 }
 
 // Attach access token to outgoing requests

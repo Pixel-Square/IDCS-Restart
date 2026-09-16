@@ -41,7 +41,6 @@ import {
   LineChart,
   Line
 } from 'recharts';
-import { apiClient } from '../../services/auth';
 import {
   fetchPerformanceAnalytics,
   fetchPublishedDashboards,
@@ -55,6 +54,7 @@ import {
   fetchStudentAnalysisCharts,
   fetchDepartmentAnalysis,
   fetchSubjectAnalysis,
+  downloadStudentReportPDF,
 } from '../../services/academicPerformance';
 import type {
   SubjectAnalysisResponse,
@@ -200,6 +200,7 @@ export default function AcademicPerformancePage() {
   const [studentChartsLoading, setStudentChartsLoading] = useState(false);
   const [studentChartsError, setStudentChartsError] = useState('');
   const [downloadLoading, setDownloadLoading] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
   const [studentChartsData, setStudentChartsData] = useState<StudentAnalysisChartsResponse | null>(null);
   const [studentModalMeta, setStudentModalMeta] = useState<{
     student_name: string;
@@ -337,10 +338,16 @@ export default function AcademicPerformancePage() {
     loadInitialData();
   }, []);
 
+  const isMounted = useRef(false);
   // Refetch analytics when filter values change
+  // Dept changes are intentionally excluded here.
   useEffect(() => {
+    if (!isMounted.current) {
+      isMounted.current = true;
+      return;
+    }
     fetchAnalytics();
-  }, [selectedYear, selectedSem, selectedDept, selectedSection, selectedExamType]);
+  }, [selectedYear, selectedSem, selectedSection, selectedExamType]);
 
   // Dynamic section & subject options come straight from backend
   const sectionOptions: string[] = React.useMemo(() => {
@@ -382,8 +389,7 @@ export default function AcademicPerformancePage() {
     }
     if (selectedDept && activeTab !== 'student') {
       list = list.filter((s: any) => {
-        if (!s.departments || s.departments.length === 0) return true;
-        return s.departments.some((d: string) => d.toLowerCase() === selectedDept.toLowerCase());
+        return s.departments && s.departments.some((d: string) => d.toLowerCase() === selectedDept.toLowerCase());
       });
     }
     return list;
@@ -442,6 +448,34 @@ export default function AcademicPerformancePage() {
     }
   }, [selectedDept, contextSubjects, selectedSubject, activeTab]);
 
+  // Auto-select context if a subject is chosen first
+  useEffect(() => {
+    if (selectedSubject && !data?.user_context?.lock_department) {
+      const subject = dynamicOptions?.subjects?.find((s: any) => 
+        String(s.id) === String(selectedSubject) || s.code === selectedSubject
+      );
+      if (subject) {
+        if (!selectedDept && subject.departments && subject.departments.length === 1) {
+          const dCode = subject.departments[0].toLowerCase();
+          const deptOpt = dynamicOptions?.departments?.find((d: any) => 
+            (d.code && d.code.toLowerCase() === dCode) || 
+            (d.shortName && d.shortName.toLowerCase() === dCode)
+          );
+          if (deptOpt) {
+            setSelectedDept(deptOpt.code);
+            setSelectedDeptName(deptOpt.name);
+          }
+        }
+        if (!selectedYear && subject.academicYears && subject.academicYears.length === 1) {
+          setSelectedYear(subject.academicYears[0]);
+        }
+        if (!selectedSem && subject.semesterNum) {
+          setSelectedSem(String(subject.semesterNum));
+        }
+      }
+    }
+  }, [selectedSubject, selectedDept, selectedYear, selectedSem, dynamicOptions?.subjects, data]);
+
   // Reset all college-level filters back to default
   const handleResetFilters = () => {
     setSelectedYear('');
@@ -463,8 +497,10 @@ export default function AcademicPerformancePage() {
   // Navigate to the College-level overview (used by breadcrumb + reset).
   const goCollegeOverview = () => {
     // Reset all filter and drill-down state back to college level
-    setSelectedDept('');
-    setSelectedDeptName('');
+    if (!data?.user_context?.lock_department) {
+      setSelectedDept('');
+      setSelectedDeptName('');
+    }
     setSelectedSection('');
     setSelectedSubject('');
     setDeptDrilldown(null);
@@ -478,12 +514,18 @@ export default function AcademicPerformancePage() {
     setSubjectError('');
     setSubjectSectionFilter('');
     setHierarchyLevel(HierarchyLevel.COLLEGE);
-    setActiveTab('');
+    
+    if (data?.user_context) {
+      if (data.user_context.is_principal) setActiveTab('principal');
+      else if (data.user_context.is_hod) setActiveTab('hod');
+      else if (data.user_context.is_advisor) setActiveTab('advisor');
+      else if (data.user_context.is_faculty) setActiveTab('faculty');
+      else if (data.user_context.is_student) setActiveTab('student');
+    }
+    
     setActiveDashboardId('overall_overview');
     // Reset breadcrumb to only college level
     setBreadcrumbPath([{ id: 'college', label: 'College', type: 'COLLEGE' }]);
-    // Reload initial dashboards and context
-    loadInitialData();
   };
 
   const handleBreadcrumbNavigate = (index: number) => {
@@ -499,23 +541,45 @@ export default function AcademicPerformancePage() {
     }
   };
 
-  // Reset drilldowns when core filters change to avoid stale data
+  // Reset drill-down snapshots when NON-drill filter edits land while a drill
+  // modal is open (prevents stale College→Dept→Faculty→Subject→Student data).
+  // openDepartmentDrilldown sets the dept filter itself and immediately fetches
+  // its own scoped payload, so dept edits are excluded here on purpose.
+  const drillFilterReqIdRef = useRef(0);
   useEffect(() => {
-    // Reset drill-down state only when NOT in an active drill-down (i.e., at college level)
-    if (hierarchyLevel === HierarchyLevel.COLLEGE) {
-      // Ensure any stray drill-down state is cleared when core filters change at top level
-      setDeptDrilldown(null);
-      setDrilldownData(null);
-      setDrilldownError('');
-      setFacultyDrill(null);
-      setFacultyDetail(null);
-      setFacultyDetailError('');
-      setSubjectDrill(null);
-      setSubjectDetail(null);
-      setSubjectError('');
-      setSubjectSectionFilter('');
-    }
-  }, [selectedYear, selectedSem, selectedSection, selectedExamType, selectedDept]);
+    if (!deptDrilldown) return;
+    const reqId = ++drillFilterReqIdRef.current;
+    // Clear stale snapshots only when the user changed a non-dept top filter
+    // while the modal was open; show spinners while refetching.
+    setDrilldownData(null);
+    setDrilldownError('');
+    setDrilldownLoading(true);
+    setFacultyDetail(null);
+    setFacultyDetailError('');
+    setSubjectDetail(null);
+    setSubjectError('');
+    (async () => {
+      try {
+        const res = await fetchDepartmentAnalysis({
+          dept: deptDrilldown.code,
+          year: selectedYear,
+          sem: selectedSem,
+          exam: selectedExamType || undefined,
+          section: selectedSection || undefined,
+        });
+        if (reqId !== drillFilterReqIdRef.current) return;
+        setDrilldownData(res || null);
+      } catch (err: any) {
+        if (reqId !== drillFilterReqIdRef.current) return;
+        console.error('Failed to reload department analysis', err);
+        setDrilldownData(null);
+        setDrilldownError(err?.message || 'Unable to load department analysis. Please try again.');
+      } finally {
+        if (reqId === drillFilterReqIdRef.current) setDrilldownLoading(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedYear, selectedSem, selectedSection, selectedExamType]);
 
   const navigateUp = () => {
     if (hierarchyLevel === HierarchyLevel.SUBJECT) {
@@ -531,13 +595,20 @@ export default function AcademicPerformancePage() {
 
 
 
+  const facultyReqIdRef = useRef(0);
   // Load Faculty Wise when tab is switched
   useEffect(() => {
     if (activeTab === 'faculty' || activeTab === 'hod') {
+      const reqId = ++facultyReqIdRef.current;
       setFacultyLoading(true);
+      setFaculties([]);
       fetchFacultyWiseAnalytics(selectedDept)
-        .then(res => setFaculties(res))
-        .finally(() => setFacultyLoading(false));
+        .then(res => { if (reqId === facultyReqIdRef.current) setFaculties(res || []); })
+        .catch(err => {
+          console.error(err);
+          if (reqId === facultyReqIdRef.current) setFaculties([]);
+        })
+        .finally(() => { if (reqId === facultyReqIdRef.current) setFacultyLoading(false); });
     }
   }, [activeTab, selectedDept]);
 
@@ -605,6 +676,7 @@ export default function AcademicPerformancePage() {
     });
     setStudentChartsData(null);
     setStudentChartsError('');
+    setDownloadError('');
     setIsStudentChartsModalOpen(true);
     setStudentChartsLoading(true);
     try {
@@ -628,37 +700,42 @@ export default function AcademicPerformancePage() {
     }
   };
 
-  // Download PDF report for the currently selected student
+  // Download PDF report for the currently selected student.
+  // Uses the shared Academic Performance transport (fetchWithAuth + configured
+  // API base) and triggers a real browser download for the returned PDF blob.
   const handleDownloadReport = async () => {
     const studentId = selectedStudentId;
-    if (!studentId) return;
+    if (!studentId) {
+      setDownloadError('No student selected. Reopen the student analysis and try again.');
+      return;
+    }
+    if (downloadLoading) return;
     setDownloadLoading(true);
+    setDownloadError('');
+    // Register number is the required filename token; prefer the freshly loaded
+    // cohort data and fall back to the cached modal metadata.
+    const regNo = (studentChartsData?.reg_no && studentChartsData.reg_no !== 'N/A')
+      ? studentChartsData.reg_no
+      : (studentModalMeta?.reg_no || '');
     try {
-      const response = await apiClient.get(`/api/academic-v2/performance/student-report-pdf/${studentId}/`, {
-        responseType: 'blob',
-        params: {
-          exam: selectedExamType,
-          subject: selectedSubject,
-        }
+      const { blob, filename } = await downloadStudentReportPDF(studentId, {
+        exam: selectedExamType || 'All Assessments',
+        subject: selectedSubject,
+        regNo,
       });
-      // Determine filename, preferring Content-Disposition header
-      let filename = `Academic_Performance_${studentChartsData?.reg_no || 'Report'}.pdf`;
-      const disposition = response.headers['content-disposition'];
-      if (disposition) {
-        const match = disposition.match(/filename[^;=\\s]*=\\s*\"?([^\";]*)\"?/i);
-        if (match && match[1]) filename = match[1];
-      }
-      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
       link.setAttribute('download', filename);
+      link.style.display = 'none';
       document.body.appendChild(link);
       link.click();
       link.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
+      // Revoke on the next tick so the browser has time to start the download.
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+    } catch (err: any) {
       console.error('Failed to download report', err);
-      // TODO: Show UI error toast if available
+      setDownloadError(err?.message || 'Unable to download the PDF report. Please try again.');
     } finally {
       setDownloadLoading(false);
     }
@@ -719,21 +796,36 @@ export default function AcademicPerformancePage() {
 
   // Open Department Drill Down — the department is added to the current filter
   // context while preserving the selected Year / Semester / Assessment / Section.
+  const deptDrillReqIdRef = useRef(0);
   const openDepartmentDrilldown = async (deptCode: string, deptName: string) => {
+    const reqId = ++deptDrillReqIdRef.current;
+    // Invalidate any in-flight drill-down/filter refetch so the newest click wins.
+    drillFilterReqIdRef.current++;
+    const deptLabel = deptName || deptCode;
     setHierarchyLevel(HierarchyLevel.DEPARTMENT);
     // Update filter state for department drilldown
     setSelectedDept(deptCode);
-    setSelectedDeptName(deptName);
-    // Set department context and initialize loading states
-    setDeptDrilldown({ code: deptCode, name: deptName });
+    setSelectedDeptName(deptLabel);
+    // Set department context and initialize loading states. Any previously
+    // loaded payload is cleared so the modal never renders stale/undefined data
+    // for the newly selected department.
+    setDeptDrilldown({ code: deptCode, name: deptLabel });
+    setDrilldownData(null);
     setDrilldownLoading(true);
     setDrilldownError('');
+    setFacultyDrill(null);
+    setFacultyDetail(null);
+    setFacultyDetailError('');
+    setSubjectDrill(null);
+    setSubjectDetail(null);
+    setSubjectError('');
+    setSubjectSectionFilter('');
     setFacultyRowsLoading(true);
     setFacultyRows([]);
     // Set explicit breadcrumb path: College -> Department
     setBreadcrumbPath([
       { id: 'college', label: 'College', type: 'COLLEGE' },
-      { id: deptCode, label: deptName, type: 'DEPARTMENT' }
+      { id: deptCode, label: deptLabel, type: 'DEPARTMENT' }
     ]);
 
     try {
@@ -745,13 +837,23 @@ export default function AcademicPerformancePage() {
           exam: selectedExamType || undefined,
           section: selectedSection || undefined,
         }),
-        fetchFacultyWiseAnalytics(deptCode),
+        // Faculty rows are supplementary: a failure there must not fail the
+        // whole department drill-down.
+        fetchFacultyWiseAnalytics(deptCode).catch((err) => {
+          console.error('Failed to load department faculty rows', err);
+          return [] as FacultyWiseRow[];
+        }),
       ]);
-      setDrilldownData(res);
+      if (reqId !== deptDrillReqIdRef.current) return;
+      setDrilldownData(res || null);
       setFacultyRows(facRows || []);
-    } catch {
-      setDrilldownError('Unable to load department analysis. Please try again.');
+    } catch (err: any) {
+      if (reqId !== deptDrillReqIdRef.current) return;
+      console.error('Failed to load department analysis', err);
+      setDrilldownData(null);
+      setDrilldownError(err?.message || 'Unable to load department analysis. Please try again.');
     } finally {
+      if (reqId !== deptDrillReqIdRef.current) return;
       setDrilldownLoading(false);
       setFacultyRowsLoading(false);
     }
@@ -759,6 +861,10 @@ export default function AcademicPerformancePage() {
 
   const closeDepartmentDrilldown = () => {
     setHierarchyLevel(HierarchyLevel.COLLEGE);
+    if (!data?.user_context?.lock_department) {
+      setSelectedDept('');
+      setSelectedDeptName('');
+    }
     setDeptDrilldown(null);
     setDrilldownData(null);
     setDrilldownError('');
@@ -944,7 +1050,9 @@ return (
       </div>
 
       {/* Sticky Global Context Filter Bar */}
-      <div className="sticky top-16 z-20 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-sm py-3.5 px-6">
+      {/* NOTE: the bar is sticky (not overflow-clipped) so native <select>
+          dropdown popups are never cut off by the container. */}
+      <div className="sticky top-16 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-sm py-3.5 px-6">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500 uppercase tracking-wider mr-2">
@@ -1035,11 +1143,11 @@ return (
             </select>
 
             {/* Subject Filter & Search */}
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 min-w-0">
               <select
                 value={selectedSubject}
                 onChange={(e) => setSelectedSubject(e.target.value)}
-                className="px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none max-w-[200px] truncate"
+                className="relative z-40 px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none max-w-[200px] truncate"
               >
                 <option value="">All Subjects</option>
                 {availableSubjects.map((sub: any) => (
@@ -1070,9 +1178,11 @@ return (
           </div>
 
           {/* Dashboard Switcher Button Row */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 hide-scrollbar">
-            <span className="text-xs font-bold text-slate-500 mr-1 whitespace-nowrap">Active View:</span>
-            <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl whitespace-nowrap">
+          {/* Buttons scroll horizontally if narrow; each button keeps its own
+              position in the flex row so nothing overlaps while scrolling. */}
+          <div className="relative z-10 flex items-center gap-2 overflow-x-auto overflow-y-visible pb-1 ap-scroll-x">
+            <span className="text-xs font-bold text-slate-500 mr-1 whitespace-nowrap shrink-0">Active View:</span>
+            <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl whitespace-nowrap shrink-0">
               <button
                 type="button"
                 onClick={() => handleSelectDashboard('overall_overview')}
@@ -1754,12 +1864,14 @@ return (
                   <p className="text-sm font-semibold text-slate-600">{studentCurriculumError}</p>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="ap-table-scroll">
+                  {/* Wide cohort table: Reg No / Name stay pinned left while the
+                      (potentially many) subject columns scroll horizontally. */}
                   <table className="w-full text-sm text-left">
                     <thead className="bg-slate-50 text-slate-600 font-medium">
                       <tr>
-                        <th className="px-4 py-3 rounded-tl-xl whitespace-nowrap">Reg No</th>
-                        <th className="px-4 py-3 whitespace-nowrap">Name</th>
+                        <th className="ap-sticky-col bg-slate-50 px-4 py-3 rounded-tl-xl whitespace-nowrap">Reg No</th>
+                        <th className="ap-sticky-col-2 left-[132px] bg-slate-50 px-4 py-3 whitespace-nowrap">Name</th>
                         <th className="px-4 py-3 whitespace-nowrap">Dept / Sec</th>
                         <th className="px-4 py-3 whitespace-nowrap">Semester</th>
                         <th className="px-4 py-3 whitespace-nowrap">Academic Year</th>
@@ -1781,21 +1893,21 @@ return (
                       ) : (
                         studentCurriculumData.students.map((student) => (
                           <tr key={student.student_id} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="px-4 py-3 font-medium text-slate-900">{student.reg_no}</td>
-                            <td className="px-4 py-3 text-slate-600">{student.name}</td>
-                            <td className="px-4 py-3 text-slate-600">{student.department} / {student.section}</td>
-                            <td className="px-4 py-3 text-slate-600">{student.semester || selectedSem || '1'}</td>
-                            <td className="px-4 py-3 text-slate-600">{student.academic_year || selectedYear || '-'}</td>
+                            <td className="ap-sticky-col bg-white px-4 py-3 font-medium text-slate-900 whitespace-nowrap">{student.reg_no}</td>
+                            <td className="ap-sticky-col-2 left-[132px] bg-white px-4 py-3 text-slate-600 whitespace-nowrap">{student.name}</td>
+                            <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{student.department} / {student.section}</td>
+                            <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{student.semester || selectedSem || '1'}</td>
+                            <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{student.academic_year || selectedYear || '-'}</td>
                             {studentCurriculumData?.subjects.map(sub => {
                               const mark = student.marks[sub.id];
                               const hasMark = mark !== undefined && mark !== null;
                               return (
-                                <td key={sub.id} className="px-4 py-3 text-center text-slate-700 font-medium">
+                                <td key={sub.id} className="px-4 py-3 text-center text-slate-700 font-medium whitespace-nowrap">
                                   {hasMark ? mark : '-'}
                                 </td>
                               );
                             })}
-                            <td className="px-4 py-3 text-center">
+                            <td className="px-4 py-3 text-center whitespace-nowrap">
                               <button
                                 onClick={() => handleOpenStudentCharts(student.student_id, {
                                   student_name: student.name,
@@ -1935,27 +2047,27 @@ return (
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                       <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
                         <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Subjects</p>
-                        <p className="text-2xl font-black text-slate-900 mt-1">{facultyDetail.metrics.subjects}</p>
+                        <p className="text-2xl font-black text-slate-900 mt-1">{facultyDetail.metrics?.subjects ?? 0}</p>
                       </div>
                       <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
                         <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Students</p>
-                        <p className="text-2xl font-black text-slate-900 mt-1">{facultyDetail.metrics.students}</p>
+                        <p className="text-2xl font-black text-slate-900 mt-1">{facultyDetail.metrics?.students ?? 0}</p>
                       </div>
                       <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
                         <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Avg Marks %</p>
-                        <p className="text-2xl font-black text-slate-900 mt-1">{facultyDetail.metrics.average_marks_pct != null ? `${facultyDetail.metrics.average_marks_pct}%` : '—'}</p>
+                        <p className="text-2xl font-black text-slate-900 mt-1">{facultyDetail.metrics?.average_marks_pct != null ? `${facultyDetail.metrics.average_marks_pct}%` : '—'}</p>
                       </div>
                       <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
                         <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Pass %</p>
-                        <p className="text-2xl font-black text-emerald-700 mt-1">{facultyDetail.metrics.pass_pct != null ? `${facultyDetail.metrics.pass_pct}%` : '—'}</p>
+                        <p className="text-2xl font-black text-emerald-700 mt-1">{facultyDetail.metrics?.pass_pct != null ? `${facultyDetail.metrics.pass_pct}%` : '—'}</p>
                       </div>
                       <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
                         <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Attendance %</p>
-                        <p className="text-2xl font-black text-slate-900 mt-1">{facultyDetail.metrics.attendance_pct != null ? `${facultyDetail.metrics.attendance_pct}%` : '—'}</p>
+                        <p className="text-2xl font-black text-slate-900 mt-1">{facultyDetail.metrics?.attendance_pct != null ? `${facultyDetail.metrics.attendance_pct}%` : '—'}</p>
                       </div>
                       <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
                         <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Pass / Fail</p>
-                        <p className="text-2xl font-black text-slate-900 mt-1">{facultyDetail.metrics.pass_count}<span className="text-rose-500 text-lg"> / {facultyDetail.metrics.fail_count}</span></p>
+                        <p className="text-2xl font-black text-slate-900 mt-1">{facultyDetail.metrics?.pass_count ?? 0}<span className="text-rose-500 text-lg"> / {facultyDetail.metrics?.fail_count ?? 0}</span></p>
                       </div>
                     </div>
 
@@ -2054,34 +2166,47 @@ return (
                       </div>
                     </div>
                   </>))}
-                  {/* Department-level content below — only when NOT in faculty drill-down */}
+                  {/* Department-level content below — only when NOT in faculty drill-down.
+                      Loading / error / empty states are handled here so the modal can
+                      never render against a null department payload. */}
                   {!facultyDrill && (
+                    drilldownLoading ? (
+                      <div className="py-16 text-center">
+                        <RefreshCw className="w-7 h-7 text-blue-600 animate-spin mx-auto mb-3" />
+                        <p className="text-sm font-bold text-slate-500">Loading department analysis...</p>
+                      </div>
+                    ) : drilldownError ? (
+                      <div className="py-16 text-center text-rose-600 font-bold text-sm">{drilldownError}</div>
+                    ) : !drilldownData ? (
+                      <div className="py-16 text-center text-slate-500 text-sm">No department data found for the selected filters.</div>
+                    ) : (
                     <>
-                    <div className="bg-blue-50 rounded-2xl p-4 border border-blue-100">
-                      <p className="text-[11px] font-bold text-blue-600 uppercase tracking-wider">Pass %</p>
-                      <p className="text-2xl font-black text-blue-700 mt-1">{drilldownData.metrics.pass_pct ?? 0}%</p>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                      <div className="bg-blue-50 rounded-xl p-3 border border-blue-100 flex flex-col justify-center">
+                        <p className="text-[10px] font-bold text-blue-600 uppercase tracking-wider">Pass %</p>
+                        <p className="text-xl font-black text-blue-700 mt-0.5">{drilldownData.metrics?.pass_pct ?? 0}%</p>
+                      </div>
+                      <div className="bg-emerald-50 rounded-xl p-3 border border-emerald-100 flex flex-col justify-center">
+                        <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Avg Marks</p>
+                        <p className="text-xl font-black text-emerald-700 mt-0.5">{drilldownData.metrics?.avg_marks ?? 0}</p>
+                      </div>
+                      <div className="bg-amber-50 rounded-xl p-3 border border-amber-100 flex flex-col justify-center">
+                        <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wider">Attendance</p>
+                        <p className="text-xl font-black text-amber-700 mt-0.5">
+                          {drilldownData.metrics?.attendance != null ? `${drilldownData.metrics.attendance}%` : '—'}
+                        </p>
+                      </div>
+                      <div className="bg-emerald-50 rounded-xl p-3 border border-emerald-100 flex flex-col justify-center">
+                        <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Pass</p>
+                        <p className="text-xl font-black text-emerald-700 mt-0.5">{drilldownData.metrics?.pass_count ?? 0}</p>
+                      </div>
+                      <div className="bg-rose-50 rounded-xl p-3 border border-rose-100 flex flex-col justify-center">
+                        <p className="text-[10px] font-bold text-rose-600 uppercase tracking-wider">Fail</p>
+                        <p className="text-xl font-black text-rose-700 mt-0.5">{drilldownData.metrics?.fail_count ?? 0}</p>
+                      </div>
                     </div>
-                    <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-100">
-                      <p className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">Avg Marks</p>
-                      <p className="text-2xl font-black text-emerald-700 mt-1">{drilldownData.metrics.avg_marks ?? 0}</p>
-                    </div>
-                    <div className="bg-amber-50 rounded-2xl p-4 border border-amber-100">
-                      <p className="text-[11px] font-bold text-amber-600 uppercase tracking-wider">Attendance</p>
-                      <p className="text-2xl font-black text-amber-700 mt-1">
-                        {drilldownData.metrics.attendance != null ? `${drilldownData.metrics.attendance}%` : '—'}
-                      </p>
-                    </div>
-                    <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-100">
-                      <p className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">Pass</p>
-                      <p className="text-2xl font-black text-emerald-700 mt-1">{drilldownData.metrics.pass_count ?? 0}</p>
-                    </div>
-                    <div className="bg-rose-50 rounded-2xl p-4 border border-rose-100">
-                      <p className="text-[11px] font-bold text-rose-600 uppercase tracking-wider">Fail</p>
-                      <p className="text-2xl font-black text-rose-700 mt-1">{drilldownData.metrics.fail_count ?? 0}</p>
-                    </div>
-
                   {/* Section-wise */}
-                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
                     <div className="px-5 py-4 border-b border-slate-100">
                       <h4 className="text-sm font-bold text-slate-900">Section-wise Performance</h4>
                     </div>
@@ -2152,61 +2277,10 @@ return (
                     </div>
                   </div>
 
-                  {/* Students */}
-                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-                    <div className="px-5 py-4 border-b border-slate-100">
-                      <h4 className="text-sm font-bold text-slate-900">Student Performance</h4>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider">
-                          <tr>
-                            <th className="py-3 px-4">Register No</th>
-                            <th className="py-3 px-4">Student Name</th>
-                            <th className="py-3 px-4 text-center">Section</th>
-                            <th className="py-3 px-4 text-center">Average Marks</th>
-                            <th className="py-3 px-4 text-center">Remarks</th>
-                            <th className="py-3 px-4 text-right">Action</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {(drilldownData.students || []).length === 0 ? (
-                            <tr><td colSpan={6} className="py-6 text-center text-slate-400">No students found for the selected filters.</td></tr>
-                          ) : (
-                            (drilldownData.students || []).map((st) => (
-                              <tr key={st.student_id} className="hover:bg-slate-50/60">
-                                <td className="py-3 px-4 font-bold text-slate-900">{st.reg_no}</td>
-                                <td className="py-3 px-4 text-slate-700">{st.name}</td>
-                                <td className="py-3 px-4 text-center text-slate-700">{st.section}</td>
-                                <td className="py-3 px-4 text-center text-slate-700">
-                                                                    { st.avg_marks != null ? st.avg_marks : '—'}
-                                </td>
-                                <td className="py-3 px-4 text-center">
-                                  {/* Using result field as remarks if we calculate it in backend, else fallback */}
-                                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                                    (st.result === 'Pass' || st.result === 'Excellent' || st.result === 'Very Good' || st.result === 'Good' || st.result === 'Satisfactory')
-                                    ? 'bg-emerald-50 text-emerald-700'
-                                    : 'bg-rose-50 text-rose-600'
-                                  }`}>{st.result}</span>
-                                </td>
-                                <td className="py-3 px-4 text-right">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenStudentCharts(st.student_id)}
-                                    className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-700"
-                                  >
-                                    View Analysis <ChevronRight className="w-3.5 h-3.5" />
-                                  </button>
-                                </td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
+
                 </>
-              )}
+                    )
+                  )}
             </div>
           </div>
         </div>
@@ -2276,14 +2350,51 @@ return (
             </div>
 
             <div className="p-6">
+              {downloadError && (
+                <div className="mb-4 p-3 text-center text-sm font-medium text-rose-700 bg-rose-50 rounded-xl border border-rose-200">
+                  {downloadError}
+                </div>
+              )}
               {studentChartsLoading ? (
                 <div className="flex flex-col items-center justify-center h-64 gap-3">
                   <div className="animate-spin rounded-full h-10 w-10 border-2 border-indigo-500 border-t-transparent"></div>
                   <span className="text-sm font-medium text-slate-500">Loading student analysis…</span>
+                  {(studentModalMeta?.reg_no || studentModalMeta?.student_name) && (
+                    <span className="text-xs text-slate-400">
+                      {studentModalMeta?.reg_no || ''}{studentModalMeta?.reg_no && studentModalMeta?.student_name ? ' • ' : ''}{studentModalMeta?.student_name || ''}
+                    </span>
+                  )}
                 </div>
               ) : studentChartsError ? (
-                <div className="p-6 text-center text-sm font-medium text-rose-600 bg-rose-50 rounded-2xl border border-rose-200">
-                  {studentChartsError}
+                <div className="p-6 text-center">
+                  <p className="text-sm font-medium text-rose-600 bg-rose-50 rounded-2xl border border-rose-200 px-4 py-4">
+                    {studentChartsError}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedStudentId) {
+                        handleOpenStudentCharts(
+                          selectedStudentId,
+                          studentModalMeta ? {
+                            student_name: studentModalMeta.student_name,
+                            reg_no: studentModalMeta.reg_no,
+                            department: studentModalMeta.department,
+                            section: studentModalMeta.section,
+                            semester: studentModalMeta.semester,
+                            academic_year: studentModalMeta.academic_year,
+                          } : undefined,
+                        );
+                      }
+                    }}
+                    className="mt-4 px-4 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-xl"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : !studentChartsData ? (
+                <div className="p-6 text-center text-sm font-medium text-slate-400 bg-slate-50 rounded-2xl border border-slate-200">
+                  No student analysis data available.
                 </div>
               ) : (
                 <div>
@@ -2308,12 +2419,12 @@ return (
                     </h4>
                     <div className="h-64 w-full min-w-0" style={{ minHeight: '256px', width: '100%' }}>
                       <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={200}>
-                        <BarChart data={studentChartsData?.marks_data || []}>
+                        <BarChart data={studentChartsData?.marks_data?.map((d: any) => ({ ...d, unique_name: `${d.subject_code} - ${d.assessment}` })) || []}>
                           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                          <XAxis dataKey="subject_code" tick={{ fontSize: 11, fill: '#64748B' }} />
+                          <XAxis dataKey="unique_name" tick={{ fontSize: 11, fill: '#64748B' }} />
                           <YAxis tick={{ fontSize: 11, fill: '#64748B' }} domain={[0, 100]} />
                           <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
-                          <Bar dataKey="score" name="Mark" fill="#6366F1" radius={[4, 4, 0, 0]} maxBarSize={50} />
+                          <Bar dataKey="score_pct" name="Percentage" fill="#6366F1" radius={[4, 4, 0, 0]} maxBarSize={50} />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
@@ -2331,7 +2442,10 @@ return (
                           <tr>
                             <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Subject Code</th>
                             <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Subject Name</th>
-                            <th scope="col" className="px-4 py-3 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Marks Obtained</th>
+                            <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Assessment</th>
+                            <th scope="col" className="px-4 py-3 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Mark/Max</th>
+                            <th scope="col" className="px-4 py-3 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Percentage</th>
+                            <th scope="col" className="px-4 py-3 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Result</th>
                             <th scope="col" className="px-4 py-3 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Remarks</th>
                           </tr>
                         </thead>
@@ -2348,12 +2462,18 @@ return (
                                 'Needs Significant Improvement': { bg: 'bg-rose-50', textCol: 'text-rose-700' },
                               };
                               const style = remarkStyles[remarkText] || { bg: 'bg-slate-50', textCol: 'text-slate-500' };
+                              const passMark = mark.max_mark && mark.max_mark !== '—' ? parseFloat(mark.max_mark) / 2 : null;
+                              const result = mark.score !== '—' && passMark !== null ? (parseFloat(mark.score) >= passMark ? 'Pass' : 'Fail') : '—';
+                              const resultColor = result === 'Pass' ? 'text-emerald-600 font-bold' : result === 'Fail' ? 'text-rose-600 font-bold' : 'text-slate-500';
 
                               return (
                                 <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
                                   <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-700">{mark.subject_code}</td>
                                   <td className="px-4 py-3 text-slate-600">{mark.subject_name}</td>
-                                  <td className="whitespace-nowrap px-4 py-3 text-right font-black text-slate-900">{mark.score}</td>
+                                  <td className="whitespace-nowrap px-4 py-3 text-slate-600">{mark.assessment}</td>
+                                  <td className="whitespace-nowrap px-4 py-3 text-right font-black text-slate-900">{mark.score} / {mark.max_mark}</td>
+                                  <td className="whitespace-nowrap px-4 py-3 text-right font-black text-slate-900">{mark.score_pct !== null && mark.score_pct !== undefined ? `${mark.score_pct}%` : '—'}</td>
+                                  <td className={`whitespace-nowrap px-4 py-3 text-right ${resultColor}`}>{result}</td>
                                   <td className="whitespace-nowrap px-4 py-3 text-right">
                                     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold ${style.bg} ${style.textCol}`}>
                                       {remarkText}
@@ -2364,7 +2484,7 @@ return (
                             })
                           ) : (
                             <tr>
-                              <td colSpan={4} className="px-4 py-8 text-center text-slate-400 font-medium">No subject marks available</td>
+                              <td colSpan={7} className="px-4 py-8 text-center text-slate-400 font-medium">No subject marks available</td>
                             </tr>
                           )}
                         </tbody>

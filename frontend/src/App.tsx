@@ -258,6 +258,12 @@ export default function App() {
   useEffect(() => {
     const onMeUpdated = (event: Event) => {
       const detail = (event as CustomEvent).detail as Me | null | undefined;
+      if (detail === null) {
+        // Session ended (logout): drop in-memory identity immediately so no
+        // stale dashboard renders before the router switches to /login.
+        setUser(null);
+        return;
+      }
       if (!detail) return;
       const normalizedUser = {
         ...detail,
@@ -344,12 +350,12 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AuditManagementPage />} />}
                 />
                 <Route
-                  path="/iqac/audits/:auditId/entry"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AuditEntryPage />} />}
+                  path="/audits/entry"
+                  element={<ProtectedRoute user={user} requiredRoles={['STAFF', 'FACULTY', 'IQAC', 'HOD', 'AHOD', 'AP']} element={<AuditEntryPage />} />}
                 />
                 <Route
-                  path="/iqac/audits/:auditId/atr"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AuditATRPage />} />}
+                  path="/audits/atr"
+                  element={<ProtectedRoute user={user} requiredRoles={['STAFF', 'FACULTY', 'IQAC', 'HOD', 'AHOD', 'AP']} element={<AuditATRPage />} />}
                 />
                 <Route
                   path="/applications"
@@ -473,7 +479,21 @@ export default function App() {
                 <Route path="/obe/master/requests" element={<ProtectedRoute user={user} requiredPermissions={["obe.master_obe_requests"]} element={<OBERequestsPage />} />} />
                 <Route path="/obe/master/due-dates" element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<OBEDueDatesPage />} />} />
                 <Route path="/academic" element={<AcademicPage />} />
-                <Route path="/academic-performance" element={<AcademicPerformancePage />} />
+                {/* AcademicPerformancePage is lazy-loaded, so it MUST be wrapped in a
+                    Suspense boundary: without one React throws while the chunk is
+                    still being fetched, which blanks the whole app until a manual
+                    refresh. LazyErrorBoundary turns any chunk/render failure into a
+                    visible fallback instead of an empty page. */}
+                <Route
+                  path="/academic-performance"
+                  element={
+                    <LazyErrorBoundary>
+                      <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                        <AcademicPerformancePage />
+                      </React.Suspense>
+                    </LazyErrorBoundary>
+                  }
+                />
 
                 <Route
                   path="/hod/advisors"
