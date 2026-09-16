@@ -891,7 +891,12 @@ class AcV2ExamAssignment(models.Model):
         norm_exam_keys = set(_norm_k(x) for x in possible_exam_keys if x)
 
         candidate_qs = AcV2QpPattern.objects.filter(is_active=True)
-        scoped_patterns = list(candidate_qs.filter(class_type=ct).order_by('-updated_at')) if ct is not None else []
+        if ct is not None:
+            scoped_patterns = list(candidate_qs.filter(
+                models.Q(class_type=ct) | models.Q(class_type__name__iexact=ct.name)
+            ).order_by('-updated_at'))
+        else:
+            scoped_patterns = []
         global_patterns = list(candidate_qs.filter(class_type__isnull=True).order_by('-updated_at'))
 
         pattern = None

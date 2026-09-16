@@ -4737,11 +4737,22 @@ def faculty_course_info(request, ta_id):
         else:
             sm_status = 'NOT_STARTED'
 
+        if ea_kind != 'cqi':
+            resolved_pattern = ea.get_qp_pattern()
+            if isinstance(resolved_pattern, dict) and resolved_pattern.get('questions'):
+                p_total = sum(float(q.get('max_marks') or 0) for q in resolved_pattern['questions'])
+                if p_total > 0 and float(ea.max_marks or 0) != round(p_total, 2):
+                    ea.max_marks = round(p_total, 2)
+                    try:
+                        ea.save(update_fields=['max_marks'])
+                    except Exception:
+                        pass
+
         exams.append({
             'id': str(ea.id),
             'name': ea.exam_display_name or ea.exam or ea.qp_type,
             'short_name': ea.exam or ea.qp_type or '',
-            'max_marks': ea.max_marks or 0,
+            'max_marks': float(ea.max_marks) if ea.max_marks else 0,
             'weight': ea_weight,
             'co_weights': co_weights,  # Per-CO weights
             'cia_enabled': cia_enabled,
