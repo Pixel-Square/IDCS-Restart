@@ -2489,6 +2489,74 @@ class AcV2AcademicNotificationSetting(models.Model):
 
 
 # ============================================================================
+# FACULTY REQUEST SETTINGS
+# ============================================================================
+
+
+class AcV2FacultyRequestSetting(models.Model):
+    """Singleton settings for Academic 2.1 Faculty Requests and WhatsApp notifications."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    key = models.CharField(max_length=40, default='DEFAULT', unique=True)
+
+    faculty_request_enabled = models.BooleanField(default=True)
+    require_mobile_verification = models.BooleanField(default=False)
+    require_profile_photo = models.BooleanField(default=False)
+
+    notify_on_request_sent = models.BooleanField(default=True)
+    notify_on_step_approved = models.BooleanField(default=True)
+    notify_on_final_approved = models.BooleanField(default=True)
+    notify_on_published = models.BooleanField(default=True)
+
+    request_sent_template = models.TextField(default=(
+        '📋 *Faculty Edit Request Submitted*\n'
+        'Faculty: *{faculty_name}* ({faculty_id})\n'
+        'Department: {department}\n'
+        'Request Type: {request_type}\n'
+        'Date: {request_date}\n'
+        'Status: Submitted for approval.'
+    ))
+    step_approved_template = models.TextField(default=(
+        '⏳ *Faculty Request - Step Approved*\n'
+        'Faculty: *{faculty_name}*\n'
+        'Department: {department}\n'
+        'Step: *{step_name}*\n'
+        'Approved By: {approved_by}\n'
+        'Date: {approval_date}\n'
+        'Remarks: {remarks}'
+    ))
+    final_approved_template = models.TextField(default=(
+        '✅ *Faculty Request - Final Approval Granted*\n'
+        'Faculty: *{faculty_name}*\n'
+        'Department: {department}\n'
+        'Approved By: {approved_by}\n'
+        'Date: {approval_date}\n'
+        'Remarks: {remarks}\n'
+        'Edit window is now open.'
+    ))
+    published_template = models.TextField(default=(
+        '📢 *Marks / Request Published*\n'
+        'Faculty: *{faculty_name}* ({faculty_id})\n'
+        'Department: {department}\n'
+        'Request Type: {request_type}\n'
+        'Published Date: {request_date}\n'
+        'Remarks: {remarks}\n'
+        'Marks have been published successfully.'
+    ))
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_faculty_request_setting'
+        verbose_name = 'Faculty Request Setting'
+        verbose_name_plural = 'Faculty Request Settings'
+
+    def __str__(self):
+        return f"Faculty Request Settings ({self.key})"
+
+
+# ============================================================================
 # ADMIN BYPASS SESSION + LOGS
 # ============================================================================
 
