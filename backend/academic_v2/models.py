@@ -1001,21 +1001,49 @@ class AcV2ExamAssignment(models.Model):
                 })
                 q_idx += 1
 
-        # Exam / CIA column
-        if cia_enabled and cia_max_marks > 0:
+        # Exam / CIA / Special columns
+        exam_cols = mm.get('exam_columns') or mm.get('special_columns')
+        if isinstance(exam_cols, list) and exam_cols:
+            for ex_it in exam_cols:
+                if ex_it.get('enabled') is False:
+                    continue
+                ex_lbl = str(ex_it.get('label') or ex_it.get('title') or 'Exam').strip() or 'Exam'
+                ex_max = float(ex_it.get('max_marks') or 0)
+                ex_cos = ex_it.get('cos') or ex_it.get('co')
+                if ex_max > 0:
+                    questions.append({
+                        'id': f'q{q_idx}',
+                        'question_number': ex_lbl,
+                        'title': ex_lbl,
+                        'max_marks': ex_max,
+                        'btl_level': None,
+                        'co_number': ex_cos if ex_cos else None,
+                        'enabled': True,
+                    })
+                    q_idx += 1
+        elif cia_enabled and cia_max_marks > 0:
+            cia_cos = mm.get('cia_cos')
             questions.append({
                 'id': f'q{q_idx}',
                 'question_number': cia_label,
                 'title': cia_label,
                 'max_marks': cia_max_marks,
                 'btl_level': None,
-                'co_number': 0,
+                'co_number': cia_cos if cia_cos else None,
                 'enabled': True,
             })
             q_idx += 1
 
         if questions:
-            return {'questions': questions, 'mark_manager': mm}
+            return {
+                'questions': questions,
+                'cos': [q.get('co_number') for q in questions],
+                'titles': [q.get('title') for q in questions],
+                'marks': [q.get('max_marks') for q in questions],
+                'btls': [q.get('btl_level') for q in questions],
+                'enabled': [True] * len(questions),
+                'mark_manager': mm,
+            }
         return None
 
 
@@ -1102,10 +1130,11 @@ class AcV2StudentMark(models.Model):
 
     def calculate_co_marks(self, qp_pattern):
         """Calculate CO marks based on question→CO mapping."""
-        cos = qp_pattern.get('cos', [])
+        if not isinstance(qp_pattern, dict):
+            qp_pattern = {}
 
         max_supported_co = 6
-        co_totals = {i: 0 for i in range(1, max_supported_co + 1)}
+        co_totals = {i: 0.0 for i in range(1, max_supported_co + 1)}
 
         def _extract_cos(raw_co):
             """Normalize a CO spec into a validated list of CO numbers."""
@@ -1137,7 +1166,14 @@ class AcV2StudentMark(models.Model):
                 s = raw_co.strip()
                 if not s:
                     return out
-                # Supports forms like "1&2", "1,2", "[1,2]", "CO1&CO2".
+                # Supports forms like "1&2", "1,2", "[1,2]", "CO1&CO2", "1-3", "1 to 3", "CO1-CO3".
+                range_match = re.search(r'(?:CO\s*)?([1-6])\s*(?:-|TO|\.\.)\s*(?:CO\s*)?([1-6])', s, re.IGNORECASE)
+                if range_match:
+                    st, en = int(range_match.group(1)), int(range_match.group(2))
+                    if 1 <= st <= en <= max_supported_co:
+                        return list(range(st, en + 1))
+                    elif 1 <= en <= st <= max_supported_co:
+                        return list(range(en, st + 1))
                 parts = re.split(r'[^0-9]+', s)
                 for p in parts:
                     if p:
@@ -1147,27 +1183,65 @@ class AcV2StudentMark(models.Model):
             _push(raw_co)
             return out
 
-        keys = set(str(k) for k in (self.question_marks or {}).keys())
-        q_base = 0
-        if 'q0' in keys:
+        q_marks = self.question_marks if isinstance(self.question_marks, dict) else {}
+        questions = qp_pattern.get('questions')
+        cos = qp_pattern.get('cos')
+
+        if isinstance(questions, list) and questions:
+            for i, q in enumerate(questions):
+                if not isinstance(q, dict):
+                    continue
+                q_id = str(q.get('id') or f'q{i}')
+                q_title = str(q.get('question_number') or q.get('title') or '')
+                co_spec = q.get('co_number') or q.get('co')
+                co_list = _extract_cos(co_spec)
+                if not co_list:
+                    continue
+
+                # Look up mark for this question
+                mark_val = q_marks.get(q_id)
+                if mark_val is None:
+                    mark_val = q_marks.get(f'q{i}')
+                if mark_val is None:
+                    mark_val = q_marks.get(str(i))
+                if mark_val is None and q_title:
+                    mark_val = q_marks.get(q_title)
+
+                try:
+                    q_num = float(mark_val) if mark_val not in (None, '') else 0.0
+                except (TypeError, ValueError):
+                    q_num = 0.0
+
+                split_mark = q_num / len(co_list)
+                for c in co_list:
+                    co_totals[c] += split_mark
+        elif isinstance(cos, list) and cos:
+            keys = set(str(k) for k in q_marks.keys())
             q_base = 0
-        elif 'q1' in keys and 'q0' not in keys:
-            q_base = 1
+            if 'q0' in keys:
+                q_base = 0
+            elif 'q1' in keys and 'q0' not in keys:
+                q_base = 1
 
-        for i, co in enumerate(cos):
-            q_key = f'q{i + q_base}'
-            q_mark = (self.question_marks or {}).get(q_key, 0) or 0
+            for i, co in enumerate(cos):
+                q_key = f'q{i + q_base}'
+                raw_val = q_marks.get(q_key, q_marks.get(str(i)))
+                try:
+                    q_mark = float(raw_val) if raw_val not in (None, '') else 0.0
+                except (TypeError, ValueError):
+                    q_mark = 0.0
 
-            co_list = _extract_cos(co)
-            if not co_list:
-                continue
+                co_list = _extract_cos(co)
+                if not co_list:
+                    continue
 
-            split_mark = q_mark / len(co_list)
-            for c in co_list:
-                co_totals[c] += split_mark
+                split_mark = q_mark / len(co_list)
+                for c in co_list:
+                    co_totals[c] += split_mark
 
         for co_num in range(1, max_supported_co + 1):
-            setattr(self, f'co{co_num}_mark', round(co_totals[co_num], 2))
+            val = round(co_totals[co_num], 2)
+            setattr(self, f'co{co_num}_mark', val if (val > 0 or co_totals[co_num] > 0) else 0.0)
 
 
 class AcV2DraftMark(models.Model):

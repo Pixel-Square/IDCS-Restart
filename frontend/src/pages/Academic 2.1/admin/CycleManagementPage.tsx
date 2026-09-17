@@ -386,33 +386,40 @@ export default function CycleManagementPage() {
               .map((cycle, idx, arr) => (
                 <div
                   key={cycle.id}
-                  className={`flex items-stretch transition ${selectedId === cycle.id ? 'border-l-4 border-blue-600 bg-blue-50' : ''}`}
+                  className={`flex items-stretch transition ${selectedId === cycle.id ? 'border-l-4 border-blue-600 bg-blue-50' : 'hover:bg-gray-50'}`}
                 >
-                  {/* Order arrows */}
-                  <div className="flex flex-col items-center justify-center gap-0.5 border-r border-gray-100 px-1.5 py-2">
+                  {/* Order arrows & number badge */}
+                  <div className="flex flex-col items-center justify-center gap-1 border-r border-gray-100 bg-gray-50/70 px-2 py-2">
                     <button
                       onClick={(e) => { e.stopPropagation(); void handleMoveOrder(cycle.id, 'up'); }}
                       disabled={idx === 0}
-                      title="Move up"
-                      className="rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-20 disabled:cursor-default"
+                      title="Move Up"
+                      className="rounded p-1 text-gray-500 hover:bg-blue-100 hover:text-blue-700 disabled:opacity-20 disabled:cursor-not-allowed transition"
                     >
-                      <ChevronUp size={14} />
+                      <ChevronUp size={16} className="stroke-[2.5]" />
                     </button>
-                    <span className="text-[10px] font-bold text-gray-300">{idx + 1}</span>
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gray-200 text-[11px] font-bold text-gray-700 shadow-inner">
+                      {idx + 1}
+                    </span>
                     <button
                       onClick={(e) => { e.stopPropagation(); void handleMoveOrder(cycle.id, 'down'); }}
                       disabled={idx === arr.length - 1}
-                      title="Move down"
-                      className="rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-20 disabled:cursor-default"
+                      title="Move Down"
+                      className="rounded p-1 text-gray-500 hover:bg-blue-100 hover:text-blue-700 disabled:opacity-20 disabled:cursor-not-allowed transition"
                     >
-                      <ChevronDown size={14} />
+                      <ChevronDown size={16} className="stroke-[2.5]" />
                     </button>
                   </div>
                   <button
                     onClick={() => handleSelectCycle(cycle)}
-                    className="min-w-0 flex-1 p-4 text-left hover:bg-gray-50"
+                    className="min-w-0 flex-1 p-4 text-left"
                   >
-                    <h3 className="truncate font-medium text-gray-900">{cycle.name}</h3>
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="truncate font-semibold text-gray-900">{cycle.name}</h3>
+                      <span className="shrink-0 text-[10px] font-mono text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
+                        Order: {cycle.order}
+                      </span>
+                    </div>
                     <p className="mt-1 text-xs text-gray-500">{cycle.code}</p>
                     <div className={`mt-2 inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold ${cycle.is_active ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
                       {cycle.is_active ? <CheckCircle size={12} /> : <Lock size={12} />}

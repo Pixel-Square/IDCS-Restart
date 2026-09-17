@@ -243,6 +243,100 @@ def _get_db_oauth_headers() -> dict[str, str] | None:
     return {'Authorization': f'Bearer {creds.token}', 'Accept': 'application/json'}
 
 
+_SHEET_META_CACHE: dict[str, tuple[float, list[str]]] = {}
+_SHEET_VALUES_CACHE: dict[str, tuple[float, tuple[list[list[Any]], str, list[str]]]] = {}
+
+
+def _get_cached_meta(spreadsheet_id: str) -> list[str] | None:
+    now = time.time()
+    entry = _SHEET_META_CACHE.get(spreadsheet_id)
+    if entry and entry[0] > now:
+        return entry[1]
+    return None
+
+
+def _set_cached_meta(spreadsheet_id: str, titles: list[str], ttl: float = 300.0) -> None:
+    _SHEET_META_CACHE[spreadsheet_id] = (time.time() + ttl, titles)
+
+
+def _get_cached_sheet_values(spreadsheet_id: str, sheet_name: str) -> tuple[list[list[Any]], str, list[str]] | None:
+    key = f"{spreadsheet_id}::{str(sheet_name or '').strip().lower()}"
+    now = time.time()
+    entry = _SHEET_VALUES_CACHE.get(key)
+    if entry and entry[0] > now:
+        return entry[1]
+    return None
+
+
+def _set_cached_sheet_values(
+    spreadsheet_id: str,
+    sheet_name: str,
+    data: tuple[list[list[Any]], str, list[str]],
+    ttl: float = 30.0,
+) -> None:
+    key = f"{spreadsheet_id}::{str(sheet_name or '').strip().lower()}"
+    _SHEET_VALUES_CACHE[key] = (time.time() + ttl, data)
+    if data[1]:
+        res_key = f"{spreadsheet_id}::{str(data[1]).strip().lower()}"
+        _SHEET_VALUES_CACHE[res_key] = (time.time() + ttl, data)
+
+
+def _clear_sheet_cache(spreadsheet_id: str) -> None:
+    _SHEET_META_CACHE.pop(spreadsheet_id, None)
+    prefix = f"{spreadsheet_id}::"
+    keys_to_del = [k for k in _SHEET_VALUES_CACHE if k.startswith(prefix)]
+    for k in keys_to_del:
+        _SHEET_VALUES_CACHE.pop(k, None)
+
+
+def _google_api_request_with_retry(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    params: dict[str, Any] | None = None,
+    json_data: Any = None,
+    timeout: int = 30,
+    max_retries: int = 3,
+) -> requests.Response:
+    """Execute Google API request with automatic exponential backoff retry for HTTP 429 / 503."""
+    last_resp: requests.Response | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            if method.upper() == 'GET':
+                resp = requests.get(url, headers=headers, params=params, timeout=timeout)
+            elif method.upper() == 'PUT':
+                resp = requests.put(url, headers=headers, params=params, json=json_data, timeout=timeout)
+            elif method.upper() == 'POST':
+                resp = requests.post(url, headers=headers, params=params, json=json_data, timeout=timeout)
+            else:
+                resp = requests.request(method, url, headers=headers, params=params, json=json_data, timeout=timeout)
+
+            last_resp = resp
+            if resp.status_code == 429 or resp.status_code in (500, 502, 503, 504):
+                if attempt < max_retries:
+                    retry_after = resp.headers.get('Retry-After')
+                    if retry_after and retry_after.isdigit():
+                        sleep_s = min(float(retry_after), 15.0)
+                    else:
+                        sleep_s = (2.0 ** attempt) + (0.2 * (attempt + 1))
+                    logging.warning(
+                        f"Google Sheets API rate limited (status {resp.status_code}) on {url}. Retrying in {sleep_s:.1f}s (attempt {attempt + 1}/{max_retries})..."
+                    )
+                    time.sleep(sleep_s)
+                    continue
+            return resp
+        except (requests.exceptions.RequestException, requests.exceptions.Timeout) as exc:
+            if attempt < max_retries:
+                sleep_s = (2.0 ** attempt) + 0.5
+                logging.warning(f"Google API network error: {exc}. Retrying in {sleep_s:.1f}s...")
+                time.sleep(sleep_s)
+                continue
+            raise
+
+    return last_resp if last_resp is not None else requests.Response()
+
+
 def _write_sheet_values(
     *,
     spreadsheet_id: str,
@@ -250,16 +344,20 @@ def _write_sheet_values(
     rows: list[list[Any]],
     headers: dict[str, str],
 ) -> None:
-    encoded_sheet_name = quote(sheet_name, safe='')
-    response = requests.put(
-        f'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_sheet_name}!A1',
+    escaped_title = (sheet_name or 'Sheet1').replace("'", "''")
+    encoded_range = quote(f"'{escaped_title}'!A1", safe='')
+    response = _google_api_request_with_retry(
+        'PUT',
+        f'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_range}',
         params={'valueInputOption': 'USER_ENTERED'},
         headers={**headers, 'Content-Type': 'application/json'},
-        json={'values': rows},
+        json_data={'values': rows},
         timeout=30,
     )
-    if not response.ok:
-        raise GoogleSheetsServiceError(f'Google Sheets write failed for {sheet_name}: {response.text}')
+    _clear_sheet_cache(spreadsheet_id)
+    if not response or not response.ok:
+        err_msg = response.text if response else 'No response'
+        raise GoogleSheetsServiceError(f'Google Sheets write failed for {sheet_name}: {err_msg}')
 
 
 def _read_sheet_values(
@@ -267,28 +365,140 @@ def _read_sheet_values(
     spreadsheet_id: str,
     sheet_name: str,
     headers: dict[str, str],
-) -> list[list[Any]]:
-    # Handle single quotes in sheet names or special characters
-    clean_sheet_name = sheet_name.replace("'", "\\'") if sheet_name else 'Sheet1'
-    encoded_sheet_name = quote(f"'{clean_sheet_name}'" if not (sheet_name.startswith("'") and sheet_name.endswith("'")) else sheet_name, safe='')
-    response = requests.get(
-        f'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_sheet_name}',
-        headers={**headers, 'Accept': 'application/json'},
-        timeout=30,
-    )
-    if not response.ok:
-        # Fallback to unquoted name if quoted fails
-        encoded_fallback = quote(sheet_name, safe='')
-        response = requests.get(
-            f'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_fallback}',
+    bypass_cache: bool = False,
+) -> tuple[list[list[Any]], str, list[str]]:
+    """Read all rows/columns from the specified sheet tab with robust caching, tab resolution, and 429 retry.
+
+    Returns (values, resolved_sheet_name, available_sheet_titles).
+    """
+    target_sheet = str(sheet_name or '').strip()
+
+    if not bypass_cache:
+        cached = _get_cached_sheet_values(spreadsheet_id, target_sheet)
+        if cached is not None:
+            return cached
+
+    # 1. Fetch metadata (cached for 5 min)
+    sheet_titles = _get_cached_meta(spreadsheet_id)
+    if sheet_titles is None:
+        try:
+            meta_resp = _google_api_request_with_retry(
+                'GET',
+                f'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}?fields=sheets(properties(sheetId,title))',
+                headers={**headers, 'Accept': 'application/json'},
+                timeout=20,
+            )
+            if meta_resp and meta_resp.ok:
+                meta = meta_resp.json() or {}
+                sheet_titles = [
+                    s.get('properties', {}).get('title')
+                    for s in meta.get('sheets', [])
+                    if s.get('properties', {}).get('title')
+                ]
+                if sheet_titles:
+                    _set_cached_meta(spreadsheet_id, sheet_titles, ttl=300.0)
+        except Exception:
+            pass
+
+    if sheet_titles is None:
+        sheet_titles = []
+
+    # 2. Resolve tab title
+    resolved_title = None
+    if sheet_titles:
+        if target_sheet in sheet_titles:
+            resolved_title = target_sheet
+        else:
+            norm_target = target_sheet.lower().replace(' ', '').replace('_', '').replace('-', '')
+            match = next((t for t in sheet_titles if t.strip().lower() == target_sheet.lower()), None)
+            if not match:
+                roman_map = {'1': 'i', '2': 'ii', '3': 'iii', '4': 'iv', '5': 'v', '6': 'vi'}
+                candidates = [norm_target]
+                for arabic, roman in roman_map.items():
+                    if arabic in norm_target:
+                        candidates.append(norm_target.replace(arabic, roman))
+                    if roman in norm_target:
+                        candidates.append(norm_target.replace(roman, arabic))
+                for cand in candidates:
+                    match = next(
+                        (
+                            t for t in sheet_titles
+                            if cand in t.lower().replace(' ', '').replace('_', '').replace('-', '')
+                            or t.lower().replace(' ', '').replace('_', '').replace('-', '') in cand
+                        ),
+                        None,
+                    )
+                    if match:
+                        break
+            if not match:
+                target_keywords = [k for k in ('lab', 'cia', 'ssa', 'formative', 'model', 'cycle', 'exp', 'internal') if k in target_sheet.lower()]
+                for kw in target_keywords:
+                    match = next((t for t in sheet_titles if kw in t.lower()), None)
+                    if match:
+                        break
+            if not match:
+                match = next((t for t in sheet_titles if any(k in t.lower() for k in ('cycle', 'lab', 'exp', 'cia', 'mark', 'sheet'))), None)
+
+            resolved_title = match if match else sheet_titles[0]
+
+    if not resolved_title:
+        resolved_title = target_sheet or (sheet_titles[0] if sheet_titles else 'Sheet1')
+
+    # 3. Read values using A1 range
+    escaped_title = resolved_title.replace("'", "''")
+    range_candidates = [
+        f"'{escaped_title}'!A1:ZZ5000",
+        f"'{escaped_title}'!A:ZZ",
+        f"'{escaped_title}'!1:5000",
+        f"'{escaped_title}'",
+        resolved_title,
+    ]
+
+    last_error_text = ''
+    for candidate in range_candidates:
+        encoded_range = quote(candidate, safe='')
+        response = _google_api_request_with_retry(
+            'GET',
+            f'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_range}',
             headers={**headers, 'Accept': 'application/json'},
             timeout=30,
         )
-        if not response.ok:
-            raise GoogleSheetsServiceError(f'Google Sheets read failed for {sheet_name}: {response.text}')
+        if response and response.ok:
+            payload = response.json() or {}
+            vals = payload.get('values') or []
+            res_tuple = (vals, resolved_title, sheet_titles)
+            _set_cached_sheet_values(spreadsheet_id, target_sheet, res_tuple, ttl=30.0)
+            return res_tuple
+        if response:
+            last_error_text = response.text
 
-    payload = response.json() or {}
-    return payload.get('values') or []
+    # Fallback to first tab if needed
+    if sheet_titles and resolved_title != sheet_titles[0]:
+        first_title = sheet_titles[0]
+        esc_first = first_title.replace("'", "''")
+        enc = quote(f"'{esc_first}'!A1:ZZ5000", safe='')
+        resp = _google_api_request_with_retry(
+            'GET',
+            f'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{enc}',
+            headers={**headers, 'Accept': 'application/json'},
+            timeout=30,
+        )
+        if resp and resp.ok:
+            payload = resp.json() or {}
+            vals = payload.get('values') or []
+            res_tuple = (vals, first_title, sheet_titles)
+            _set_cached_sheet_values(spreadsheet_id, target_sheet, res_tuple, ttl=30.0)
+            return res_tuple
+
+    # Fallback to expired cache if available before raising error
+    stale_key = f"{spreadsheet_id}::{target_sheet.strip().lower()}"
+    stale_entry = _SHEET_VALUES_CACHE.get(stale_key)
+    if stale_entry:
+        logging.warning(f"Using stale cached sheet values for {spreadsheet_id} due to rate limit: {last_error_text}")
+        return stale_entry[1]
+
+    avail_msg = f' Available sheet tabs in spreadsheet: {", ".join(sheet_titles)}.' if sheet_titles else ''
+    raise GoogleSheetsServiceError(f'Google Sheets read failed for "{sheet_name}": {last_error_text}.{avail_msg}')
 
 
 def _column_label_to_index(label: str | None) -> int | None:
@@ -303,10 +513,391 @@ def _column_label_to_index(label: str | None) -> int | None:
     return index - 1
 
 
+def _index_to_column_label(index: int) -> str:
+    """Convert zero-based column index to spreadsheet column label (A, B, AA)."""
+    if index < 0:
+        return 'A'
+    label = []
+    n = index + 1
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        label.append(chr(ord('A') + rem))
+    return ''.join(reversed(label))
+
+
 def _safe_row_value(row: list[Any], index: int | None) -> Any:
     if index is None or index < 0 or index >= len(row):
         return None
     return row[index]
+
+
+def _parse_co_spec(raw_co: Any, raw_title: Any = '') -> list[int]:
+    """Parse CO specification from cell text or header title into a list of CO numbers (1..6).
+
+    Handles:
+    - Single COs: 'CO1', '1', 'CO 1', 'CO-1' -> [1]
+    - Comma/ampersand lists: '1,2,3', 'CO1, CO2, CO3', '1 & 2', 'CO1 & CO2' -> [1, 2, 3] or [1, 2]
+    - Ranges: '1-3', '1 - 3', '1 to 3', 'CO1-CO3', 'CO1 - CO3', 'CO1 to CO3', '1-5', 'CO1-5' -> [1, 2, 3]
+    - 'ALL' / 'ALL CO' -> [1, 2, 3, 4, 5]
+    - Fallback: extracts CO info from raw_title if raw_co is blank
+    """
+    co_str = str(raw_co or '').strip()
+    title_str = str(raw_title or '').strip()
+
+    def _clean_and_extract(text: str) -> list[int]:
+        if not text:
+            return []
+        text_upper = text.upper().strip()
+        if text_upper in ('ALL', 'ALL CO', 'ALL COS', 'ALL CO\'S', 'ALL-CO'):
+            return [1, 2, 3, 4, 5]
+
+        # 1. Range pattern: '1-3', '1 - 3', '1 to 3', 'CO1-CO3', 'CO1 to CO3', 'CO1-3'
+        range_match = re.search(r'(?:CO\s*)?([1-6])\s*(?:-|TO|\.\.)\s*(?:CO\s*)?([1-6])', text_upper, re.IGNORECASE)
+        if range_match:
+            start = int(range_match.group(1))
+            end = int(range_match.group(2))
+            if 1 <= start <= end <= 6:
+                return list(range(start, end + 1))
+            elif 1 <= end <= start <= 6:
+                return list(range(end, start + 1))
+
+        # 2. Extract numbers
+        nums: list[int] = []
+        for part in re.split(r'[,;&/+\s]+', text_upper):
+            part = part.strip()
+            if not part:
+                continue
+            rm = re.search(r'([1-6])\s*(?:-|TO|\.\.)\s*([1-6])', part, re.IGNORECASE)
+            if rm:
+                s, e = int(rm.group(1)), int(rm.group(2))
+                if 1 <= s <= e <= 6:
+                    for n in range(s, e + 1):
+                        if n not in nums:
+                            nums.append(n)
+                    continue
+            for digit_match in re.findall(r'[1-6]', part):
+                n = int(digit_match)
+                if 1 <= n <= 6 and n not in nums:
+                    nums.append(n)
+        return sorted(nums)
+
+    res = _clean_and_extract(co_str)
+    if not res and title_str:
+        co_in_title_match = re.search(r'\(?\s*CO\s*[:\-_]?\s*([1-6\s,\-&to/]+)\)?', title_str, re.IGNORECASE)
+        if co_in_title_match:
+            res = _clean_and_extract(co_in_title_match.group(1))
+        else:
+            paren_match = re.search(r'\(\s*([1-6\s,\-&to/]+)\s*\)', title_str)
+            if paren_match:
+                res = _clean_and_extract(paren_match.group(1))
+    return res
+
+
+def _is_summary_or_ignored_column(raw_title: Any, raw_co: Any = '', raw_max: Any = None) -> bool:
+    """Check whether a column is a summary, calculated, or meta column that should not be a question."""
+    t = str(raw_title or '').strip().upper()
+    c = str(raw_co or '').strip().upper()
+    m = str(raw_max if raw_max is not None else '').strip()
+
+    if m in ('0', '0.0', '%', '#VALUE!', '#DIV/0!', '#REF!'):
+        return True
+
+    ignore_keywords = [
+        'TOTAL', 'CONVERTED', 'ATTENDANCE', 'PERCENTAGE', 'PERCENT',
+        'SIGNATURE', 'SIGN', 'AVERAGE', 'AVG', 'GRADE', 'REMARKS',
+        'ELIGIBILITY', 'ELIGIBLE', 'STATUS', 'RESULT', 'PASS/FAIL',
+        'S.NO', 'SL.NO', 'SI.NO', 'SNO', 'SLNO', 'SERIAL', 'REG NO',
+        'ROLL NO', 'REGISTER', 'STUDENT NAME', 'NAME OF THE STUDENT',
+        'NAME OF THE STUDENTS', 'STUDENTS NAME', 'NAME / MAX MARKS',
+        'CLASS STRENGTH', 'SECTION', 'BRANCH', 'DEPT', 'DEPARTMENT',
+        'CHECK', 'IMPROVED', 'IMPROVEMENT', 'AFTER CQI', 'BEFORE CQI',
+        'POST CQI', 'PRE CQI', 'FINAL INTERNAL', 'INTERNAL MARKS',
+        'ATTAINMENT', 'RUBRICS', 'DIRECT', 'INDIRECT', 'OVERALL',
+        'BTL ATTAINMENT', 'CO ATTAINMENT',
+    ]
+    for kw in ignore_keywords:
+        if kw in t or kw in c:
+            return True
+
+    if not t and not c:
+        return True
+
+    # Empty title in an attainment / rubrics / summary block
+    if not t and m in ('', '0', '0.0', '10', '17', '%'):
+        return True
+
+    # If CO cell is literally just 'COS' or 'CO' or 'BTL' with no numbers, ignore
+    if c in ('COS', 'CO', "CO'S", 'BTL', 'MAX MARKS', 'MAX MARKS PER ITEM'):
+        return True
+
+    # Ignore summary Cycle columns like "CYCLE I (50)", "CYCLE II (50)", "CYCLE I (AVG)", "CYCLE 1 (50)", "CYCLE I (100)"
+    if 'CYCLE' in t and ('(50)' in t or '(100)' in t or 'AVG' in t or 'TOTAL' in t or 'CONVERTED' in t or 'CHECK' in t):
+        return True
+
+    return False
+
+
+def _extract_max_marks(raw_val: Any, default: float = 25.0) -> float:
+    """Extract numeric max marks from float, int, or text like 'Max: 50' or '25 Marks'."""
+    if raw_val is None or raw_val == '':
+        return default
+    if isinstance(raw_val, (int, float)):
+        v = float(raw_val)
+        return v if v > 0 else default
+    text = str(raw_val).strip()
+    match = re.search(r'(\d+(?:\.\d+)?)', text)
+    if match:
+        try:
+            v = float(match.group(1))
+            return v if v > 0 else default
+        except Exception:
+            pass
+    return default
+
+
+def derive_mark_manager_from_sheet(
+    *,
+    spreadsheet_id: str,
+    sheet_name: str,
+    config: dict[str, Any],
+    exam_name: str | None = None,
+    co_row: int | str = 6,
+    max_marks_row: int | str = 8,
+    title_row: int | str = 5,
+    reg_no_column: str = 'D',
+    name_column: str = 'E',
+    start_col: str | None = None,
+) -> dict[str, Any]:
+    """Inspect Google Sheet header rows and derive the complete Mark Manager configuration,
+
+    question structure, and column mappings automatically.
+    - Single CO (e.g. CO1, 1): Added to experiments count for that CO with max marks.
+    - Multi CO (e.g. 1,2,3 or 3,4,5): Treated as an Exam column with max marks and CIA COs.
+    """
+    headers = _build_google_auth_headers(config)
+    values, resolved_tab, available_tabs = _read_sheet_values(
+        spreadsheet_id=spreadsheet_id,
+        sheet_name=sheet_name,
+        headers=headers,
+    )
+    if not values:
+        raise GoogleSheetsServiceError(f'No data found in sheet tab "{sheet_name}". Ensure the tab exists.')
+
+    try:
+        co_row_idx = max(0, int(co_row) - 1)
+    except Exception:
+        co_row_idx = 5
+    try:
+        max_marks_row_idx = max(0, int(max_marks_row) - 1)
+    except Exception:
+        max_marks_row_idx = 7
+    try:
+        title_row_idx = max(0, int(title_row) - 1)
+    except Exception:
+        title_row_idx = 4
+
+    reg_no_col_idx = _column_label_to_index(reg_no_column)
+    name_col_idx = _column_label_to_index(name_column)
+
+    if start_col:
+        start_col_idx = _column_label_to_index(start_col) or 0
+    else:
+        # Start immediately after the highest index between reg_no and name columns
+        base_indices = [idx for idx in (reg_no_col_idx, name_col_idx) if idx is not None]
+        start_col_idx = (max(base_indices) + 1) if base_indices else 2
+
+    titles_data = values[title_row_idx] if title_row_idx < len(values) else []
+    cos_data = values[co_row_idx] if co_row_idx < len(values) else []
+    max_marks_data = values[max_marks_row_idx] if max_marks_row_idx < len(values) else []
+
+    num_cols = max(len(titles_data), len(cos_data), len(max_marks_data))
+
+    # Find where attainment or summary metrics begin to avoid reading attainment formulas
+    attainment_col_start = num_cols
+    for r_i in range(min(len(values), max_marks_row_idx + 1)):
+        row = values[r_i]
+        for c_i, cell in enumerate(row):
+            txt = str(cell or '').strip().upper()
+            if c_i > start_col_idx and any(k in txt for k in ('CO ATTAINMENT', 'BTL ATTAINMENT', 'OVERALL CIA', 'DIRECT ATTAINMENT', 'INDIRECT ATTAINMENT')):
+                if c_i < attainment_col_start:
+                    attainment_col_start = c_i
+
+    def _get_best_title_for_col(c_idx: int) -> str:
+        t = str(_safe_row_value(titles_data, c_idx) or '').strip()
+        if t:
+            return t
+        for r_i in range(co_row_idx):
+            cell_v = str(_safe_row_value(values[r_i], c_idx) or '').strip()
+            if cell_v and not cell_v.isdigit() and not any(ign in cell_v.upper() for ign in ('S.NO', 'REGISTER', 'NAME', 'SECTION', 'CLASS', 'STRENGTH')):
+                return cell_v
+        return ''
+
+    co_columns: dict[int, list[dict[str, Any]]] = {c: [] for c in range(1, 7)}
+    multi_co_columns: list[dict[str, Any]] = []
+
+    # Scan the entire row from start column up to attainment section
+    for c in range(start_col_idx, min(num_cols, attainment_col_start)):
+        col_letter = _index_to_column_label(c)
+        raw_title = _get_best_title_for_col(c)
+        raw_co = str(_safe_row_value(cos_data, c) or '').strip()
+        raw_max = _safe_row_value(max_marks_data, c)
+
+        if _is_summary_or_ignored_column(raw_title, raw_co, raw_max):
+            continue
+
+        co_nums = _parse_co_spec(raw_co, raw_title)
+        if not co_nums:
+            continue
+
+        max_mark_val = _extract_max_marks(raw_max, default=25.0 if len(co_nums) == 1 else 50.0)
+        if max_mark_val <= 0:
+            continue
+
+        if len(co_nums) == 1:
+            co = co_nums[0]
+            if 1 <= co <= 6:
+                co_columns[co].append({
+                    'col': col_letter,
+                    'col_index': c,
+                    'title': raw_title,
+                    'raw_title': raw_title,
+                    'co': co,
+                    'max_marks': max_mark_val,
+                    'is_exam': False,
+                })
+        else:
+            multi_co_columns.append({
+                'col': col_letter,
+                'col_index': c,
+                'title': raw_title or f'Exam (CO {", ".join(str(x) for x in co_nums)})',
+                'raw_title': raw_title,
+                'co': co_nums,
+                'max_marks': max_mark_val,
+                'is_exam': True,
+            })
+
+    # Build Mark Manager configuration and sequential question mapping aligned with ERP pattern order
+    cos_config: dict[str, dict[str, Any]] = {}
+    parsed_columns: list[dict[str, Any]] = []
+    question_columns_mapping: dict[str, str] = {}
+    q_idx = 0
+    item_name = 'Experiments'
+
+    for co_num in range(1, 7):
+        items = co_columns[co_num]
+        count = len(items)
+        per_item_max = items[0]['max_marks'] if count > 0 else 25.0
+        cos_config[str(co_num)] = {
+            'enabled': count > 0,
+            'num_items': count if count > 0 else 1,
+            'max_marks': per_item_max if per_item_max > 0 else 25.0,
+            'weight': 0,
+        }
+        for exp_i, it in enumerate(items):
+            q_key = f'q{q_idx}'
+            canonical_title = f'CO{co_num} - {item_name} {exp_i + 1}'
+            disp_title = it['raw_title'] or canonical_title
+
+            it['question_index'] = q_idx
+            it['canonical_id'] = q_key
+            it['title'] = disp_title
+            it['q_id'] = f'co{co_num}_item_{exp_i + 1}'
+            parsed_columns.append(it)
+
+            # Register all lookup keys
+            question_columns_mapping[q_key] = it['col']
+            question_columns_mapping[f'q_{q_idx}'] = it['col']
+            question_columns_mapping[str(q_idx)] = it['col']
+            question_columns_mapping[canonical_title] = it['col']
+            question_columns_mapping[canonical_title.lower()] = it['col']
+            question_columns_mapping[f'CO{co_num} - Experiments {exp_i + 1}'] = it['col']
+            question_columns_mapping[f'co{co_num}_item_{exp_i + 1}'] = it['col']
+            if it.get('raw_title'):
+                question_columns_mapping[it['raw_title']] = it['col']
+                question_columns_mapping[it['raw_title'].lower()] = it['col']
+            q_idx += 1
+
+    # Map all multi-CO special columns
+    exam_columns_payload: list[dict[str, Any]] = []
+    for ex_i, exam_item in enumerate(multi_co_columns):
+        q_key = f'q{q_idx}'
+        lbl = exam_item['raw_title'] or f'Exam {ex_i + 1}'
+        exam_item['question_index'] = q_idx
+        exam_item['canonical_id'] = q_key
+        exam_item['title'] = lbl
+        exam_item['q_id'] = f'exam_{ex_i + 1}' if len(multi_co_columns) > 1 else 'exam'
+        parsed_columns.append(exam_item)
+
+        question_columns_mapping[q_key] = exam_item['col']
+        question_columns_mapping[f'q_{q_idx}'] = exam_item['col']
+        question_columns_mapping[str(q_idx)] = exam_item['col']
+        question_columns_mapping[lbl] = exam_item['col']
+        question_columns_mapping[lbl.lower()] = exam_item['col']
+        question_columns_mapping[f'exam_{ex_i + 1}'] = exam_item['col']
+        if ex_i == 0:
+            question_columns_mapping['exam'] = exam_item['col']
+            question_columns_mapping['Exam'] = exam_item['col']
+            question_columns_mapping['cia'] = exam_item['col']
+            question_columns_mapping['CIA'] = exam_item['col']
+        if 'CIA I' in lbl.upper() or 'CIA 1' in lbl.upper():
+            question_columns_mapping['CIA I MARKS'] = exam_item['col']
+            question_columns_mapping['cia i marks'] = exam_item['col']
+            question_columns_mapping['CIA I'] = exam_item['col']
+            question_columns_mapping['CIA 1'] = exam_item['col']
+        elif 'CIA II' in lbl.upper() or 'CIA 2' in lbl.upper():
+            question_columns_mapping['CIA II MARKS'] = exam_item['col']
+            question_columns_mapping['cia ii marks'] = exam_item['col']
+            question_columns_mapping['CIA II'] = exam_item['col']
+            question_columns_mapping['CIA 2'] = exam_item['col']
+
+        exam_columns_payload.append({
+            'col': exam_item['col'],
+            'title': lbl,
+            'label': lbl,
+            'co': exam_item['co'],
+            'cos': exam_item['co'],
+            'max_marks': exam_item['max_marks'],
+        })
+        q_idx += 1
+
+    cia_enabled = len(exam_columns_payload) > 0
+    first_exam = exam_columns_payload[0] if cia_enabled else {}
+    cia_label = first_exam.get('label') or 'Exam'
+    cia_max_marks = float(first_exam.get('max_marks') or 0.0)
+    cia_cos = first_exam.get('cos') or []
+
+    total_marks = sum(
+        float(c['max_marks']) * int(c['num_items'])
+        for c in cos_config.values()
+        if c['enabled']
+    ) + sum(float(ex['max_marks']) for ex in exam_columns_payload)
+
+    derived_mark_manager = {
+        'enabled': True,
+        'mode': 'user_define',
+        'item_name': item_name,
+        'whole_number': True,
+        'arrow_keys': True,
+        'cia_enabled': bool(cia_enabled),
+        'cia_label': cia_label,
+        'cia_max_marks': cia_max_marks,
+        'cia_cos': cia_cos,
+        'exam_columns': exam_columns_payload,
+        'special_columns': exam_columns_payload,
+        'cos': cos_config,
+    }
+
+    detected_cos = [co for co, c in cos_config.items() if c['enabled']]
+
+    return {
+        'derived_mark_manager': derived_mark_manager,
+        'parsed_columns': parsed_columns,
+        'question_columns_mapping': question_columns_mapping,
+        'total_marks': total_marks,
+        'detected_cos': [int(co) for co in detected_cos],
+        'resolved_sheet_tab': resolved_tab,
+        'available_sheet_tabs': available_tabs,
+    }
 
 
 def _get_qp_specs_for_exam(exam_assignment) -> list[dict[str, Any]]:
@@ -373,23 +964,36 @@ def _build_sheet_rows_for_exam(exam_assignment) -> list[list[Any]]:
 
     rows = [headers_row]
 
-    from academics.models import StudentSectionAssignment
+    from academics.models import StudentSectionAssignment, StudentProfile
     from .models import AcV2StudentMark
 
-    student_assignments = (
-        StudentSectionAssignment.objects
-        .filter(section=exam_assignment.section.teaching_assignment.section, end_date__isnull=True)
-        .select_related('student__user')
-        .order_by('student__reg_no')
-    )
+    students: list[StudentProfile] = []
+    ta = getattr(getattr(exam_assignment, 'section', None), 'teaching_assignment', None)
+    if ta:
+        try:
+            from .views import _get_active_students_for_teaching_assignment
+            students = _get_active_students_for_teaching_assignment(ta)
+        except Exception:
+            students = []
+
+    if not students:
+        acad_sec = getattr(ta, 'section', None)
+        if acad_sec:
+            for sa in StudentSectionAssignment.objects.filter(section=acad_sec, end_date__isnull=True).select_related('student__user').order_by('student__reg_no'):
+                if sa.student and sa.student not in students:
+                    students.append(sa.student)
+
+    if not students:
+        for sm in AcV2StudentMark.objects.filter(exam_assignment=exam_assignment).select_related('student__user').order_by('student__reg_no'):
+            if sm.student and sm.student not in students:
+                students.append(sm.student)
 
     existing_marks = {
         str(sm.student_id): sm
         for sm in AcV2StudentMark.objects.filter(exam_assignment=exam_assignment)
     }
 
-    for sa in student_assignments:
-        sp = sa.student
+    for sp in students:
         sm = existing_marks.get(str(sp.id))
         mark_val = None
         question_marks = {}
@@ -451,7 +1055,7 @@ def sync_google_sheet_to_backend(
 
     sheet_title = sheet_name or (exam_assignment.exam_display_name or exam_assignment.exam or 'Marks')
     headers = _build_google_auth_headers(config)
-    values = _read_sheet_values(
+    values, resolved_tab, available_tabs = _read_sheet_values(
         spreadsheet_id=spreadsheet_id,
         sheet_name=sheet_title,
         headers=headers,
@@ -463,9 +1067,109 @@ def sync_google_sheet_to_backend(
     if not questions:
         return {'spreadsheetId': spreadsheet_id, 'sheetName': sheet_title, 'updatedRows': 0}
 
-    reg_column_index = _column_label_to_index((column_mapping or {}).get('regNoColumn') or (column_mapping or {}).get('reg_no_column') or 'A')
-    name_column_index = _column_label_to_index((column_mapping or {}).get('nameColumn') or (column_mapping or {}).get('name_column') or 'B')
+    reg_column_index = _column_label_to_index((column_mapping or {}).get('regNoColumn') or (column_mapping or {}).get('reg_no_column') or 'D')
+    name_column_index = _column_label_to_index((column_mapping or {}).get('nameColumn') or (column_mapping or {}).get('name_column') or 'E')
     raw_question_columns = (column_mapping or {}).get('questionColumns') or (column_mapping or {}).get('question_columns') or {}
+
+    co_row_cfg = (column_mapping or {}).get('coRow') or (column_mapping or {}).get('co_row') or 6
+    max_marks_row_cfg = (column_mapping or {}).get('maxMarksRow') or (column_mapping or {}).get('max_marks_row') or 8
+    title_row_cfg = (column_mapping or {}).get('titleRow') or (column_mapping or {}).get('title_row') or 5
+
+    try:
+        derived_info = derive_mark_manager_from_sheet(
+            spreadsheet_id=spreadsheet_id,
+            sheet_name=sheet_title,
+            config=config,
+            exam_name=getattr(exam_assignment, 'exam_display_name', None) or getattr(exam_assignment, 'exam', None) or sheet_title,
+            co_row=co_row_cfg,
+            max_marks_row=max_marks_row_cfg,
+            title_row=title_row_cfg,
+            reg_no_column=(column_mapping or {}).get('regNoColumn') or (column_mapping or {}).get('reg_no_column') or 'D',
+            name_column=(column_mapping or {}).get('nameColumn') or (column_mapping or {}).get('name_column') or 'E',
+        )
+        if derived_info and derived_info.get('parsed_columns'):
+            derived_mm = derived_info.get('derived_mark_manager') or {}
+            cos_cfg = derived_mm.get('cos', {})
+            cia_enabled = derived_mm.get('cia_enabled', False)
+            cia_max_marks = float(derived_mm.get('cia_max_marks') or 0)
+            cia_cos = derived_mm.get('cia_cos') or []
+            cia_label = derived_mm.get('cia_label') or 'Exam'
+            item_name = derived_mm.get('item_name') or 'Experiments'
+
+            titles = []
+            marks_list = []
+            cos_list = []
+            btls = []
+            enabled = []
+            total_max = 0.0
+            covered_cos = []
+
+            for co_str in sorted(cos_cfg.keys(), key=lambda x: int(x)):
+                co_num = int(co_str)
+                c_cfg = cos_cfg[co_str]
+                if not c_cfg.get('enabled'):
+                    continue
+                covered_cos.append(co_num)
+                num_items = int(c_cfg.get('num_items', 1))
+                per_item_max = float(c_cfg.get('max_marks', 0))
+                total_max += per_item_max * num_items
+                for i in range(num_items):
+                    titles.append(f'CO{co_num} - {item_name} {i + 1}')
+                    marks_list.append(per_item_max)
+                    cos_list.append(co_num)
+                    btls.append(None)
+                    enabled.append(True)
+
+            exam_cols = derived_mm.get('exam_columns') or derived_mm.get('special_columns')
+            if isinstance(exam_cols, list) and exam_cols:
+                for ex_it in exam_cols:
+                    ex_lbl = str(ex_it.get('label') or ex_it.get('title') or 'Exam').strip() or 'Exam'
+                    ex_max = float(ex_it.get('max_marks') or 0)
+                    ex_cos = ex_it.get('cos') or ex_it.get('co')
+                    if ex_max > 0:
+                        titles.append(ex_lbl)
+                        marks_list.append(ex_max)
+                        cos_list.append(ex_cos if ex_cos else None)
+                        btls.append(None)
+                        enabled.append(True)
+                        total_max += ex_max
+            elif cia_enabled and cia_max_marks > 0:
+                titles.append(cia_label)
+                marks_list.append(cia_max_marks)
+                cos_list.append(cia_cos if cia_cos else None)
+                btls.append(None)
+                enabled.append(True)
+                total_max += cia_max_marks
+
+            new_user_pattern = {
+                'titles': titles,
+                'marks': marks_list,
+                'cos': cos_list,
+                'btls': btls,
+                'enabled': enabled,
+                'mark_manager': {
+                    **derived_mm,
+                    'confirmed': True,
+                },
+            }
+
+            d = exam_assignment.draft_data if isinstance(exam_assignment.draft_data, dict) else {}
+            d['user_pattern'] = new_user_pattern
+            exam_assignment.draft_data = d
+            exam_assignment.max_marks = total_max
+            exam_assignment.covered_cos = covered_cos
+            exam_assignment.save(update_fields=['draft_data', 'max_marks', 'covered_cos', 'updated_at'])
+
+            # Refresh questions from newly updated pattern
+            updated_questions = _get_qp_specs_for_exam(exam_assignment)
+            if updated_questions:
+                questions = updated_questions
+
+            for k, v in (derived_info.get('question_columns_mapping') or {}).items():
+                if k not in raw_question_columns:
+                    raw_question_columns[k] = v
+    except Exception:
+        pass
 
     title_to_column_index: dict[str, int] = {}
     if isinstance(raw_question_columns, dict):
@@ -477,11 +1181,22 @@ def sync_google_sheet_to_backend(
             if key_str:
                 title_to_column_index[key_str] = column_index
                 title_to_column_index[key_str.lower()] = column_index
-                # Strip leading 'Q' or 'q'
-                stripped = key_str.lstrip('Qq').strip()
-                if stripped:
-                    title_to_column_index[stripped] = column_index
-                    title_to_column_index[stripped.lower()] = column_index
+                title_to_column_index[key_str.upper()] = column_index
+
+    # Start row index offset
+    start_row_cfg = (column_mapping or {}).get('startRow') or (column_mapping or {}).get('start_row')
+    start_row_offset = 0
+    if start_row_cfg:
+        try:
+            start_row_offset = max(0, int(start_row_cfg) - 1)
+        except Exception:
+            start_row_offset = 0
+    elif co_row_cfg or max_marks_row_cfg:
+        try:
+            header_max_row = max(int(co_row_cfg or 6), int(max_marks_row_cfg or 8), int(title_row_cfg or 5))
+            start_row_offset = max(0, header_max_row)
+        except Exception:
+            start_row_offset = 0
 
     # Preload section students for fast, accurate lookup
     sec_students_map: dict[str, StudentProfile] = {}
@@ -496,21 +1211,45 @@ def sync_google_sheet_to_backend(
     except Exception:
         pass
 
+    # Base start column for questions if unmapped
+    base_indices = [idx for idx in (reg_column_index, name_column_index) if idx is not None]
+    start_q_col_idx = (max(base_indices) + 1) if base_indices else 2
+
     updated_count = 0
-    for row in values:
+    for r_idx, row in enumerate(values):
+        if r_idx < start_row_offset:
+            continue
         if not row:
             continue
         raw_reg = str(_safe_row_value(row, reg_column_index) or '').strip()
-        if not raw_reg:
-            continue
-
         cleaned_reg = re.sub(r'\s+', '', raw_reg).upper()
+
         # Look up student first in section, then globally
-        student = sec_students_map.get(cleaned_reg)
-        if not student:
+        student = sec_students_map.get(cleaned_reg) if cleaned_reg else None
+        if not student and raw_reg:
             student = StudentProfile.objects.filter(reg_no__iexact=raw_reg).first()
             if not student and cleaned_reg:
                 student = StudentProfile.objects.filter(reg_no__iexact=cleaned_reg).first()
+
+        # If not found by configured column, scan first 10 columns for a matching reg_no
+        if not student:
+            for col_i, cell in enumerate(row[:10]):
+                if cell:
+                    c_clean = re.sub(r'\s+', '', str(cell)).upper()
+                    if c_clean in sec_students_map:
+                        student = sec_students_map[c_clean]
+                        reg_column_index = col_i
+                        name_column_index = col_i + 1
+                        raw_reg = str(cell).strip()
+                        break
+                    cand = StudentProfile.objects.filter(reg_no__iexact=str(cell).strip()).first()
+                    if cand:
+                        student = cand
+                        reg_column_index = col_i
+                        name_column_index = col_i + 1
+                        raw_reg = str(cell).strip()
+                        break
+
         if not student:
             # Row is not a recognized student (e.g. header row, title row)
             continue
@@ -521,20 +1260,19 @@ def sync_google_sheet_to_backend(
         for index, question in enumerate(questions):
             q_title = str(question.get('title') or '').strip()
             q_id = str(question.get('id') or '').strip()
-            # Try specific key matches: q_id, index-based keys, or title
+            # Try specific key matches: canonical id (q0), index (q_0), title, exam alias
             mapped_col_index = (
                 title_to_column_index.get(q_id)
                 or title_to_column_index.get(q_id.lower())
                 or title_to_column_index.get(f"q_{index}")
                 or title_to_column_index.get(f"q{index}")
-                or title_to_column_index.get(str(index))
-                or title_to_column_index.get(str(index + 1))
-                or title_to_column_index.get(f"Q{index + 1}")
-                or title_to_column_index.get(f"q{index + 1}")
                 or title_to_column_index.get(q_title)
                 or title_to_column_index.get(q_title.lower())
+                or (title_to_column_index.get('exam') if 'exam' in q_title.lower() or 'cia' in q_title.lower() else None)
+                or (title_to_column_index.get('Exam') if 'exam' in q_title.lower() or 'cia' in q_title.lower() else None)
+                or title_to_column_index.get(str(index))
             )
-            col_index = mapped_col_index if mapped_col_index is not None else (index + 2)
+            col_index = mapped_col_index if mapped_col_index is not None else (start_q_col_idx + index)
             # Guard against reading from Register No. or Student Name column
             if col_index == reg_column_index or col_index == name_column_index:
                 continue
@@ -592,16 +1330,18 @@ def sync_google_sheet_to_backend(
             total_m = float(dm.total_mark) if dm.total_mark is not None else None
             q_m = {str(k): float(v) if v is not None else None for k, v in (dm.question_marks or {}).items()}
             marks_dict[str(dm.student_id)] = {
-                'reg_no': dm.reg_no,
-                'name': dm.student_name,
-                'question_marks': q_m,
-                'mark': total_m,
-                'is_absent': dm.is_absent,
+                'total': total_m,
+                'isAbsent': bool(dm.is_absent),
+                'questions': q_m,
             }
         exam_assignment.draft_data = draft_dict
         exam_assignment.save(update_fields=['draft_data', 'updated_at'])
 
-    return {'spreadsheetId': spreadsheet_id, 'sheetName': sheet_title, 'updatedRows': updated_count}
+    return {
+        'spreadsheetId': spreadsheet_id,
+        'sheetName': sheet_title,
+        'updatedRows': updated_count,
+    }
 
 
 def _build_google_auth_headers(config: dict[str, Any]) -> dict[str, str]:

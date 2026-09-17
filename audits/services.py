@@ -2,6 +2,7 @@
 
 Centralizes role/permission resolution so views stay small and consistent.
 """
+from django.db import transaction
 from django.utils import timezone
 
 from academics.models import AcademicYear, DepartmentRole, StaffProfile
@@ -218,3 +219,14 @@ def build_question_rows(assignment, include_atr=False):
             ),
         })
     return rows
+
+
+def resequence_active_questions():
+    """Ensure all active audit questions have sequential sl_no starting from 1 with no gaps."""
+    with transaction.atomic():
+        active_qs = list(AuditQuestion.objects.filter(is_active=True).order_by('sl_no', 'id'))
+        for idx, q in enumerate(active_qs, start=1):
+            if q.sl_no != idx:
+                q.sl_no = idx
+                q.save(update_fields=['sl_no'])
+

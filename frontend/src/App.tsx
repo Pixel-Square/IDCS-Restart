@@ -167,6 +167,7 @@ const AcV2CdapTemplatesPage = AcV2CdapTemplateEditorPage;
 const AcV2LCAWorkflowPage = safeLazy(() => import('./pages/Academic 2.1/faculty/LCAWorkflowPage'), 'LCAWorkflowPage');
 const AcV2StudentDashboardPage = safeLazy(() => import('./pages/Academic 2.1/students/DashboardPage'), 'StudentDashboardPage');
 const AcV2StudentCourseListPage = safeLazy(() => import('./pages/Academic 2.1/students/CourseListPage'), 'StudentCourseListPage');
+const AcV2StudentPastCoursesPage = safeLazy(() => import('./pages/Academic 2.1/students/PastCoursesPage'), 'StudentPastCoursesPage');
 const AcV2StudentCourseDetailPage = safeLazy(() => import('./pages/Academic 2.1/students/CourseDetailPage'), 'StudentCourseDetailPage');
 const AcademicPerformancePage = safeLazy(() => import('./pages/Academic 2.1/AcademicPerformancePage'), 'AcademicPerformancePage');
 const AcV2SSAAssignPage = safeLazy(() => import('./pages/Academic 2.1/faculty/SSAAssignPage'), 'SSAAssignPage');
@@ -1266,6 +1267,22 @@ export default function App() {
                         <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2StudentCourseListPage />
+                        </React.Suspense>
+                        </LazyErrorBoundary>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/student/past-courses"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STUDENT'}
+                      element={
+                        <LazyErrorBoundary>
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2StudentPastCoursesPage />
                         </React.Suspense>
                         </LazyErrorBoundary>
                       }

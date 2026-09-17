@@ -387,7 +387,7 @@ export default function ExamAssignmentAdminPage() {
 
   const totalMarks = markManager.enabled
     ? (markManager.cia_enabled ? markManager.cia_max_marks : 0) +
-      Object.values(markManager.cos).filter(c => c.enabled).reduce((s, c) => s + c.max_marks, 0)
+      Object.values(markManager.cos).filter(c => c.enabled).reduce((s, c) => s + (c.max_marks * (c.num_items || 1)), 0)
     : formRows.filter(r => r.enabled).reduce((s, r) => s + r.max_marks, 0);
 
   if (loading) {

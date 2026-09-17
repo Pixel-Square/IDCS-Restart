@@ -30,6 +30,7 @@ const BypassLogsPage = React.lazy(() => import('./admin/BypassLogsPage'));
 const CourseManagerDashboard = React.lazy(() => import('./admin/CourseManagerDashboard'));
 const StudentDashboardPage = React.lazy(() => import('./students/DashboardPage'));
 const StudentCourseListPage = React.lazy(() => import('./students/CourseListPage'));
+const StudentPastCoursesPage = React.lazy(() => import('./students/PastCoursesPage'));
 const StudentCourseDetailPage = React.lazy(() => import('./students/CourseDetailPage'));
 const LCAWorkflowPage = React.lazy(() => import('./faculty/LCAWorkflowPage'));
 
@@ -132,6 +133,10 @@ export const academicV2Routes: RouteObject[] = [
   {
     path: 'academic-v2/student/courses',
     element: <StudentCourseListPage />,
+  },
+  {
+    path: 'academic-v2/student/past-courses',
+    element: <StudentPastCoursesPage />,
   },
   {
     path: 'academic-v2/student/course/:courseId',

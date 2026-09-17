@@ -282,21 +282,89 @@ async function initClient() {
     });
   });
 
-  waClient.on('loading_screen', (percent, message) => {
-    console.log(`[WA] Loading: ${percent}% – ${message}`);
-  });
+  async function checkAndMarkConnected() {
+    if (waStatus === 'CONNECTED') return true;
+    try {
+      if (!waClient || !waClient.pupPage) return false;
+      const data = await waClient.pupPage.evaluate(() => {
+        try {
+          let wid = null;
+          if (window.Store && window.Store.User) {
+            const u = window.Store.User.getMaybeMePnUser?.() || window.Store.User.getMaybeMeLidUser?.() || window.Store.User.getMeUser?.();
+            if (u) wid = typeof u === 'string' ? u : (u.user || u._serialized || '');
+          }
+          if (!wid && window.AuthStore && window.AuthStore.AppState && window.AuthStore.AppState.state) {
+            const w = window.AuthStore.AppState.state.wid;
+            if (w) wid = typeof w === 'string' ? w : (w.user || w._serialized || '');
+          }
+          if (!wid) {
+            const raw = window.localStorage.getItem('last-wid-md') || window.localStorage.getItem('last-wid');
+            if (raw) wid = String(raw).replace(/\"/g, '').split('@')[0];
+          }
+          const isAuthed = Boolean(wid || (window.AuthStore && window.AuthStore.AppState) || (window.Store && window.Store.AppState));
+          return { isAuthed, wid };
+        } catch (e) {
+          return { isAuthed: false, wid: null };
+        }
+      });
+
+      if (data && data.isAuthed) {
+        if (authTimeoutTimer) {
+          clearTimeout(authTimeoutTimer);
+          authTimeoutTimer = null;
+        }
+        waStatus = 'CONNECTED';
+        currentQrText = null;
+        currentQrDataUrl = null;
+        lastError = null;
+        if (data.wid) {
+          connectedNumber = String(data.wid).replace(/[^\d]/g, '');
+        } else {
+          try {
+            connectedNumber = (waClient.info?.wid?.user || '').replace('@c.us', '') || null;
+          } catch {
+            connectedNumber = null;
+          }
+        }
+        console.log(`[WA] Successfully connected as ${connectedNumber || '(unknown)'}`);
+        pushSSE('status', statusSnapshot());
+        return true;
+      }
+    } catch (e) {
+      console.warn('[WA] Connection check error:', e.message);
+    }
+    return false;
+  }
 
   waClient.on('authenticated', () => {
     waStatus = 'INITIALIZING';
-    console.log('[WA] Authenticated – waiting for ready');
+    console.log('[WA] Authenticated – checking connection state...');
     pushSSE('status', statusSnapshot());
-    if (authTimeoutTimer) clearTimeout(authTimeoutTimer);
-    authTimeoutTimer = setTimeout(() => {
-      if (waStatus === 'INITIALIZING') {
-        console.warn('[WA] Timed out waiting for ready event after authentication – scheduling restart...');
-        scheduleRestart('auth ready timeout', 1000);
+
+    let attempts = 0;
+    const interval = setInterval(async () => {
+      attempts++;
+      const done = await checkAndMarkConnected();
+      if (done || attempts > 20 || waStatus !== 'INITIALIZING') {
+        clearInterval(interval);
       }
-    }, 45000);
+    }, 2000);
+
+    if (authTimeoutTimer) clearTimeout(authTimeoutTimer);
+    authTimeoutTimer = setTimeout(async () => {
+      if (waStatus === 'INITIALIZING') {
+        const connected = await checkAndMarkConnected();
+        if (!connected) {
+          console.warn('[WA] Timed out waiting for ready event after authentication – verifying session...');
+          try {
+            await waClient.pupPage.reload({ waitUntil: 'networkidle2' });
+            setTimeout(() => checkAndMarkConnected(), 3000);
+          } catch {
+            scheduleRestart('auth ready timeout', 1000);
+          }
+        }
+      }
+    }, 35000);
   });
 
   waClient.on('auth_failure', (msg) => {
@@ -318,6 +386,9 @@ async function initClient() {
       connectedNumber = (info?.wid?.user || '').replace('@c.us', '');
     } catch {
       connectedNumber = null;
+    }
+    if (!connectedNumber) {
+      await checkAndMarkConnected();
     }
     console.log(`[WA] Connected as ${connectedNumber || '(unknown)'}`);
     pushSSE('status', statusSnapshot());

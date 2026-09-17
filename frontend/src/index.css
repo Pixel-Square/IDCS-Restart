@@ -7,6 +7,18 @@
   padding: 0;
   box-sizing: border-box;
 }
+
+/* Remove number input increment/decrement spinner arrows globally */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
 html,
 body {
   height: 100%;

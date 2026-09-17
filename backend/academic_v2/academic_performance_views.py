@@ -2070,6 +2070,24 @@ class StudentReportPDFView(APIView):
         from .marks_helper import get_remark
         remarks = get_remark(avg_pct)
 
+        _scores = []
+        _max_marks = []
+        for m in marks_data:
+            s = m.get('score')
+            x = m.get('max_mark')
+            try:
+                if s != '—' and s is not None and x != '—' and x is not None:
+                    _scores.append(float(s))
+                    _max_marks.append(float(x))
+            except:
+                pass
+        
+        if _scores:
+            avg_val = round(sum(_scores) / len(_scores), 1)
+            avg_mark_text = f"{avg_val:g}"
+        else:
+            avg_mark_text = '—'
+
         # Generate PDF with ReportLab
         try:
             from reportlab.lib.pagesizes import A4
@@ -2097,7 +2115,7 @@ class StudentReportPDFView(APIView):
             canvas.rect(10*mm, 10*mm, A4[0] - 20*mm, A4[1] - 20*mm)
             
             # Header
-            y_pos = A4[1] - 15*mm
+            y_pos = A4[1] - 10*mm
             if os.path.exists(krct_logo):
                 canvas.drawImage(krct_logo, 15*mm, y_pos - 15*mm, width=50*mm, height=15*mm, preserveAspectRatio=True, anchor='nw', mask='auto')
             if os.path.exists(idcs_logo):
@@ -2105,22 +2123,22 @@ class StudentReportPDFView(APIView):
             
             # Draw subtle line under header
             canvas.setStrokeColor(colors.HexColor('#E2E8F0'))
-            canvas.line(10*mm, y_pos - 18*mm, A4[0] - 10*mm, y_pos - 18*mm)
+            canvas.line(10*mm, y_pos - 17*mm, A4[0] - 10*mm, y_pos - 17*mm)
             canvas.restoreState()
 
         doc = SimpleDocTemplate(
             buffer, pagesize=A4,
             leftMargin=15*mm, rightMargin=15*mm,
-            topMargin=40*mm, bottomMargin=15*mm,
+            topMargin=30*mm, bottomMargin=15*mm,
         )
-        frame = Frame(15*mm, 15*mm, A4[0] - 30*mm, A4[1] - 60*mm, id='normal')
+        frame = Frame(15*mm, 15*mm, A4[0] - 30*mm, A4[1] - 45*mm, id='normal')
         template = PageTemplate(id='test', frames=frame, onPage=on_page)
         doc.addPageTemplates([template])
 
         elements = []
         styles = getSampleStyleSheet()
-        primary_color = colors.HexColor('#4F46E5')
-
+        primary_color = colors.HexColor('#3B82F6') # Attractive blue
+        
         # --- Title ---
         title_style = ParagraphStyle('PDFTitle', parent=styles['Title'], fontSize=16, alignment=TA_CENTER, textColor=primary_color, spaceAfter=2, fontName='Helvetica-Bold')
         elements.append(Paragraph('Individual Student Analysis Report', title_style))
@@ -2128,7 +2146,12 @@ class StudentReportPDFView(APIView):
         elements.append(Paragraph(f'Assessment: {exam_type or "All Assessments"}', subtitle_style))
 
         # --- Student Details ---
-        dept_lbl = student.home_department.short_name if student.home_department else 'N/A'
+        dept_lbl = 'N/A'
+        if student.home_department:
+            dept_lbl = student.home_department.name
+        elif student.section and student.section.batch and student.section.batch.course and student.section.batch.course.department:
+            dept_lbl = student.section.batch.course.department.name
+            
         sec_lbl = student.section.name if student.section else 'N/A'
         sem_lbl = str(student.section.semester.number) if (student.section and student.section.semester) else 'N/A'
         ay_lbl = student.batch or (student.section.batch.name if (student.section and student.section.batch) else 'N/A')
@@ -2140,11 +2163,13 @@ class StudentReportPDFView(APIView):
             ['Department:', dept_lbl, 'Section:', sec_lbl],
             ['Semester:', sem_lbl, 'Academic Year:', ay_lbl],
         ]
-        info_tbl = Table(info_data, colWidths=[25*mm, 60*mm, 25*mm, 60*mm])
+        info_tbl = Table(info_data, colWidths=[25*mm, 65*mm, 25*mm, 65*mm])
         info_tbl.setStyle(TableStyle([
             ('FONTSIZE', (0, 0), (-1, -1), 9),
-            ('TEXTCOLOR', (0, 0), (0, -1), colors.grey),
-            ('TEXTCOLOR', (2, 0), (2, -1), colors.grey),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#64748B')),
+            ('TEXTCOLOR', (2, 0), (2, -1), colors.HexColor('#64748B')),
+            ('TEXTCOLOR', (1, 0), (1, -1), colors.HexColor('#0F172A')),
+            ('TEXTCOLOR', (3, 0), (3, -1), colors.HexColor('#0F172A')),
             ('FONTNAME', (1, 0), (1, -1), 'Helvetica-Bold'),
             ('FONTNAME', (3, 0), (3, -1), 'Helvetica-Bold'),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
@@ -2158,11 +2183,11 @@ class StudentReportPDFView(APIView):
 
         # --- Summary Ribbon ---
         ribbon_data = [[
-            Paragraph(f'<font color="#64748B" size="8"><b>AVERAGE MARK</b></font><br/>—', ParagraphStyle('r1', alignment=TA_CENTER)),
+            Paragraph(f'<font color="#64748B" size="8"><b>AVERAGE MARK</b></font><br/><font size="14"><b>{avg_mark_text}</b></font>', ParagraphStyle('r1', alignment=TA_CENTER)),
             Paragraph(f'<font color="#64748B" size="8"><b>PERCENTAGE</b></font><br/><font size="14"><b>{avg_pct}%</b></font>', ParagraphStyle('r2', alignment=TA_CENTER)),
             Paragraph(f'<font color="#64748B" size="8"><b>REMARKS</b></font><br/><font size="12"><b>{remarks}</b></font>', ParagraphStyle('r3', alignment=TA_CENTER))
         ]]
-        ribbon_tbl = Table(ribbon_data, colWidths=[55*mm, 55*mm, 60*mm])
+        ribbon_tbl = Table(ribbon_data, colWidths=[60*mm, 60*mm, 60*mm])
         ribbon_tbl.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, -1), colors.white),
             ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
@@ -2216,7 +2241,7 @@ class StudentReportPDFView(APIView):
                 Paragraph(md.get('remark', '—'), ParagraphStyle('CellWrap', fontSize=8, leading=10)),
             ])
 
-        tbl = Table(table_data, colWidths=[20*mm, 45*mm, 20*mm, 23*mm, 20*mm, 15*mm, 27*mm], repeatRows=1)
+        tbl = Table(table_data, colWidths=[18*mm, 45*mm, 30*mm, 20*mm, 20*mm, 15*mm, 32*mm], repeatRows=1)
         style_cmds = [
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),

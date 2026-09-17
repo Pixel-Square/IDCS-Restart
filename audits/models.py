@@ -32,7 +32,7 @@ class AuditCycle(models.Model):
 
 class AuditQuestion(models.Model):
     """A question/parameter in the academic audit checklist."""
-    sl_no = models.PositiveSmallIntegerField(unique=True, db_index=True)
+    sl_no = models.PositiveIntegerField(db_index=True, default=1)
     details = models.CharField(max_length=300)
     documents_checklist = models.TextField(blank=True)
     detailed_description = models.TextField(blank=True)

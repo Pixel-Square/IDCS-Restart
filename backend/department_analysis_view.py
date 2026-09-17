@@ -1,6 +1,6 @@
 """Department-level drill-down analytics view."""
 
-from django.db.models import Q
+from django.db.models import Q, Max
 
 from rest_framework import permissions
 from rest_framework.response import Response
@@ -75,11 +75,17 @@ class DepartmentAnalysisView(APIView):
 
         student_scores = {}
         for value_field, M in model_fields:
-            for m in M.objects.filter(student_id__in=student_ids).values("student_id", value_field):
+            qs = M.objects.filter(student_id__in=student_ids)
+            ref = qs.aggregate(m=Max(value_field))["m"]
+            if not ref or float(ref) <= 0:
+                continue
+            ref = float(ref)
+            for m in qs.values("student_id", value_field):
                 sid = m["student_id"]
                 val = float(m.get(value_field) or 0.0)
                 if val > 0:
-                    student_scores.setdefault(sid, []).append(val)
+                    pct = (val / ref) * 100.0
+                    student_scores.setdefault(sid, []).append(pct)
 
         pass_count = 0
         fail_count = 0
@@ -127,16 +133,20 @@ class DepartmentAnalysisView(APIView):
 
         subject_stats = {}
         for value_field, M in model_fields:
-            for m in M.objects.filter(student_id__in=student_ids).select_related("subject").values(
-                "student_id", "subject__code", "subject__name", value_field
-            ):
+            qs = M.objects.filter(student_id__in=student_ids).select_related("subject")
+            ref = qs.aggregate(m=Max(value_field))["m"]
+            if not ref or float(ref) <= 0:
+                continue
+            ref = float(ref)
+            for m in qs.values("student_id", "subject__code", "subject__name", value_field):
                 code = m.get("subject__code") or ""
                 name = m.get("subject__name") or code
                 val = float(m.get(value_field) or 0.0)
                 if val > 0 and code:
                     if code not in subject_stats:
                         subject_stats[code] = {"name": name, "scores": []}
-                    subject_stats[code]["scores"].append(val)
+                    pct = (val / ref) * 100.0
+                    subject_stats[code]["scores"].append(pct)
         subject_wise = []
         for code, stats in sorted(subject_stats.items()):
             scores = stats["scores"]

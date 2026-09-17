@@ -5,7 +5,10 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Bell, Eye, Film, Save, Send, Settings, ShieldCheck, Tag, Upload, Users } from 'lucide-react';
+import {
+  Bell, Bold, Code, Eye, Film, Italic, List, MessageSquare,
+  Save, Send, Settings, ShieldCheck, Smile, Sparkles, Strikethrough, Tag, Type, Upload, Users
+} from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
 // ─── Android-style Toggle Switch Component ──────────────────────────────────
@@ -311,6 +314,346 @@ function MyMarksSection() {
   );
 }
 
+// ─── Rich WhatsApp Template Editor ─────────────────────────────────────────
+
+interface RichTemplateEditorProps {
+  label: string;
+  value: string;
+  onChange: (val: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  rows?: number;
+  tokens?: TokenDef[];
+  isActive?: boolean;
+  onFocus?: () => void;
+  helperText?: string;
+}
+
+const COMMON_SYMBOLS = [
+  { label: '• Bullet', char: '• ' },
+  { label: '✓ Check', char: '✓ ' },
+  { label: '➜ Arrow', char: '➜ ' },
+  { label: '📌 Pin', char: '📌 ' },
+  { label: '⚠️ Alert', char: '⚠️ ' },
+  { label: '📊 Chart', char: '📊 ' },
+  { label: '🎓 Cap', char: '🎓 ' },
+  { label: '── Line', char: '\n━━━━━━━━━━━━━━━━━━━━\n' },
+];
+
+function RichTemplateEditor({
+  label,
+  value,
+  onChange,
+  placeholder = 'Sample will be used if empty',
+  disabled = false,
+  rows = 4,
+  tokens = [],
+  isActive = false,
+  onFocus,
+  helperText,
+}: RichTemplateEditorProps) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [showTokensDropdown, setShowTokensDropdown] = useState(false);
+  const [showSymbolsDropdown, setShowSymbolsDropdown] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+
+  // Wrap or unwrap selected text with format characters (e.g. *bold*, _italic_, ~strike~, `code`)
+  const handleWrapSelection = (prefix: string, suffix: string = prefix, defaultPlaceholder: string = 'text') => {
+    if (disabled) return;
+    const el = textareaRef.current;
+    if (!el) return;
+
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const original = el.value;
+
+    const hasSelection = start !== end;
+    const selectedText = hasSelection ? original.substring(start, end) : defaultPlaceholder;
+
+    // Check if selectedText is already wrapped with prefix and suffix
+    const isAlreadyWrapped =
+      selectedText.startsWith(prefix) &&
+      selectedText.endsWith(suffix) &&
+      selectedText.length >= prefix.length + suffix.length;
+
+    let newFullText: string;
+    let newStart: number;
+    let newEnd: number;
+
+    if (isAlreadyWrapped) {
+      // Toggle off: unwrap
+      const unwrapped = selectedText.slice(prefix.length, -suffix.length);
+      newFullText = original.substring(0, start) + unwrapped + original.substring(end);
+      newStart = start;
+      newEnd = start + unwrapped.length;
+    } else {
+      // Wrap
+      const wrapped = `${prefix}${selectedText}${suffix}`;
+      newFullText = original.substring(0, start) + wrapped + original.substring(end);
+      newStart = start;
+      newEnd = start + wrapped.length;
+    }
+
+    onChange(newFullText);
+
+    // Keep highlight / selection around the affected area
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(newStart, newEnd);
+      }
+    }, 10);
+  };
+
+  // Insert string (token, symbol, or text) at cursor position or replace selection
+  const handleInsertAtCursor = (content: string) => {
+    if (disabled) return;
+    const el = textareaRef.current;
+    if (!el) {
+      const next = value ? (value.endsWith(' ') || value.endsWith('\n') ? value + content : value + ' ' + content) : content;
+      onChange(next);
+      return;
+    }
+
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const original = el.value;
+
+    const newFullText = original.substring(0, start) + content + original.substring(end);
+    const newPos = start + content.length;
+
+    onChange(newFullText);
+
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(newPos, newPos);
+      }
+    }, 10);
+  };
+
+  // Helper to parse WhatsApp formatting for live preview
+  const renderFormattedPreview = (raw: string) => {
+    if (!raw.trim()) {
+      return <span className="text-gray-400 italic">No template text provided (will use default template).</span>;
+    }
+
+    const lines = raw.split('\n');
+    return (
+      <div className="space-y-1 font-sans text-xs text-gray-800 whitespace-pre-wrap leading-relaxed">
+        {lines.map((line, idx) => {
+          // Token highlighting & bold / italic basic regex rendering for WhatsApp preview
+          // Split by bold (*...*), italic (_..._), tokens ({...})
+          const parts = line.split(/(\*[^*]+\*|_[^_]+_|{[a-zA-Z0-9_]+})/g);
+          return (
+            <div key={idx} className="min-h-[1.2em]">
+              {parts.map((part, pIdx) => {
+                if (part.startsWith('*') && part.endsWith('*') && part.length > 2) {
+                  return <strong key={pIdx} className="font-bold text-gray-900">{part.slice(1, -1)}</strong>;
+                }
+                if (part.startsWith('_') && part.endsWith('_') && part.length > 2) {
+                  return <em key={pIdx} className="italic text-gray-800">{part.slice(1, -1)}</em>;
+                }
+                if (part.startsWith('{') && part.endsWith('}') && part.length > 2) {
+                  return (
+                    <span key={pIdx} className="inline-block bg-blue-100 text-blue-800 px-1 py-0.5 rounded text-[11px] font-mono mx-0.5 border border-blue-200">
+                      {part}
+                    </span>
+                  );
+                }
+                return <span key={pIdx}>{part}</span>;
+              })}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  return (
+    <div className={`border rounded-xl transition-all ${isActive ? 'border-blue-400 ring-2 ring-blue-100' : 'border-gray-200 bg-white'}`}>
+      {/* Top Header / Label Bar */}
+      <div className="flex items-center justify-between px-3.5 py-2 border-b border-gray-100 bg-gray-50/75 rounded-t-xl">
+        <div className="flex items-center gap-2">
+          <MessageSquare className="w-3.5 h-3.5 text-blue-600" />
+          <span className="text-xs font-semibold text-gray-800">{label}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setShowPreview(!showPreview)}
+            className={`flex items-center gap-1 px-2 py-0.5 text-xs rounded transition-colors ${
+              showPreview ? 'bg-blue-600 text-white shadow-sm' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            <Eye className="w-3 h-3" />
+            {showPreview ? 'Edit' : 'Preview'}
+          </button>
+        </div>
+      </div>
+
+      {/* Formatting & Actions Toolbar */}
+      {!showPreview && (
+        <div className="flex flex-wrap items-center justify-between gap-1.5 px-3 py-1.5 border-b border-gray-100 bg-white">
+          <div className="flex items-center gap-1">
+            {/* Bold (*text*) */}
+            <button
+              type="button"
+              disabled={disabled}
+              title="Bold: Select text and click to toggle *bold*"
+              onClick={() => handleWrapSelection('*', '*', 'bold_text')}
+              className="p-1.5 text-gray-700 hover:text-blue-700 hover:bg-blue-50 active:bg-blue-100 rounded border border-gray-200 bg-white transition-colors disabled:opacity-40 disabled:hover:bg-white"
+            >
+              <Bold className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Italic (_text_) */}
+            <button
+              type="button"
+              disabled={disabled}
+              title="Italic: Select text and click to toggle _italic_"
+              onClick={() => handleWrapSelection('_', '_', 'italic_text')}
+              className="p-1.5 text-gray-700 hover:text-blue-700 hover:bg-blue-50 active:bg-blue-100 rounded border border-gray-200 bg-white transition-colors disabled:opacity-40 disabled:hover:bg-white"
+            >
+              <Italic className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Strikethrough (~text~) */}
+            <button
+              type="button"
+              disabled={disabled}
+              title="Strikethrough: Select text and click to toggle ~strikethrough~"
+              onClick={() => handleWrapSelection('~', '~', 'strike_text')}
+              className="p-1.5 text-gray-700 hover:text-blue-700 hover:bg-blue-50 active:bg-blue-100 rounded border border-gray-200 bg-white transition-colors disabled:opacity-40 disabled:hover:bg-white"
+            >
+              <Strikethrough className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Monospace (```text```) */}
+            <button
+              type="button"
+              disabled={disabled}
+              title="Monospace: Select text and click to toggle ```code```"
+              onClick={() => handleWrapSelection('```', '```', 'monospace_text')}
+              className="p-1.5 text-gray-700 hover:text-blue-700 hover:bg-blue-50 active:bg-blue-100 rounded border border-gray-200 bg-white transition-colors disabled:opacity-40 disabled:hover:bg-white"
+            >
+              <Code className="w-3.5 h-3.5" />
+            </button>
+
+            <div className="h-4 w-px bg-gray-200 mx-1" />
+
+            {/* Symbols dropdown */}
+            <div className="relative">
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => {
+                  setShowSymbolsDropdown(!showSymbolsDropdown);
+                  setShowTokensDropdown(false);
+                }}
+                className="flex items-center gap-1 px-2 py-1 text-xs text-gray-700 hover:bg-gray-100 rounded border border-gray-200 bg-white transition-colors disabled:opacity-40"
+              >
+                <Smile className="w-3.5 h-3.5 text-amber-600" />
+                <span>Symbols</span>
+              </button>
+
+              {showSymbolsDropdown && (
+                <div className="absolute left-0 top-full mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-30 grid grid-cols-1 divide-y divide-gray-50">
+                  {COMMON_SYMBOLS.map((sym, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => {
+                        handleInsertAtCursor(sym.char);
+                        setShowSymbolsDropdown(false);
+                      }}
+                      className="flex items-center justify-between px-3 py-1.5 text-xs text-left hover:bg-blue-50 text-gray-700 hover:text-blue-700 transition-colors"
+                    >
+                      <span className="font-medium">{sym.label}</span>
+                      <span className="text-gray-400 font-mono text-[11px]">{sym.char.trim()}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Tokens quick dropdown / list */}
+          {tokens.length > 0 && (
+            <div className="relative">
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => {
+                  setShowTokensDropdown(!showTokensDropdown);
+                  setShowSymbolsDropdown(false);
+                }}
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-md border border-blue-200 transition-colors disabled:opacity-40"
+              >
+                <Tag className="w-3 h-3 text-blue-600" />
+                <span>Insert Token</span>
+              </button>
+
+              {showTokensDropdown && (
+                <div className="absolute right-0 top-full mt-1 w-56 max-h-60 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-xl py-1 z-30 divide-y divide-gray-50">
+                  <div className="px-3 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                    Available Tokens
+                  </div>
+                  {tokens.map((tok) => (
+                    <button
+                      key={tok.key}
+                      type="button"
+                      onClick={() => {
+                        handleInsertAtCursor(tok.key);
+                        setShowTokensDropdown(false);
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-xs text-left hover:bg-blue-50 text-gray-700 hover:text-blue-700 transition-colors font-mono"
+                    >
+                      <span className="text-blue-600">{tok.key}</span>
+                      <span className="text-[10px] text-gray-400">{tok.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Editor Body or Preview Body */}
+      {showPreview ? (
+        <div className="p-3 bg-emerald-50/40 rounded-b-xl min-h-[96px] border-t border-emerald-100">
+          <div className="text-[11px] font-semibold text-emerald-800 uppercase tracking-wider mb-1 flex items-center gap-1">
+            <span>WhatsApp Message Preview:</span>
+          </div>
+          <div className="bg-white border border-emerald-200/80 rounded-lg p-3 shadow-xs">
+            {renderFormattedPreview(value)}
+          </div>
+        </div>
+      ) : (
+        <div className="p-2">
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onFocus={onFocus}
+            onChange={(e) => onChange(e.target.value)}
+            rows={rows}
+            disabled={disabled}
+            placeholder={placeholder}
+            className="w-full bg-transparent border-0 px-2 py-1 text-sm font-sans focus:outline-none focus:ring-0 text-gray-900 placeholder:text-gray-400 resize-y leading-relaxed disabled:text-gray-400"
+          />
+        </div>
+      )}
+
+      {helperText && (
+        <div className="px-3 pb-2 pt-0.5 text-[11px] text-gray-500 border-t border-gray-50 bg-gray-50/30 rounded-b-xl">
+          {helperText}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Academic Notifications Section ─────────────────────────────────────────
 
 type TokenDef = { key: string; label: string };
@@ -477,69 +820,49 @@ function AcademicNotificationsSection() {
         </div>
 
         <div className="grid grid-cols-1 gap-4">
-          <div>
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-gray-600">Message template — First time published</label>
-              <button type="button" onClick={() => setActiveTpl('first')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'first' ? 'bg-gray-100' : 'bg-white'}`}>Insert tokens</button>
-            </div>
-            <textarea
-              value={tplFirst}
-              onFocus={() => setActiveTpl('first')}
-              onChange={e => setTplFirst(e.target.value)}
-              rows={4}
-              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Sample will be used if empty"
-              disabled={!studentEnabled || !firstEnabled}
-            />
-          </div>
+          <RichTemplateEditor
+            label="Message template — First time published"
+            value={tplFirst}
+            onFocus={() => setActiveTpl('first')}
+            onChange={setTplFirst}
+            rows={4}
+            disabled={!studentEnabled || !firstEnabled}
+            tokens={[...tokensCourse, ...tokensStudent]}
+            isActive={activeTpl === 'first'}
+          />
 
-          <div>
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-gray-600">Message template — Edited rows only</label>
-              <button type="button" onClick={() => setActiveTpl('edited')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'edited' ? 'bg-gray-100' : 'bg-white'}`}>Insert tokens</button>
-            </div>
-            <textarea
-              value={tplEdited}
-              onFocus={() => setActiveTpl('edited')}
-              onChange={e => setTplEdited(e.target.value)}
-              rows={4}
-              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Sample will be used if empty"
-              disabled={!studentEnabled || !editedEnabled}
-            />
-          </div>
+          <RichTemplateEditor
+            label="Message template — Edited rows only"
+            value={tplEdited}
+            onFocus={() => setActiveTpl('edited')}
+            onChange={setTplEdited}
+            rows={4}
+            disabled={!studentEnabled || !editedEnabled}
+            tokens={[...tokensCourse, ...tokensStudent]}
+            isActive={activeTpl === 'edited'}
+          />
 
-          <div>
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-gray-600">Message template — Row filled</label>
-              <button type="button" onClick={() => setActiveTpl('row')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'row' ? 'bg-gray-100' : 'bg-white'}`}>Insert tokens</button>
-            </div>
-            <textarea
-              value={tplRowFilled}
-              onFocus={() => setActiveTpl('row')}
-              onChange={e => setTplRowFilled(e.target.value)}
-              rows={4}
-              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Sample will be used if empty"
-              disabled={!studentEnabled || !rowFilledEnabled}
-            />
-          </div>
+          <RichTemplateEditor
+            label="Message template — Row filled"
+            value={tplRowFilled}
+            onFocus={() => setActiveTpl('row')}
+            onChange={setTplRowFilled}
+            rows={4}
+            disabled={!studentEnabled || !rowFilledEnabled}
+            tokens={[...tokensCourse, ...tokensStudent]}
+            isActive={activeTpl === 'row'}
+          />
 
-          <div>
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-gray-600">Message template — Every publish click</label>
-              <button type="button" onClick={() => setActiveTpl('every')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'every' ? 'bg-gray-100' : 'bg-white'}`}>Insert tokens</button>
-            </div>
-            <textarea
-              value={tplEvery}
-              onFocus={() => setActiveTpl('every')}
-              onChange={e => setTplEvery(e.target.value)}
-              rows={4}
-              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Sample will be used if empty"
-              disabled={!studentEnabled || !everyEnabled}
-            />
-          </div>
+          <RichTemplateEditor
+            label="Message template — Every publish click"
+            value={tplEvery}
+            onFocus={() => setActiveTpl('every')}
+            onChange={setTplEvery}
+            rows={4}
+            disabled={!studentEnabled || !everyEnabled}
+            tokens={[...tokensCourse, ...tokensStudent]}
+            isActive={activeTpl === 'every'}
+          />
         </div>
       </div>
 
@@ -556,20 +879,17 @@ function AcademicNotificationsSection() {
         </div>
 
         <div>
-          <div className="flex items-center justify-between">
-            <label className="text-xs font-medium text-gray-600">Message template — CQI announcement</label>
-            <button type="button" onClick={() => setActiveTpl('cqi')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'cqi' ? 'bg-gray-100' : 'bg-white'}`}>Insert tokens</button>
-          </div>
-          <textarea
+          <RichTemplateEditor
+            label="Message template — CQI announcement"
             value={tplCqiAnnounce}
             onFocus={() => setActiveTpl('cqi')}
-            onChange={e => setTplCqiAnnounce(e.target.value)}
+            onChange={setTplCqiAnnounce}
             rows={5}
-            className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder="Sample will be used if empty"
             disabled={!cqiAnnounceEnabled}
+            tokens={[...tokensCourse, ...tokensCqi]}
+            isActive={activeTpl === 'cqi'}
+            helperText="Include condition titles by using {satisfied_conditions}. CO attainments can be included via {co_attainments}"
           />
-          <div className="text-xs text-gray-500 mt-1">Include condition titles by using {`{satisfied_conditions}`}. CO attainments can be included via {`{co_attainments}`}</div>
         </div>
       </div>
 
@@ -843,69 +1163,49 @@ function FacultyRequestSection() {
 
         {/* Message templates */}
         <div className="space-y-4 pl-1">
-          <div>
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-gray-600">Message template — Request sent</label>
-              <button type="button" onClick={() => setActiveTpl('sent')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'sent' ? 'bg-gray-100 font-semibold' : 'bg-white'}`}>Insert tokens</button>
-            </div>
-            <textarea
-              value={tplSent}
-              onFocus={() => setActiveTpl('sent')}
-              onChange={e => setTplSent(e.target.value)}
-              rows={4}
-              disabled={!requestEnabled || !notifyEnabled || !notifyOnSent}
-              placeholder="Sample will be used if empty"
-              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-400"
-            />
-          </div>
+          <RichTemplateEditor
+            label="Message template — Request sent"
+            value={tplSent}
+            onFocus={() => setActiveTpl('sent')}
+            onChange={setTplSent}
+            rows={4}
+            disabled={!requestEnabled || !notifyEnabled || !notifyOnSent}
+            tokens={[...tokensRequest, ...tokensApproval]}
+            isActive={activeTpl === 'sent'}
+          />
 
-          <div>
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-gray-600">Message template — Step approved</label>
-              <button type="button" onClick={() => setActiveTpl('step')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'step' ? 'bg-gray-100 font-semibold' : 'bg-white'}`}>Insert tokens</button>
-            </div>
-            <textarea
-              value={tplStep}
-              onFocus={() => setActiveTpl('step')}
-              onChange={e => setTplStep(e.target.value)}
-              rows={4}
-              disabled={!requestEnabled || !notifyEnabled || !notifyOnStep}
-              placeholder="Sample will be used if empty"
-              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-400"
-            />
-          </div>
+          <RichTemplateEditor
+            label="Message template — Step approved"
+            value={tplStep}
+            onFocus={() => setActiveTpl('step')}
+            onChange={setTplStep}
+            rows={4}
+            disabled={!requestEnabled || !notifyEnabled || !notifyOnStep}
+            tokens={[...tokensRequest, ...tokensApproval]}
+            isActive={activeTpl === 'step'}
+          />
 
-          <div>
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-gray-600">Message template — Final approval</label>
-              <button type="button" onClick={() => setActiveTpl('final')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'final' ? 'bg-gray-100 font-semibold' : 'bg-white'}`}>Insert tokens</button>
-            </div>
-            <textarea
-              value={tplFinal}
-              onFocus={() => setActiveTpl('final')}
-              onChange={e => setTplFinal(e.target.value)}
-              rows={4}
-              disabled={!requestEnabled || !notifyEnabled || !notifyOnFinal}
-              placeholder="Sample will be used if empty"
-              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-400"
-            />
-          </div>
+          <RichTemplateEditor
+            label="Message template — Final approval"
+            value={tplFinal}
+            onFocus={() => setActiveTpl('final')}
+            onChange={setTplFinal}
+            rows={4}
+            disabled={!requestEnabled || !notifyEnabled || !notifyOnFinal}
+            tokens={[...tokensRequest, ...tokensApproval]}
+            isActive={activeTpl === 'final'}
+          />
 
-          <div>
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-gray-600">Message template — Published</label>
-              <button type="button" onClick={() => setActiveTpl('published')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'published' ? 'bg-gray-100 font-semibold' : 'bg-white'}`}>Insert tokens</button>
-            </div>
-            <textarea
-              value={tplPublished}
-              onFocus={() => setActiveTpl('published')}
-              onChange={e => setTplPublished(e.target.value)}
-              rows={4}
-              disabled={!requestEnabled || !notifyEnabled || !notifyOnPublished}
-              placeholder="Sample will be used if empty"
-              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-400"
-            />
-          </div>
+          <RichTemplateEditor
+            label="Message template — Published"
+            value={tplPublished}
+            onFocus={() => setActiveTpl('published')}
+            onChange={setTplPublished}
+            rows={4}
+            disabled={!requestEnabled || !notifyEnabled || !notifyOnPublished}
+            tokens={[...tokensRequest, ...tokensApproval]}
+            isActive={activeTpl === 'published'}
+          />
         </div>
       </div>
 

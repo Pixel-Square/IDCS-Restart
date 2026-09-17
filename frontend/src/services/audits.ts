@@ -13,7 +13,7 @@ export type AuditStaff = {
   staff_id?: string;
   name: string;
   designation?: string;
-  department?: { id: number; name: string; code?: string } | string;
+  department?: { id: number; name: string; code?: string; short_name?: string } | any;
   is_iqac?: boolean;
   [key: string]: any;
 };

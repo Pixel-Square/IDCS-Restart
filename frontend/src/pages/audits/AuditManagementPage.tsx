@@ -149,7 +149,7 @@ export default function AuditManagementPage() {
 
   const filteredStaff = useMemo(() => {
     if (auditorDept === '') return staff
-    return staff.filter((s) => s.department && s.department.id === Number(auditorDept))
+    return staff.filter((s) => s.department && (typeof s.department === 'object' ? s.department.id === Number(auditorDept) : false))
   }, [staff, auditorDept])
 
   const toggleAuditor = (id: number) => {
@@ -207,16 +207,16 @@ export default function AuditManagementPage() {
   }
 
   const openAddQuestion = () => {
-    const nextSl = questions.length ? Math.max(...questions.map((q) => q.sl_no)) + 1 : 1
+    const nextSl = questions.length + 1
     setQForm({ sl_no: String(nextSl), details: '', documents_checklist: '', detailed_description: '', max_marks: '10' })
     setEditingQId(null)
     setQMsg('')
     setAddingQ(true)
   }
 
-  const startEditQuestion = (q: AuditQuestion) => {
+  const startEditQuestion = (q: AuditQuestion, displayIndex?: number) => {
     setQForm({
-      sl_no: String(q.sl_no),
+      sl_no: String(displayIndex !== undefined ? displayIndex : (q.sl_no || 1)),
       details: q.details,
       documents_checklist: q.documents_checklist || '',
       detailed_description: q.detailed_description || '',
@@ -234,16 +234,14 @@ export default function AuditManagementPage() {
   }
 
   const saveQuestion = async () => {
-    const sl_no = Number(qForm.sl_no)
     const maxMarks = Number(qForm.max_marks)
-    if (!qForm.details.trim() || !sl_no) {
-      setQMsg('Please fill S.No and Details.')
+    if (!qForm.details.trim()) {
+      setQMsg('Please fill Details.')
       return
     }
     setQSaving(true)
     setQMsg('')
     const payload = {
-      sl_no,
       details: qForm.details.trim(),
       documents_checklist: qForm.documents_checklist,
       detailed_description: qForm.detailed_description,
@@ -268,10 +266,11 @@ export default function AuditManagementPage() {
     }
   }
 
-  const removeQuestion = (q: AuditQuestion) => {
+  const removeQuestion = (q: AuditQuestion, displayIndex?: number) => {
+    const num = displayIndex !== undefined ? displayIndex : q.sl_no
     passwordConfirm.ask({
       title: 'Delete Question',
-      message: `Delete question "Q${q.sl_no}. ${q.details.slice(0, 60)}"?\n\nIt will be hidden from new audits (existing scores are kept).`,
+      message: `Delete question "Q${num}. ${q.details.slice(0, 60)}"?\n\nIt will be hidden from new audits (existing scores are kept).`,
       actionLabel: 'Delete Question',
       onConfirm: async (password) => {
         await deleteAuditQuestion(q.id, password)
@@ -315,7 +314,7 @@ export default function AuditManagementPage() {
 
   /** Open the inline "add new question" form inside the set editor (prefills next S.No). */
   const openSetNewQ = () => {
-    const nextSl = questions.length ? Math.max(...questions.map((q) => q.sl_no)) + 1 : 1
+    const nextSl = questions.length + 1
     setSetNewQForm({ sl_no: String(nextSl), details: '', documents_checklist: '', detailed_description: '', max_marks: '10' })
     setSetNewQMsg('')
     setSetNewQOpen(true)
@@ -323,22 +322,20 @@ export default function AuditManagementPage() {
 
   /** Create a brand-new question and add it to the set currently being edited. */
   const saveSetNewQ = async () => {
-    const sl_no = Number(setNewQForm.sl_no)
-    if (!setNewQForm.details.trim() || !sl_no) {
-      setSetNewQMsg('Please fill S.No and Details.')
+    if (!setNewQForm.details.trim()) {
+      setSetNewQMsg('Please fill Details.')
       return
     }
     setSetNewQSaving(true)
     setSetNewQMsg('')
     try {
       const q = await createAuditQuestion({
-        sl_no,
         details: setNewQForm.details.trim(),
         documents_checklist: setNewQForm.documents_checklist,
         detailed_description: setNewQForm.detailed_description,
         max_marks: Number(setNewQForm.max_marks) || 10,
       })
-      setQuestions((prev) => [...prev, q].sort((a, b) => a.sl_no - b.sl_no))
+      await loadAll()
       setSetForm((f) => ({
         ...f,
         question_ids: f.question_ids.includes(q.id) ? f.question_ids : [...f.question_ids, q.id],
@@ -353,14 +350,15 @@ export default function AuditManagementPage() {
   }
 
   /** Delete a question (password-gated) from within the set editor and drop it from the set. */
-  const removeSetQuestion = (q: AuditQuestion) => {
+  const removeSetQuestion = (q: AuditQuestion, displayIndex?: number) => {
+    const num = displayIndex !== undefined ? displayIndex : q.sl_no
     passwordConfirm.ask({
       title: 'Delete Question',
-      message: `Delete question "Q${q.sl_no}. ${q.details.slice(0, 60)}"?\n\nIt will be hidden from all question sets and new audits.`,
+      message: `Delete question "Q${num}. ${q.details.slice(0, 60)}"?\n\nIt will be hidden from all question sets and new audits.`,
       actionLabel: 'Delete Question',
       onConfirm: async (password) => {
         await deleteAuditQuestion(q.id, password)
-        setQuestions((prev) => prev.filter((x) => x.id !== q.id))
+        await loadAll()
         setSetForm((f) => ({ ...f, question_ids: f.question_ids.filter((x) => x !== q.id) }))
       },
     })
@@ -513,7 +511,7 @@ export default function AuditManagementPage() {
       const d = await fetchAuditAssignmentDetail(assignmentId)
       setEditDetail(d)
       if (d) {
-        setEditStatus(d.status)
+        setEditStatus((d.status as any) || 'SUBMITTED')
         const next: Record<number, { marks: string; comments: string }> = {}
         for (const q of d.questions) {
           next[q.question_id] = { marks: q.marks ?? '', comments: q.comments || '' }
@@ -717,7 +715,9 @@ export default function AuditManagementPage() {
                       />
                       <span>{s.name}</span>
                       <span className="text-xs text-gray-400">{s.staff_id}</span>
-                      <span className="text-xs text-gray-400 ml-auto">{s.department?.short_name || s.department?.code || ''}</span>
+                      <span className="text-xs text-gray-400 ml-auto">
+                        {typeof s.department === 'object' && s.department ? (s.department.short_name || s.department.code || '') : (s.department || '')}
+                      </span>
                     </label>
                   ))}
                   {filteredStaff.length === 0 && <p className="text-sm text-gray-400 p-2">No staff found in this department.</p>}
@@ -1039,11 +1039,11 @@ export default function AuditManagementPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y">
-                    {questions.map((q) =>
+                    {questions.map((q, idx) =>
                       editingQId === q.id ? (
                         <tr key={q.id} className="bg-blue-50/50 align-top">
                           <td className="px-4 py-2">
-                            <input type="number" min={1} value={qForm.sl_no} disabled className="w-16 border rounded-lg px-2 py-1.5 text-sm bg-gray-100 text-gray-500 cursor-not-allowed" />
+                            <input type="number" min={1} value={idx + 1} disabled className="w-16 border rounded-lg px-2 py-1.5 text-sm bg-gray-100 text-gray-500 cursor-not-allowed" />
                           </td>
                           <td className="px-4 py-2">
                             <input value={qForm.details} onChange={(e) => setQForm((f) => ({ ...f, details: e.target.value }))} className="w-full border rounded-lg px-3 py-1.5 text-sm" placeholder="Question details…" />
@@ -1066,7 +1066,7 @@ export default function AuditManagementPage() {
                         </tr>
                       ) : (
                         <tr key={q.id} className="hover:bg-gray-50 align-top">
-                          <td className="px-4 py-2">{q.sl_no}</td>
+                          <td className="px-4 py-2">{idx + 1}</td>
                           <td className="px-4 py-2">
                             <div className="font-medium">{q.details}</div>
                             {q.detailed_description && <div className="text-xs text-gray-400 mt-0.5">{q.detailed_description}</div>}
@@ -1074,10 +1074,10 @@ export default function AuditManagementPage() {
                           <td className="px-4 py-2 text-xs text-gray-500">{q.documents_checklist}</td>
                           <td className="px-4 py-2">{q.max_marks}</td>
                           <td className="px-4 py-2 text-right whitespace-nowrap">
-                            <button onClick={() => startEditQuestion(q)} className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded-lg text-blue-700 hover:bg-blue-50">
+                            <button onClick={() => startEditQuestion(q, idx + 1)} className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded-lg text-blue-700 hover:bg-blue-50">
                               <Pencil size={14} /> Edit
                             </button>
-                            <button onClick={() => removeQuestion(q)} className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded-lg text-red-600 hover:bg-red-50 ml-1">
+                            <button onClick={() => removeQuestion(q, idx + 1)} className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded-lg text-red-600 hover:bg-red-50 ml-1">
                               <Trash2 size={14} /> Delete
                             </button>
                           </td>
@@ -1095,7 +1095,7 @@ export default function AuditManagementPage() {
                   <div className="grid md:grid-cols-[120px_1fr] gap-3">
                     <div>
                       <label className="text-xs text-gray-500">S.No</label>
-                      <input type="number" min={1} value={qForm.sl_no} disabled className="w-full border rounded-lg px-3 py-2 text-sm mt-1 bg-gray-100 text-gray-500 cursor-not-allowed" />
+                      <input type="number" min={1} value={questions.length + 1} disabled className="w-full border rounded-lg px-3 py-2 text-sm mt-1 bg-gray-100 text-gray-500 cursor-not-allowed" />
                     </div>
                     <div>
                       <label className="text-xs text-gray-500">Details</label>
@@ -1191,7 +1191,7 @@ export default function AuditManagementPage() {
                         <div className="grid md:grid-cols-[90px_1fr_90px] gap-2">
                           <div>
                             <label className="text-[11px] text-gray-500">S.No</label>
-                            <input type="number" min={1} value={setNewQForm.sl_no} disabled className="w-full border rounded-lg px-2 py-1.5 text-sm mt-0.5 bg-gray-100 text-gray-500 cursor-not-allowed" />
+                            <input type="number" min={1} value={questions.length + 1} disabled className="w-full border rounded-lg px-2 py-1.5 text-sm mt-0.5 bg-gray-100 text-gray-500 cursor-not-allowed" />
                           </div>
                           <div>
                             <label className="text-[11px] text-gray-500">Details</label>
@@ -1221,7 +1221,7 @@ export default function AuditManagementPage() {
                     )}
 
                     <div className="max-h-64 overflow-y-auto border rounded-lg bg-white divide-y">
-                      {questions.map((q) => (
+                      {questions.map((q, idx) => (
                         <div key={q.id} className="flex items-start gap-3 px-3 py-2 hover:bg-indigo-50 group">
                           <label className="flex items-start gap-3 flex-1 min-w-0 cursor-pointer">
                             <input
@@ -1231,13 +1231,13 @@ export default function AuditManagementPage() {
                               className="mt-0.5 rounded"
                             />
                             <div className="flex-1 min-w-0">
-                              <span className="text-xs font-semibold text-gray-600 mr-1">Q{q.sl_no}.</span>
+                              <span className="text-xs font-semibold text-gray-600 mr-1">Q{idx + 1}.</span>
                               <span className="text-sm text-gray-800">{q.details}</span>
                               <span className="ml-2 text-xs text-gray-400">Max: {q.max_marks}</span>
                             </div>
                           </label>
                           <button
-                            onClick={() => removeSetQuestion(q)}
+                            onClick={() => removeSetQuestion(q, idx + 1)}
                             className="shrink-0 p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
                             title="Delete this question (removes it from all sets)"
                           >
@@ -1278,8 +1278,8 @@ export default function AuditManagementPage() {
                       </span>
                     </div>
                     <div className="text-xs text-gray-500 flex flex-wrap gap-1 max-h-20 overflow-y-auto">
-                      {qs.questions_detail.map((q) => (
-                        <span key={q.id} className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-600">Q{q.sl_no}</span>
+                      {qs.questions_detail.map((q, idx) => (
+                        <span key={q.id} className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-600">Q{q.sl_no || idx + 1}</span>
                       ))}
                     </div>
                   </div>
@@ -1419,7 +1419,7 @@ export default function AuditManagementPage() {
                                       <span>{au.name}</span>
                                       {au.department && (
                                         <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 text-[10px] font-medium">
-                                          {au.department.short_name || au.department.code || au.department.name}
+                                          {typeof au.department === 'object' ? (au.department.short_name || au.department.code || au.department.name) : au.department}
                                         </span>
                                       )}
                                     </div>

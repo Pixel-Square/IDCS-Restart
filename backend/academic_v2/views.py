@@ -148,6 +148,10 @@ def google_sheet_links(request):
                 'sheetTab': str(payload.get('sheetTab') or payload.get('sheet_tab') or existing_exam_config.get('sheetTab') or '').strip(),
                 'regNoColumn': str(mapping_payload.get('regNoColumn') or mapping_payload.get('reg_no_column') or existing_exam_config.get('regNoColumn') or 'A').strip().upper(),
                 'nameColumn': str(mapping_payload.get('nameColumn') or mapping_payload.get('name_column') or existing_exam_config.get('nameColumn') or 'B').strip().upper(),
+                'coRow': mapping_payload.get('coRow') or mapping_payload.get('co_row') or existing_exam_config.get('coRow') or None,
+                'maxMarksRow': mapping_payload.get('maxMarksRow') or mapping_payload.get('max_marks_row') or existing_exam_config.get('maxMarksRow') or None,
+                'titleRow': mapping_payload.get('titleRow') or mapping_payload.get('title_row') or existing_exam_config.get('titleRow') or None,
+                'startRow': mapping_payload.get('startRow') or mapping_payload.get('start_row') or existing_exam_config.get('startRow') or None,
                 'questionColumns': mapping_payload.get('questionColumns') or mapping_payload.get('question_columns') or existing_exam_config.get('questionColumns') or {},
             }
             exam_configs[str(exam_id)] = merged
@@ -319,8 +323,12 @@ def google_sheet_links(request):
                 'classTypeName': class_type_display,
                 'qpType': getattr(exam_assignment, 'qp_type', '') or '',
                 'columnMapping': {
-                    'regNoColumn': assignment_config.get('regNoColumn') or 'A',
-                    'nameColumn': assignment_config.get('nameColumn') or 'B',
+                    'regNoColumn': assignment_config.get('regNoColumn') or ('D' if (mm_info and mm_info.get('mode') == 'user_defined') else 'A'),
+                    'nameColumn': assignment_config.get('nameColumn') or ('E' if (mm_info and mm_info.get('mode') == 'user_defined') else 'B'),
+                    'coRow': assignment_config.get('coRow') or (6 if (mm_info and mm_info.get('mode') == 'user_defined') else None),
+                    'maxMarksRow': assignment_config.get('maxMarksRow') or (8 if (mm_info and mm_info.get('mode') == 'user_defined') else None),
+                    'titleRow': assignment_config.get('titleRow') or (5 if (mm_info and mm_info.get('mode') == 'user_defined') else None),
+                    'startRow': assignment_config.get('startRow') or (9 if (mm_info and mm_info.get('mode') == 'user_defined') else None),
                     'questionColumns': assignment_config.get('questionColumns') if isinstance(assignment_config.get('questionColumns'), dict) else {},
                 },
                 'markManager': mm_info,
@@ -750,6 +758,191 @@ def google_sheets_inject_script(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def google_sheets_derive_mark_manager(request):
+    """
+    Inspect Google Sheet header rows (CO row, Max Marks row, Title row) and derive
+    the Mark Manager configuration, question items, and column mappings automatically.
+    Optional apply=True applies this derived configuration to the Exam Assignment.
+    """
+    from .google_sheets_service import derive_mark_manager_from_sheet
+
+    payload = request.data or {}
+    section_id = payload.get('sectionId') or payload.get('section_id')
+    exam_assignment_id = payload.get('examAssignmentId') or payload.get('exam_assignment_id')
+    spreadsheet_id = str(payload.get('spreadsheetId') or payload.get('spreadsheet_id') or '').strip()
+    sheet_tab = str(payload.get('sheetTab') or payload.get('sheet_tab') or '').strip()
+    apply_to_ea = bool(payload.get('apply'))
+    config = payload.get('config') or {}
+
+    link = None
+    if section_id:
+        link = AcV2GoogleSheetLink.objects.filter(section_id=section_id, is_active=True).first()
+    elif exam_assignment_id:
+        ea = AcV2ExamAssignment.objects.filter(pk=exam_assignment_id).first()
+        if ea:
+            link = AcV2GoogleSheetLink.objects.filter(section=ea.section, is_active=True).first()
+
+    exam_saved_cfg = {}
+    if link and isinstance(link.exam_configs, dict) and exam_assignment_id:
+        exam_saved_cfg = link.exam_configs.get(str(exam_assignment_id)) or {}
+
+    co_row = payload.get('coRow') or payload.get('co_row') or exam_saved_cfg.get('coRow') or 6
+    max_marks_row = payload.get('maxMarksRow') or payload.get('max_marks_row') or exam_saved_cfg.get('maxMarksRow') or 8
+    title_row = payload.get('titleRow') or payload.get('title_row') or exam_saved_cfg.get('titleRow') or 5
+    start_row = payload.get('startRow') or payload.get('start_row') or exam_saved_cfg.get('startRow') or 9
+    reg_no_column = str(payload.get('regNoColumn') or payload.get('reg_no_column') or exam_saved_cfg.get('regNoColumn') or 'D').strip().upper()
+    name_column = str(payload.get('nameColumn') or payload.get('name_column') or exam_saved_cfg.get('nameColumn') or 'E').strip().upper()
+    if not sheet_tab and exam_saved_cfg.get('sheetTab'):
+        sheet_tab = str(exam_saved_cfg.get('sheetTab')).strip()
+
+    if not spreadsheet_id and link and link.spreadsheet_id:
+        spreadsheet_id = link.spreadsheet_id
+
+    if not spreadsheet_id:
+        return Response({'detail': 'Linked Google Sheet not found. Please link a Google Sheet first.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    ea_obj = AcV2ExamAssignment.objects.filter(pk=exam_assignment_id).first() if exam_assignment_id else None
+    if not sheet_tab and ea_obj:
+        sheet_tab = ea_obj.exam_display_name or ea_obj.exam or 'Marks'
+
+    target_exam_name = str(payload.get('examName') or payload.get('exam_name') or (ea_obj.exam_display_name or ea_obj.exam if ea_obj else '') or sheet_tab or '').strip()
+
+    try:
+        result = derive_mark_manager_from_sheet(
+            spreadsheet_id=spreadsheet_id,
+            sheet_name=sheet_tab or 'Marks',
+            config=config,
+            exam_name=target_exam_name,
+            co_row=co_row,
+            max_marks_row=max_marks_row,
+            title_row=title_row,
+            reg_no_column=reg_no_column,
+            name_column=name_column,
+        )
+    except GoogleSheetsServiceError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as exc:
+        return Response({'detail': f'Error deriving Mark Manager from sheet: {str(exc)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    derived_mm = result.get('derived_mark_manager') or {}
+    q_cols = result.get('question_columns_mapping') or {}
+
+    if apply_to_ea and exam_assignment_id:
+        target_ea = AcV2ExamAssignment.objects.filter(pk=exam_assignment_id).first()
+        if target_ea:
+            cos_cfg = derived_mm.get('cos', {})
+            cia_enabled = derived_mm.get('cia_enabled', False)
+            cia_max_marks = float(derived_mm.get('cia_max_marks') or 0)
+            cia_cos = derived_mm.get('cia_cos') or []
+            cia_label = derived_mm.get('cia_label') or 'Exam'
+            item_name = derived_mm.get('item_name') or 'Experiments'
+
+            titles = []
+            marks = []
+            cos_list = []
+            btls = []
+            enabled = []
+            total_max = 0.0
+
+            for co_str in sorted(cos_cfg.keys(), key=lambda x: int(x)):
+                co_num = int(co_str)
+                c_cfg = cos_cfg[co_str]
+                if not c_cfg.get('enabled'):
+                    continue
+                num_items = int(c_cfg.get('num_items', 1))
+                per_item_max = float(c_cfg.get('max_marks', 0))
+                total_max += per_item_max * num_items
+                for i in range(num_items):
+                    titles.append(f'CO{co_num} - {item_name} {i + 1}')
+                    marks.append(per_item_max)
+                    cos_list.append(co_num)
+                    btls.append(None)
+                    enabled.append(True)
+
+            exam_cols = derived_mm.get('exam_columns') or derived_mm.get('special_columns')
+            if isinstance(exam_cols, list) and exam_cols:
+                for ex_it in exam_cols:
+                    ex_lbl = str(ex_it.get('label') or ex_it.get('title') or 'Exam').strip() or 'Exam'
+                    ex_max = float(ex_it.get('max_marks') or 0)
+                    ex_cos = ex_it.get('cos') or ex_it.get('co')
+                    if ex_max > 0:
+                        titles.append(ex_lbl)
+                        marks.append(ex_max)
+                        cos_list.append(ex_cos if ex_cos else None)
+                        btls.append(None)
+                        enabled.append(True)
+                        total_max += ex_max
+            elif cia_enabled and cia_max_marks > 0:
+                titles.append(cia_label)
+                marks.append(cia_max_marks)
+                cos_list.append(cia_cos if cia_cos else None)
+                btls.append(None)
+                enabled.append(True)
+                total_max += cia_max_marks
+
+            new_user_pattern = {
+                'titles': titles,
+                'marks': marks,
+                'cos': cos_list,
+                'btls': btls,
+                'enabled': enabled,
+                'mark_manager': {
+                    **derived_mm,
+                    'confirmed': True,
+                },
+            }
+
+            c_type = getattr(getattr(target_ea.section, 'course', None), 'class_type', None)
+            c_type_code = str(getattr(c_type, 'name', 'THEORY') or 'THEORY').strip().upper()
+            target_qp = str(getattr(target_ea, 'qp_type', '') or '').strip().upper()
+            target_name = str(target_ea.exam_display_name or target_ea.exam or '').strip().lower()
+
+            matching_eas = [target_ea]
+            if target_qp and target_name:
+                for other_ea in AcV2ExamAssignment.objects.filter(qp_type__iexact=target_qp):
+                    if str(other_ea.exam_display_name or other_ea.exam or '').strip().lower() == target_name:
+                        o_ctype = getattr(getattr(other_ea.section, 'course', None), 'class_type', None)
+                        o_code = str(getattr(o_ctype, 'name', 'THEORY') or 'THEORY').strip().upper()
+                        if o_code == c_type_code:
+                            matching_eas.append(other_ea)
+
+            for ea_item in set(matching_eas):
+                d = ea_item.draft_data if isinstance(ea_item.draft_data, dict) else {}
+                d['user_pattern'] = new_user_pattern
+                ea_item.draft_data = d
+                ea_item.max_marks = total_max
+                ea_item.save(update_fields=['draft_data', 'max_marks', 'updated_at'])
+
+            if link:
+                cfgs = link.exam_configs if isinstance(link.exam_configs, dict) else {}
+                cfgs[str(target_ea.id)] = {
+                    **(cfgs.get(str(target_ea.id)) or {}),
+                    'sheetTab': sheet_tab,
+                    'regNoColumn': reg_no_column,
+                    'nameColumn': name_column,
+                    'coRow': co_row,
+                    'maxMarksRow': max_marks_row,
+                    'titleRow': title_row,
+                    'startRow': start_row,
+                    'questionColumns': q_cols,
+                }
+                link.exam_configs = cfgs
+                link.save(update_fields=['exam_configs', 'updated_at'])
+
+    return Response({
+        'success': True,
+        'mark_manager': derived_mm,
+        'columns': result.get('parsed_columns', []),
+        'questionColumns': q_cols,
+        'total_marks': result.get('total_marks', 0),
+        'detected_cos': result.get('detected_cos', []),
+        'resolved_sheet_tab': result.get('resolved_sheet_tab') or sheet_tab,
+        'available_sheet_tabs': result.get('available_sheet_tabs', []),
+    })
+
+
+@api_view(['POST'])
 @csrf_exempt
 def google_sheets_webhook(request):
     """Webhook endpoint called by the Google Apps Script in a linked sheet.
@@ -787,6 +980,7 @@ def google_sheets_webhook(request):
 
     questions = _get_qp_specs_for_exam(exam_assignment)
     title_to_qid = {}
+    has_zero_indexed = any(str(q.get('id') or '').lower() == 'q0' for q in questions)
     for index, q in enumerate(questions):
         qid = str(q.get('id') or f'q{index}')
         qtitle = str(q.get('title') or '').strip()
@@ -800,9 +994,12 @@ def google_sheets_webhook(request):
             stripped = qtitle.lstrip('Qq').strip()
             if stripped:
                 title_to_qid[stripped] = qid
-        title_to_qid[str(index + 1)] = qid
-        title_to_qid[f"Q{index + 1}"] = qid
-        title_to_qid[f"q{index + 1}"] = qid
+        if not has_zero_indexed:
+            title_to_qid[str(index + 1)] = qid
+            title_to_qid[f"Q{index + 1}"] = qid
+            title_to_qid[f"q{index + 1}"] = qid
+        else:
+            title_to_qid[str(index)] = qid
 
     updated_count = 0
     for row_data in rows:
@@ -1636,24 +1833,59 @@ def _get_student_profile_for_request(request):
     return StudentProfile.objects.select_related('user').filter(user=request.user).first()
 
 
-def _student_can_access_ta_ids(student_profile):
-    from academics.models import StudentSectionAssignment, TeachingAssignment
+def _student_can_access_ta_ids(student_profile, is_past=False):
+    from academics.models import AcademicYear, StudentSectionAssignment, TeachingAssignment
 
-    section_ids = list(
-        StudentSectionAssignment.objects.filter(
-            student=student_profile,
-            end_date__isnull=True,
-        ).values_list('section_id', flat=True)
-    )
-    if not section_ids:
-        return []
+    active_year = AcademicYear.objects.filter(is_active=True).first()
 
-    return list(
-        TeachingAssignment.objects.filter(
+    if not is_past:
+        section_ids = list(
+            StudentSectionAssignment.objects.filter(
+                student=student_profile,
+                end_date__isnull=True,
+            ).values_list('section_id', flat=True)
+        )
+        if not section_ids:
+            return []
+
+        qs = TeachingAssignment.objects.filter(
             is_active=True,
             section_id__in=section_ids,
-        ).values_list('id', flat=True)
-    )
+        )
+        if active_year:
+            qs = qs.filter(academic_year=active_year)
+        return list(qs.values_list('id', flat=True))
+    else:
+        all_section_ids = list(
+            StudentSectionAssignment.objects.filter(
+                student=student_profile,
+            ).values_list('section_id', flat=True)
+        )
+
+        active_ta_ids = set(_student_can_access_ta_ids(student_profile, is_past=False))
+
+        qs = TeachingAssignment.objects.filter(
+            section_id__in=all_section_ids,
+        )
+        if active_year:
+            qs = qs.exclude(academic_year=active_year, is_active=True)
+        else:
+            qs = qs.filter(is_active=False)
+
+        past_ta_ids = set(qs.values_list('id', flat=True))
+
+        mark_section_ids = AcV2StudentMark.objects.filter(
+            student=student_profile
+        ).values_list('exam_assignment__section_id', flat=True)
+
+        mark_ta_ids = set(
+            AcV2Section.objects.filter(
+                id__in=mark_section_ids
+            ).values_list('teaching_assignment_id', flat=True)
+        )
+
+        past_ta_ids.update(mark_ta_ids - active_ta_ids)
+        return list(past_ta_ids)
 
 
 def _course_header_from_section(section):
@@ -1696,12 +1928,12 @@ def student_my_marks_config(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def student_my_courses(request):
-    """Student-facing list of assigned courses with entered-weight aggregates."""
+    """Student-facing list of active assigned courses with entered-weight aggregates."""
     sp = _get_student_profile_for_request(request)
     if sp is None:
         return Response({'detail': 'Student profile not found.'}, status=404)
 
-    allowed_ta_ids = _student_can_access_ta_ids(sp)
+    allowed_ta_ids = _student_can_access_ta_ids(sp, is_past=False)
     if not allowed_ta_ids:
         return Response({'courses': []})
 
@@ -1788,13 +2020,99 @@ def student_my_courses(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+def student_my_past_courses(request):
+    """Student-facing list of non-active academic year courses with entered-weight aggregates."""
+    sp = _get_student_profile_for_request(request)
+    if sp is None:
+        return Response({'detail': 'Student profile not found.'}, status=404)
+
+    allowed_ta_ids = _student_can_access_ta_ids(sp, is_past=True)
+    if not allowed_ta_ids:
+        return Response({'courses': []})
+
+    sections = (
+        AcV2Section.objects
+        .select_related('course__semester', 'course', 'faculty_user', 'teaching_assignment__academic_year')
+        .filter(teaching_assignment_id__in=allowed_ta_ids)
+    )
+
+    exams = list(
+        AcV2ExamAssignment.objects.filter(section_id__in=[s.id for s in sections]).select_related('section__course')
+    )
+    exam_ids = [e.id for e in exams]
+    marks_map = {
+        str(sm.exam_assignment_id): sm
+        for sm in AcV2StudentMark.objects.filter(student=sp, exam_assignment_id__in=exam_ids)
+    }
+
+    exams_by_section = {}
+    for ea in exams:
+        exams_by_section.setdefault(str(ea.section_id), []).append(ea)
+
+    courses = []
+    for sec in sections:
+        header = _course_header_from_section(sec)
+        sec_exams = exams_by_section.get(str(sec.id), [])
+
+        exams_entered = 0
+        total_obtained_weight = 0.0
+        total_entered_weight = 0.0
+
+        for ea in sec_exams:
+            sm = marks_map.get(str(ea.id))
+            has_payload = sm is not None
+            if not has_payload:
+                continue
+
+            exams_entered += 1
+            weight = _to_float(getattr(ea, 'weight', 0))
+            total_entered_weight += weight
+
+            max_marks = _to_float(getattr(ea, 'max_marks', 0))
+            obtained = None if sm.total_mark is None else _to_float(sm.total_mark)
+            if (not sm.is_absent) and obtained is not None and max_marks > 0:
+                total_obtained_weight += (obtained / max_marks) * weight
+
+        entered_weight_pct = None
+        if total_entered_weight > 0:
+            entered_weight_pct = (total_obtained_weight / total_entered_weight) * 100.0
+
+        sem_obj = getattr(sec.course, 'semester', None) if getattr(sec, 'course', None) else None
+        sem_num = getattr(sem_obj, 'number', None) if sem_obj else None
+        sem_name = f"Semester {sem_num}" if sem_num is not None else (str(sem_obj) if sem_obj else "")
+
+        ta_obj = getattr(sec, 'teaching_assignment', None)
+        ay_obj = getattr(ta_obj, 'academic_year', None) if ta_obj else None
+        ay_name = str(ay_obj) if ay_obj else ""
+
+        courses.append({
+            'ta_id': sec.teaching_assignment_id,
+            'course_code': header['course_code'],
+            'course_name': header['course_name'],
+            'class_type': header['class_type'],
+            'faculty_name': header['faculty_name'],
+            'semester_name': sem_name or ay_name,
+            'semester_number': sem_num,
+            'academic_year': ay_name,
+            'exams_entered': exams_entered,
+            'obtained_weight': round(total_obtained_weight, 2),
+            'max_weight': round(total_entered_weight, 2),
+            'entered_weight_pct': round(entered_weight_pct, 2) if entered_weight_pct is not None else None,
+        })
+
+    courses.sort(key=lambda c: (str(c.get('semester_name') or ''), str(c.get('course_code') or '')))
+    return Response({'courses': courses})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def student_my_course_detail(request, ta_id: int):
     """Student-facing course detail grouped by cycle with exam-level rows."""
     sp = _get_student_profile_for_request(request)
     if sp is None:
         return Response({'detail': 'Student profile not found.'}, status=404)
 
-    allowed_ta_ids = set(_student_can_access_ta_ids(sp))
+    allowed_ta_ids = set(_student_can_access_ta_ids(sp, is_past=False) + _student_can_access_ta_ids(sp, is_past=True))
     if int(ta_id) not in allowed_ta_ids:
         return Response({'detail': 'Course not found.'}, status=404)
 
@@ -1875,7 +2193,10 @@ def student_my_course_detail(request, ta_id: int):
         bucket['exams'].sort(key=lambda x: (x.get('exam_display') or x.get('exam') or ''))
         cycles.append(bucket)
 
-    cycles.sort(key=lambda c: (int(c.get('cycle_order') or 999), str(c.get('cycle_name') or '')))
+    cycles.sort(key=lambda c: (
+        c.get('cycle_order') if c.get('cycle_order') is not None else 999,
+        str(c.get('cycle_name') or '')
+    ))
     header = _course_header_from_section(section)
 
     return Response({
@@ -2136,7 +2457,7 @@ def student_my_course_top_students(request, ta_id: int):
     if sp is None:
         return Response({'detail': 'Student profile not found.'}, status=404)
 
-    allowed_ta_ids = set(_student_can_access_ta_ids(sp))
+    allowed_ta_ids = set(_student_can_access_ta_ids(sp, is_past=False) + _student_can_access_ta_ids(sp, is_past=True))
     if int(ta_id) not in allowed_ta_ids:
         return Response({'detail': 'Course not found.'}, status=404)
 
@@ -5447,6 +5768,101 @@ def faculty_exam_info(request, exam_id):
     # Check if user has a course-specific pattern (from Mark Manager user_define mode)
     user_pattern = draft.get('user_pattern') if is_user_define_mode else None
 
+    # If linked Google Sheet exists for this section, automatically derive and sync Mark Manager pattern
+    link = AcV2GoogleSheetLink.objects.filter(section=ea.section, is_active=True).first()
+    if is_user_define_mode and link and link.spreadsheet_id:
+        try:
+            exam_config = _resolve_google_sheet_exam_config(ea, link)
+            sheet_name = str(exam_config.get('sheetTab') or ea.exam_display_name or ea.exam or 'Marks').strip()
+            from .google_sheets_service import derive_mark_manager_from_sheet
+            derived_info = derive_mark_manager_from_sheet(
+                spreadsheet_id=link.spreadsheet_id,
+                sheet_name=sheet_name,
+                config={},
+                exam_name=ea.exam_display_name or ea.exam or sheet_name,
+                co_row=exam_config.get('coRow') or 6,
+                max_marks_row=exam_config.get('maxMarksRow') or 8,
+                title_row=exam_config.get('titleRow') or 5,
+                reg_no_column=exam_config.get('regNoColumn') or 'D',
+                name_column=exam_config.get('nameColumn') or 'E',
+            )
+            if derived_info and derived_info.get('parsed_columns'):
+                derived_mm = derived_info.get('derived_mark_manager') or {}
+                cos_cfg = derived_mm.get('cos', {})
+                cia_enabled = derived_mm.get('cia_enabled', False)
+                cia_max_marks = float(derived_mm.get('cia_max_marks') or 0)
+                cia_cos = derived_mm.get('cia_cos') or []
+                cia_label = derived_mm.get('cia_label') or 'Exam'
+                item_name = derived_mm.get('item_name') or 'Experiments'
+
+                titles = []
+                marks_list = []
+                cos_list = []
+                btls = []
+                enabled = []
+                total_max = 0.0
+                covered_cos = []
+
+                for co_str in sorted(cos_cfg.keys(), key=lambda x: int(x)):
+                    co_num = int(co_str)
+                    c_cfg = cos_cfg[co_str]
+                    if not c_cfg.get('enabled'):
+                        continue
+                    covered_cos.append(co_num)
+                    num_items = int(c_cfg.get('num_items', 1))
+                    per_item_max = float(c_cfg.get('max_marks', 0))
+                    total_max += per_item_max * num_items
+                    for i in range(num_items):
+                        titles.append(f'CO{co_num} - {item_name} {i + 1}')
+                        marks_list.append(per_item_max)
+                        cos_list.append(co_num)
+                        btls.append(None)
+                        enabled.append(True)
+
+                exam_cols = derived_mm.get('exam_columns') or derived_mm.get('special_columns')
+                if isinstance(exam_cols, list) and exam_cols:
+                    for ex_it in exam_cols:
+                        if ex_it.get('enabled') is False:
+                            continue
+                        ex_lbl = str(ex_it.get('label') or ex_it.get('title') or 'Exam').strip() or 'Exam'
+                        ex_max = float(ex_it.get('max_marks') or 0)
+                        ex_cos = ex_it.get('cos') or ex_it.get('co')
+                        if ex_max > 0:
+                            titles.append(ex_lbl)
+                            marks_list.append(ex_max)
+                            cos_list.append(ex_cos if ex_cos else None)
+                            btls.append(None)
+                            enabled.append(True)
+                            total_max += ex_max
+                elif cia_enabled and cia_max_marks > 0:
+                    titles.append(cia_label)
+                    marks_list.append(cia_max_marks)
+                    cos_list.append(cia_cos if cia_cos else None)
+                    btls.append(None)
+                    enabled.append(True)
+                    total_max += cia_max_marks
+
+                user_pattern = {
+                    'titles': titles,
+                    'marks': marks_list,
+                    'cos': cos_list,
+                    'btls': btls,
+                    'enabled': enabled,
+                    'mark_manager': {
+                        **derived_mm,
+                        'confirmed': True,
+                    },
+                }
+
+                # Save updated pattern to ea
+                draft['user_pattern'] = user_pattern
+                ea.draft_data = draft
+                ea.max_marks = total_max
+                ea.covered_cos = covered_cos
+                ea.save(update_fields=['draft_data', 'max_marks', 'covered_cos', 'updated_at'])
+        except Exception:
+            pass
+
     qp_pattern_response = None
     mark_manager = None
 
@@ -6305,6 +6721,7 @@ def faculty_exam_confirm_mark_manager(request, exam_id):
     # CO rows first
     total_max = 0
     covered_cos = []
+    item_name = str(config.get('item_name') or 'Experiments').strip() or 'Experiments'
     for co_str in sorted(cos_config.keys(), key=lambda x: int(x)):
         co_num = int(co_str)
         co_cfg = cos_config[co_str]
@@ -6315,7 +6732,7 @@ def faculty_exam_confirm_mark_manager(request, exam_id):
         per_item_max = co_cfg.get('max_marks', 0)  # max marks PER item
         total_max += per_item_max * num_items
         for i in range(num_items):
-            titles.append(f'CO{co_num} - Item {i + 1}')
+            titles.append(f'CO{co_num} - {item_name} {i + 1}')
             marks.append(per_item_max)
             cos_list.append(co_num)
             btls.append(None)
@@ -6323,9 +6740,11 @@ def faculty_exam_confirm_mark_manager(request, exam_id):
 
     # Exam column after all CO items, before Total
     if cia_enabled and cia_max_marks > 0:
-        titles.append('Exam')
+        cia_label = str(config.get('cia_label') or 'Exam').strip() or 'Exam'
+        cia_cos = config.get('cia_cos')
+        titles.append(cia_label)
         marks.append(cia_max_marks)
-        cos_list.append(None)
+        cos_list.append(cia_cos if cia_cos else None)
         btls.append(None)
         enabled.append(True)
         total_max += cia_max_marks
@@ -7214,26 +7633,44 @@ def faculty_course_co_summary(request, ta_id):
                     covered_cos = enabled_cos
 
                 # Find Exam max marks in user pattern (needed to scale redistributed Exam marks)
-                exam_max = 0
+                exam_max = 0.0
+                exam_q_indices = []
                 titles = p.get('titles', []) if isinstance(p.get('titles'), list) else []
                 for i, t in enumerate(titles):
-                    if isinstance(t, str) and t.strip().lower() == 'exam':
-                        if i < len(qp_marks) and i < len(qp_enabled) and qp_enabled[i]:
+                    if i < len(qp_enabled) and not qp_enabled[i]:
+                        continue
+                    t_str = str(t or '').strip().lower()
+                    is_exam_col = (
+                        t_str == 'exam'
+                        or 'exam' in t_str
+                        or 'cia' in t_str
+                        or (i < len(qp_cos) and (qp_cos[i] is None or (isinstance(qp_cos[i], (list, tuple, set)) and len(qp_cos[i]) > 1)))
+                    )
+                    if is_exam_col:
+                        if i < len(qp_marks):
                             try:
-                                exam_max = float(qp_marks[i] or 0)
+                                exam_max += float(qp_marks[i] or 0)
                             except Exception:
-                                exam_max = 0
-                            exam_q_index = i
-                if exam_max == 0 and qp_marks and qp_cos and len(qp_marks) == len(qp_cos):
+                                pass
+                        exam_q_indices.append(i)
+                if not exam_q_indices and qp_marks and qp_cos and len(qp_marks) == len(qp_cos):
                     last_idx = len(qp_cos) - 1
                     if last_idx >= 0 and qp_cos[last_idx] is None and (last_idx < len(qp_enabled) and qp_enabled[last_idx]):
                         try:
                             exam_max = float(qp_marks[last_idx] or 0)
                         except Exception:
                             exam_max = 0
-                        exam_q_index = last_idx
+                        exam_q_indices.append(last_idx)
+
+                if exam_max == 0 and mm_raw and isinstance(mm_raw, dict):
+                    ex_cols = mm_raw.get('exam_columns') or mm_raw.get('special_columns')
+                    if isinstance(ex_cols, list) and ex_cols:
+                        exam_max = sum(float(ex.get('max_marks') or 0) for ex in ex_cols if ex.get('enabled') is not False)
+                    if exam_max == 0 and mm_raw.get('cia_max_marks'):
+                        exam_max = float(mm_raw.get('cia_max_marks') or 0)
 
                 exam_max_marks = float(exam_max or 0)
+                exam_q_index = exam_q_indices[0] if exam_q_indices else None
 
                 if cia_enabled:
                     # CONDITION A: WITH Exam -> use admin-defined Mark Manager "with exam" weights
@@ -7455,7 +7892,15 @@ def faculty_course_co_summary(request, ta_id):
                             out.append(n)
                     return out
                 if isinstance(raw_co, str):
-                    parts = re.split(r'[^0-9]+', raw_co)
+                    s = raw_co.strip()
+                    range_match = re.search(r'(?:CO\s*)?([1-6])\s*(?:-|TO|\.\.)\s*(?:CO\s*)?([1-6])', s, re.IGNORECASE)
+                    if range_match:
+                        st, en = int(range_match.group(1)), int(range_match.group(2))
+                        if 1 <= st <= en <= co_count:
+                            return list(range(st, en + 1))
+                        elif 1 <= en <= st <= co_count:
+                            return list(range(en, st + 1))
+                    parts = re.split(r'[^0-9]+', s)
                     out = []
                     for p in parts:
                         if not p:
@@ -7599,10 +8044,15 @@ def faculty_course_co_summary(request, ta_id):
 
                 # Exam split (only when Mark Manager Exam is enabled)
                 if einfo.get('cia_enabled'):
-                    exam_idx = einfo.get('_exam_q_index')
                     raw_exam = 0.0
-                    if isinstance(exam_idx, int) and exam_idx >= 0:
-                        v = qmarks.get(_qkey(exam_idx), 0) or 0
+                    exam_indices = einfo.get('_exam_q_indices') or []
+                    if isinstance(exam_indices, list) and exam_indices:
+                        for idx in exam_indices:
+                            v = qmarks.get(_qkey(idx), 0) or 0
+                            if isinstance(v, (int, float)):
+                                raw_exam += float(v)
+                    elif isinstance(einfo.get('_exam_q_index'), int) and einfo['_exam_q_index'] >= 0:
+                        v = qmarks.get(_qkey(einfo['_exam_q_index']), 0) or 0
                         if isinstance(v, (int, float)):
                             raw_exam = float(v)
                     exam_entry['exam'] = round(raw_exam, 2)
@@ -7740,7 +8190,7 @@ def faculty_course_co_summary(request, ta_id):
                     student_entry['co_totals'][co_num - 1] += weighted
 
                 # Exam split weighted contribution (ONLY to right-side CO totals)
-                if einfo.get('cia_enabled') and exam_raw_for_split:
+                if einfo.get('cia_enabled'):
                     enabled_cos = [
                         int(c) for c in (covered_cos or [])
                         if isinstance(c, int) and 1 <= int(c) <= co_count
@@ -7748,7 +8198,7 @@ def faculty_course_co_summary(request, ta_id):
                     exam_max_marks_local = float(einfo.get('exam_max_marks') or 0)
                     exam_weight_local = float(einfo.get('cia_weight') or 0)
                     per_co_local = bool(einfo.get('cia_weight_per_co', False))
-                    if enabled_cos and exam_max_marks_local > 0 and exam_weight_local > 0:
+                    if enabled_cos and exam_max_marks_local > 0 and exam_weight_local > 0 and exam_raw_for_split:
                         share_raw = float(exam_raw_for_split) if per_co_local else (float(exam_raw_for_split) / len(enabled_cos))
                         share_max = float(exam_max_marks_local) if per_co_local else (float(exam_max_marks_local) / len(enabled_cos))
                         share_wt = float(exam_weight_local) if per_co_local else (float(exam_weight_local) / len(enabled_cos))
@@ -7759,6 +8209,10 @@ def faculty_course_co_summary(request, ta_id):
                                 # Store per-CO exam split weighted mark for display in CO Summary
                                 wm_key = f"{einfo['id']}_exam_CO{c}"
                                 student_entry['weighted_marks'][wm_key] = round(add_w, 2)
+                    elif enabled_cos:
+                        for c in enabled_cos:
+                            wm_key = f"{einfo['id']}_exam_CO{c}"
+                            student_entry['weighted_marks'][wm_key] = 0.0
 
         # Apply CQI exam(s) after non-CQI totals are known.
         if pending_cqi:

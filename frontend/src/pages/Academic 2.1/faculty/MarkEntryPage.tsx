@@ -6,10 +6,11 @@
  * Info bar: Course, Batch, Last Saved, Published status
  */
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+// MarkEntryPage - build v2.1.2 - Full row CO & multi-CO special columns
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { flushSync } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, RefreshCw, Trash2, Eye, FileSpreadsheet, Save, Send, Search, Settings2, CheckCircle, X, AlertTriangle, Edit3, Clock, Edit2, ShieldAlert } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Trash2, Eye, FileSpreadsheet, Save, Send, Search, Settings2, CheckCircle, X, AlertTriangle, Edit3, Clock, Edit2, ShieldAlert, Sparkles } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 import { getApiBase } from '../../../services/apiBase';
 import krlogo from '../../../assets/krlogo.png';
@@ -43,7 +44,7 @@ const initialsFromName = (name: string) =>
 
 const coLabel = (co: number | number[] | null): string => {
   if (co == null) return '';
-  if (Array.isArray(co)) return co.map(c => `CO${c}`).join(' & ');
+  if (Array.isArray(co)) return co.map(c => `CO${c}`).join(', ');
   return `CO${co}`;
 };
 
@@ -53,6 +54,7 @@ interface Question {
   max_marks: number;
   btl_level: number | null;
   co_number: number | number[] | null;
+  enabled?: boolean;
 }
 
 interface Student {
@@ -135,9 +137,15 @@ interface MarkManagerData {
   mode: 'admin_define' | 'user_define';
   confirmed?: boolean;
   cia_enabled: boolean;
+  cia_label?: string;
   cia_max_marks: number;
+  cia_weight?: number;
+  cia_cos?: number[];
+  exam_columns?: Array<{ col?: string; title?: string; label?: string; co?: number[]; cos?: number[]; max_marks?: number }>;
+  special_columns?: Array<{ col?: string; title?: string; label?: string; co?: number[]; cos?: number[]; max_marks?: number }>;
   whole_number?: boolean;
   arrow_keys?: boolean;
+  item_name?: string;
   cos: Record<string, MarkManagerCOConfig>;
 }
 
@@ -707,17 +715,23 @@ export default function MarkEntryPage() {
 
   const getQuestionMarkValue = (student: Student, question: Question, qIdx?: number) => {
     const marks = student.co_marks || {};
-    const indexBased = typeof qIdx === 'number'
-      ? (marks[`q${qIdx}` as keyof typeof marks]
-          ?? marks[`q${qIdx + 1}` as keyof typeof marks]
-          ?? marks[String(qIdx) as keyof typeof marks]
-          ?? marks[String(qIdx + 1) as keyof typeof marks])
-      : null;
-    return marks[question.id]
-      ?? marks[question.question_number]
-      ?? marks[(question as any).title]
-      ?? indexBased
-      ?? null;
+    if (marks[question.id] !== undefined && marks[question.id] !== null) {
+      return marks[question.id];
+    }
+    if (question.question_number && marks[question.question_number] !== undefined && marks[question.question_number] !== null) {
+      return marks[question.question_number];
+    }
+    const qTitle = (question as any).title;
+    if (qTitle && marks[qTitle] !== undefined && marks[qTitle] !== null) {
+      return marks[qTitle];
+    }
+    if (typeof qIdx === 'number') {
+      const byQ = marks[`q${qIdx}`];
+      if (byQ !== undefined && byQ !== null) return byQ;
+      const byNum = marks[String(qIdx)];
+      if (byNum !== undefined && byNum !== null) return byNum;
+    }
+    return null;
   };
 
   // Set to true after "Close & Fix" is chosen — prevents auto-refresh until the faculty
@@ -857,36 +871,60 @@ export default function MarkEntryPage() {
   const [mmSetup, setMmSetup] = useState<{
     cos: Record<number, MarkManagerCOConfig>;
     cia_enabled: boolean;
+    cia_label?: string;
     cia_max_marks: number;
     cia_weight: number;
+    cia_cos?: number[];
+    exam_columns?: Array<{ col?: string; title?: string; label?: string; co?: number[]; cos?: number[]; max_marks?: number; weight?: number; enabled?: boolean }>;
+    item_name?: string;
   } | null>(null);
   const [showMarkManagerToggle, setShowMarkManagerToggle] = useState(false);
+  const [isDerivingSheetMm, setIsDerivingSheetMm] = useState(false);
   const availableCos: number[] = useMemo<number[]>(() => {
     try {
-      // Prefer COs from mark_manager config
+      const coSet = new Set<number>();
+      // Base: Course CO count (default 5, e.g. CO1 to CO5)
+      const cnt = Math.max(5, Number((examInfo as any)?.co_count) || 5);
+      for (let i = 1; i <= cnt; i++) coSet.add(i);
+
+      // Add any COs in mark_manager config
       if (examInfo?.mark_manager && typeof examInfo.mark_manager.cos === 'object') {
-        const keys: number[] = Object.keys(examInfo.mark_manager.cos).map(k => Number(k)).filter(n => Number.isFinite(n) && n > 0);
-        if (keys.length) return keys.sort((a, b) => a - b);
+        Object.keys(examInfo.mark_manager.cos).forEach((k) => {
+          const n = Number(k);
+          if (Number.isFinite(n) && n > 0) coSet.add(n);
+        });
       }
-      // Then covered_cos from examInfo
+      // Add any COs in current mmSetup
+      if (mmSetup && typeof mmSetup.cos === 'object') {
+        Object.keys(mmSetup.cos).forEach((k) => {
+          const n = Number(k);
+          if (Number.isFinite(n) && n > 0) coSet.add(n);
+        });
+      }
+      // Add any COs in covered_cos
       const covered: any[] = Array.isArray((examInfo as any)?.covered_cos) ? (examInfo as any).covered_cos : [];
-      if (covered.length) return covered.map((c: any) => Number(c)).filter((n: number) => Number.isFinite(n) && n > 0).sort((a: number, b: number) => a - b);
-      // Then derive from question COs (use examInfo qp_pattern to avoid referencing local questions state)
+      covered.forEach((c: any) => {
+        const n = Number(c);
+        if (Number.isFinite(n) && n > 0) coSet.add(n);
+      });
+      // Add any COs in qp_pattern
       const qpQuestions: any[] = Array.isArray((examInfo as any)?.qp_pattern?.questions) ? (examInfo as any).qp_pattern.questions : [];
-      const qcos: number[] = qpQuestions.flatMap((q: any): number[] =>
-        Array.isArray(q.co_number)
-          ? q.co_number.map((c: any) => Number(c))
-          : (q.co_number != null ? [Number(q.co_number)] : [])
-      );
-      const uniq: number[] = Array.from(new Set(qcos)).filter((n: number) => Number.isFinite(n) && n > 0);
-      if (uniq.length) return uniq.sort((a, b) => a - b);
-      // Fallback to co_count or 5
-      const cnt = Number((examInfo as any)?.co_count) || 5;
-      return Array.from({ length: cnt }, (_, i) => i + 1);
+      qpQuestions.forEach((q: any) => {
+        if (Array.isArray(q.co_number)) {
+          q.co_number.forEach((c: any) => {
+            const n = Number(c);
+            if (Number.isFinite(n) && n > 0) coSet.add(n);
+          });
+        } else if (q.co_number != null) {
+          const n = Number(q.co_number);
+          if (Number.isFinite(n) && n > 0) coSet.add(n);
+        }
+      });
+      return Array.from(coSet).sort((a, b) => a - b);
     } catch (e) {
       return [1, 2, 3, 4, 5];
     }
-  }, [examInfo]);
+  }, [examInfo, mmSetup]);
   const [mmConfirming, setMmConfirming] = useState(false);
 
   // Import flow states
@@ -1155,7 +1193,7 @@ export default function MarkEntryPage() {
       if (hasChanges) return;
       if (showPublishConfirm) return; // don't refresh while publish modal is open
       if (suppressAutoRefreshAfterWarningRef.current) return; // don't refresh after "Close & Fix"
-      if (mmSetup && isUserDefineMm && !examInfo?.mark_manager?.confirmed) return;
+      if (mmSetup && isUserDefineMm) return; // don't refresh while editing Mark Manager
       if (!examId) return;
       loadDataRef.current?.().catch(() => undefined);
     };
@@ -1176,7 +1214,7 @@ export default function MarkEntryPage() {
       if (showPublishConfirm) return;
       if (suppressAutoRefreshAfterWarningRef.current) return;
       if (autoSaveStatus === 'saving') return;
-      if (mmSetup && isUserDefineMm && !examInfo?.mark_manager?.confirmed) return;
+      if (mmSetup && isUserDefineMm) return; // don't refresh while editing Mark Manager
       loadDataRef.current?.().catch(() => undefined);
     }, 2000);
 
@@ -1257,20 +1295,42 @@ export default function MarkEntryPage() {
           } catch (e) {
             coNumbers = [];
           }
-          if (!coNumbers.length) {
-            const fallbackCount = Number((examData as any).co_count) || 5;
-            coNumbers = Array.from({ length: fallbackCount }, (_, i) => i + 1);
-          }
+          const baseCount = Math.max(5, Number((examData as any).co_count) || 5, ...coNumbers);
+          const allCoList = Array.from({ length: baseCount }, (_, i) => i + 1);
+
+          const coveredSet = new Set<number>(
+            Array.isArray((examData as any).covered_cos) && (examData as any).covered_cos.length
+              ? (examData as any).covered_cos.map((c: any) => Number(c))
+              : (coNumbers.length ? coNumbers : [1, 2])
+          );
 
           const cos: Record<number, MarkManagerCOConfig> = {};
-          coNumbers.sort((a, b) => a - b).forEach((c) => {
-            cos[c] = { enabled: false, num_items: 5, max_marks: 25, weight: 0 };
+          allCoList.forEach((c) => {
+            const existing = (examData.mark_manager?.cos as any)?.[String(c)] || (examData.mark_manager?.cos as any)?.[c];
+            if (existing) {
+              cos[c] = {
+                enabled: existing.enabled !== false,
+                num_items: Number(existing.num_items) || 1,
+                max_marks: Number(existing.max_marks) || 25,
+                weight: Number(existing.weight) || 0,
+              };
+            } else {
+              cos[c] = { enabled: coveredSet.has(c), num_items: 2, max_marks: 25, weight: 0 };
+            }
           });
-          setMmSetup({ cos, cia_enabled: false, cia_max_marks: 30, cia_weight: 0 });
+          setMmSetup({
+            cos,
+            cia_enabled: Boolean(examData.mark_manager?.cia_enabled),
+            cia_label: (examData.mark_manager as any)?.cia_label || 'Exam',
+            cia_max_marks: Number(examData.mark_manager?.cia_max_marks) || 50,
+            cia_weight: Number(examData.mark_manager?.cia_weight) || 0,
+            cia_cos: (examData.mark_manager as any)?.cia_cos || undefined,
+            exam_columns: (examData.mark_manager as any)?.exam_columns || (examData.mark_manager as any)?.special_columns || undefined,
+            item_name: (examData.mark_manager as any)?.item_name || 'Experiments',
+          });
           setShowMarkManagerToggle(true);
         }
-      } else {
-        setMmSetup(null);
+      } else if (!mmSetup) {
         setShowMarkManagerToggle(false);
       }
 
@@ -1324,9 +1384,14 @@ export default function MarkEntryPage() {
         mark_manager: {
           enabled: true,
           mode: 'user_define',
+          item_name: mmSetup.item_name || 'Experiments',
           cia_enabled: mmSetup.cia_enabled,
+          cia_label: mmSetup.cia_label || 'Exam',
           cia_max_marks: mmSetup.cia_max_marks,
           cia_weight: mmSetup.cia_weight,
+          cia_cos: mmSetup.cia_cos || undefined,
+          exam_columns: mmSetup.exam_columns || undefined,
+          special_columns: mmSetup.exam_columns || undefined,
           cos: cosPayload,
         },
       };
@@ -2094,12 +2159,30 @@ export default function MarkEntryPage() {
     const mm = examInfo.mark_manager;
     const cos: Record<number, MarkManagerCOConfig> = {};
     const mmCos = mm.cos || {};
-    // Use availableCos to maintain consistent CO numbering
-    availableCos.forEach((co) => {
-      const c = mmCos[String(co)];
-      cos[co] = c ? { enabled: c.enabled, num_items: c.num_items, max_marks: c.max_marks, weight: (c as any).weight || 0 } : { enabled: false, num_items: 5, max_marks: 25, weight: 0 };
+    const allCoKeys = new Set<number>([1, 2, 3, 4, 5, ...availableCos]);
+    if (typeof mmCos === 'object') {
+      Object.keys(mmCos).forEach((k) => {
+        const n = Number(k);
+        if (Number.isFinite(n) && n > 0) allCoKeys.add(n);
+      });
+    }
+    Array.from(allCoKeys).sort((a, b) => a - b).forEach((co) => {
+      const c = mmCos[String(co)] || mmCos[co];
+      cos[co] = c
+        ? { enabled: Boolean(c.enabled), num_items: Math.max(1, Number(c.num_items) || 1), max_marks: Number(c.max_marks) || 25, weight: Number((c as any).weight) || 0 }
+        : { enabled: false, num_items: 2, max_marks: 25, weight: 0 };
     });
-    setMmSetup({ cos, cia_enabled: mm.cia_enabled, cia_max_marks: mm.cia_max_marks, cia_weight: (mm as any).cia_weight || 0 });
+    setMmSetup({
+      cos,
+      cia_enabled: Boolean(mm.cia_enabled),
+      cia_label: (mm as any).cia_label || 'Exam',
+      cia_max_marks: Number(mm.cia_max_marks) || 50,
+      cia_weight: Number((mm as any).cia_weight) || 0,
+      cia_cos: (mm as any).cia_cos || undefined,
+      exam_columns: (mm as any).exam_columns || (mm as any).special_columns || undefined,
+      item_name: (mm as any).item_name || 'Experiments',
+    });
+    setShowMarkManagerToggle(true);
   };
 
   /* ────── Get unique departments ────── */
@@ -2416,23 +2499,24 @@ export default function MarkEntryPage() {
 
           {/* Mark Manager edit (user_define mode only) */}
           {canImport && isUserDefineMm && (
-            <>
-              <button
-                onClick={() => {
-                  if (!mmSetup) editMarkManager();
-                  // only toggle visibility; keep mmSetup so configuration isn't lost
-                  setShowMarkManagerToggle(s => !s);
-                }}
-                className="px-3 py-1.5 text-sm rounded-lg bg-green-600 text-white hover:bg-green-700 flex items-center gap-1.5"
-              >
-                <Edit3 className="w-3.5 h-3.5" /> Mark Manager
-              </button>
-              {examInfo.mark_manager?.confirmed && (
-                <button onClick={editMarkManager} className="px-3 py-1.5 text-sm border border-teal-300 text-teal-700 rounded-lg hover:bg-teal-50 flex items-center gap-1.5 ml-2">
-                  <Edit3 className="w-3.5 h-3.5" /> Edit MM
-                </button>
-              )}
-            </>
+            <button
+              onClick={() => {
+                if (mmSetup) {
+                  setMmSetup(null);
+                  setShowMarkManagerToggle(false);
+                } else {
+                  editMarkManager();
+                }
+              }}
+              className={`px-3 py-1.5 text-sm rounded-lg flex items-center gap-1.5 transition-colors shadow-xs ${
+                mmSetup
+                  ? 'bg-amber-600 text-white hover:bg-amber-700'
+                  : 'bg-teal-600 text-white hover:bg-teal-700'
+              }`}
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              {mmSetup ? 'Close MM' : 'Mark Manager'}
+            </button>
           )}
 
           {/* Publish / save buttons */}
@@ -3028,9 +3112,83 @@ export default function MarkEntryPage() {
               </button>
             )}
           </div>
-          <p className="text-sm text-gray-500">
-            Select the COs covered by this exam and configure the number of items and max marks per item. Click <strong>Confirm</strong> to generate the question table.
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm text-gray-500">
+              Select the COs covered by this exam and configure the number of items and max marks per item. Click <strong>Confirm</strong> to generate the question table.
+            </p>
+            <button
+              type="button"
+              disabled={isDerivingSheetMm}
+              onClick={async () => {
+                if (!examId) return;
+                setIsDerivingSheetMm(true);
+                try {
+                  const resp = await fetchWithAuth('/api/academic-v2/google-sheets/derive-mark-manager/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      examAssignmentId: examId,
+                      coRow: 6,
+                      maxMarksRow: 8,
+                      titleRow: 5,
+                      regNoColumn: 'D',
+                      nameColumn: 'E',
+                    }),
+                  });
+                  const payload = await resp.json().catch(() => null);
+                  if (!resp.ok) throw new Error(payload?.detail || 'Failed to derive from Google Sheet.');
+                  if (payload.mark_manager) {
+                    const derived = payload.mark_manager;
+                    const cos: Record<number, MarkManagerCOConfig> = {};
+                    const allCoKeys = new Set<number>([1, 2, 3, 4, 5, ...availableCos]);
+                    if (derived.cos && typeof derived.cos === 'object') {
+                      Object.keys(derived.cos).forEach((k) => {
+                        const n = Number(k);
+                        if (Number.isFinite(n) && n > 0) allCoKeys.add(n);
+                      });
+                    }
+                    Array.from(allCoKeys).sort((a, b) => a - b).forEach((co) => {
+                      const c = derived.cos?.[String(co)] || derived.cos?.[co];
+                      cos[co] = c
+                        ? {
+                            enabled: Boolean(c.enabled),
+                            num_items: Math.max(1, Number(c.num_items) || 1),
+                            max_marks: Number(c.max_marks) || 25,
+                            weight: Number(c.weight) || 0,
+                          }
+                        : { enabled: false, num_items: 2, max_marks: 25, weight: 0 };
+                    });
+                    setMmSetup({
+                      cos,
+                      cia_enabled: Boolean(derived.cia_enabled),
+                      cia_label: derived.cia_label || 'Exam',
+                      cia_max_marks: Number(derived.cia_max_marks) || 50,
+                      cia_weight: Number(derived.cia_weight) || 0,
+                      cia_cos: derived.cia_cos || undefined,
+                      exam_columns: derived.exam_columns || derived.special_columns || undefined,
+                      item_name: derived.item_name || 'Experiments',
+                    });
+                    const enabledSummary = Object.entries(cos)
+                      .filter(([_, cfg]) => cfg.enabled)
+                      .map(([coNum, cfg]) => `CO${coNum}: ${cfg.num_items} items`)
+                      .join(', ');
+                    setMessage({
+                      type: 'success',
+                      text: `✨ Derived Mark Manager from Google Sheet (${payload.total_marks} total marks, ${enabledSummary})! Review and confirm below.`,
+                    });
+                  }
+                } catch (e) {
+                  setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Unable to derive from sheet.' });
+                } finally {
+                  setIsDerivingSheetMm(false);
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 text-xs font-semibold hover:bg-amber-100 disabled:opacity-50 transition-all shadow-xs"
+            >
+              {isDerivingSheetMm ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 text-amber-600" />}
+              {isDerivingSheetMm ? 'Reading Sheet…' : '⚡ Derive from Linked Google Sheet'}
+            </button>
+          </div>
 
           {/* CO checkboxes */}
           <div className="flex flex-wrap items-center gap-3">
@@ -3048,22 +3206,102 @@ export default function MarkEntryPage() {
                 <span className="text-sm font-medium">CO-{co}</span>
               </label>
             ))}
-            <label className={`flex items-center gap-1.5 px-3 py-2 border rounded-lg cursor-pointer select-none transition-colors ${mmSetup.cia_enabled ? 'bg-teal-50 border-teal-400 ring-1 ring-teal-400' : 'hover:bg-gray-50'}`}>
-              <input
-                type="checkbox"
-                checked={mmSetup.cia_enabled}
-                onChange={e => setMmSetup(prev => prev ? ({ ...prev, cia_enabled: e.target.checked }) : prev)}
-                className="w-4 h-4 accent-teal-600"
-              />
-              <span className="text-sm font-medium">Exam</span>
-            </label>
+            {Array.isArray(mmSetup.exam_columns) && mmSetup.exam_columns.length > 0 ? (
+              mmSetup.exam_columns.map((ex, exIdx) => (
+                <label key={ex.col || exIdx} className={`flex items-center gap-1.5 px-3 py-2 border rounded-lg cursor-pointer select-none transition-colors ${ex.enabled !== false ? 'bg-teal-50 border-teal-400 ring-1 ring-teal-400' : 'hover:bg-gray-50'}`}>
+                  <input
+                    type="checkbox"
+                    checked={ex.enabled !== false}
+                    onChange={e => {
+                      const updated = (mmSetup.exam_columns || []).map((item, idx) =>
+                        idx === exIdx ? { ...item, enabled: e.target.checked } : item
+                      );
+                      const anyEnabled = updated.some(item => item.enabled !== false);
+                      setMmSetup(prev => prev ? ({
+                        ...prev,
+                        exam_columns: updated,
+                        cia_enabled: anyEnabled,
+                      }) : prev);
+                    }}
+                    className="w-4 h-4 accent-teal-600"
+                  />
+                  <span className="text-sm font-medium truncate max-w-[140px]" title={ex.label || ex.title || `Exam ${exIdx + 1}`}>
+                    {ex.label || ex.title || `Exam ${exIdx + 1}`}
+                  </span>
+                </label>
+              ))
+            ) : (
+              <label className={`flex items-center gap-1.5 px-3 py-2 border rounded-lg cursor-pointer select-none transition-colors ${mmSetup.cia_enabled ? 'bg-teal-50 border-teal-400 ring-1 ring-teal-400' : 'hover:bg-gray-50'}`}>
+                <input
+                  type="checkbox"
+                  checked={mmSetup.cia_enabled}
+                  onChange={e => setMmSetup(prev => prev ? ({ ...prev, cia_enabled: e.target.checked }) : prev)}
+                  className="w-4 h-4 accent-teal-600"
+                />
+                <span className="text-sm font-medium">Exam</span>
+              </label>
+            )}
           </div>
 
           {/* Config cards */}
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-            {mmSetup.cia_enabled && (
+            {Array.isArray(mmSetup.exam_columns) && mmSetup.exam_columns.length > 0 ? (
+              mmSetup.exam_columns.filter(ex => ex.enabled !== false).map((ex, exIdx) => (
+                <div key={ex.col || exIdx} className="border rounded-lg p-4 bg-gray-50 border-teal-200">
+                  <div className="flex items-center justify-between gap-1 mb-2">
+                    <h4 className="text-sm font-bold text-gray-800 truncate" title={ex.label || ex.title || `Exam ${exIdx + 1}`}>
+                      {ex.label || ex.title || `Exam ${exIdx + 1}`}
+                    </h4>
+                    {Array.isArray(ex.cos) && ex.cos.length > 0 && (
+                      <span className="text-[10px] font-semibold text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded shrink-0">
+                        {ex.cos.map(c => `CO${c}`).join(', ')}
+                      </span>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Max marks</label>
+                      <input
+                        type="number" min={0}
+                        value={ex.max_marks ?? 0}
+                        onChange={e => {
+                          const val = Number(e.target.value) || 0;
+                          const updated = (mmSetup.exam_columns || []).map((item, idx) =>
+                            idx === exIdx ? { ...item, max_marks: val } : item
+                          );
+                          setMmSetup(prev => prev ? ({ ...prev, exam_columns: updated }) : prev);
+                        }}
+                        className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-teal-600 mb-0.5">Weight</label>
+                      <input
+                        type="number" step="any" min={0}
+                        value={ex.weight ?? 0}
+                        onChange={e => {
+                          const val = Number(e.target.value) || 0;
+                          const updated = (mmSetup.exam_columns || []).map((item, idx) =>
+                            idx === exIdx ? { ...item, weight: val } : item
+                          );
+                          setMmSetup(prev => prev ? ({ ...prev, exam_columns: updated }) : prev);
+                        }}
+                        className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : mmSetup.cia_enabled ? (
               <div className="border rounded-lg p-4 bg-gray-50">
-                <h4 className="text-sm font-bold text-gray-800 mb-2">Exam</h4>
+                <div className="flex items-center justify-between gap-1 mb-2">
+                  <h4 className="text-sm font-bold text-gray-800 truncate">{mmSetup.cia_label || 'Exam'}</h4>
+                  {Array.isArray(mmSetup.cia_cos) && mmSetup.cia_cos.length > 0 && (
+                    <span className="text-[10px] font-semibold text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded shrink-0">
+                      {mmSetup.cia_cos.map(c => `CO${c}`).join(', ')}
+                    </span>
+                  )}
+                </div>
                 <div className="space-y-2">
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Max marks</label>
@@ -3071,7 +3309,7 @@ export default function MarkEntryPage() {
                       type="number" min={0}
                       value={mmSetup.cia_max_marks}
                       onChange={e => setMmSetup(prev => prev ? ({ ...prev, cia_max_marks: Number(e.target.value) || 0 }) : prev)}
-                      className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                      className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                   </div>
                   <div>
@@ -3080,12 +3318,12 @@ export default function MarkEntryPage() {
                       type="number" step="any" min={0}
                       value={mmSetup.cia_weight}
                       onChange={e => setMmSetup(prev => prev ? ({ ...prev, cia_weight: Number(e.target.value) || 0 }) : prev)}
-                      className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                      className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                   </div>
                 </div>
               </div>
-            )}
+            ) : null}
             {availableCos.filter(co => mmSetup.cos[co]?.enabled).map(co => (
               <div key={co} className="border rounded-lg p-4 bg-gray-50">
                 <h4 className="text-sm font-bold text-gray-800 mb-2">CO-{co}</h4>
@@ -3099,7 +3337,7 @@ export default function MarkEntryPage() {
                         ...prev,
                         cos: { ...prev.cos, [co]: { ...prev.cos[co], num_items: Number(e.target.value) || 1 } },
                       }) : prev)}
-                      className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                      className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                   </div>
                   <div>
@@ -3111,7 +3349,7 @@ export default function MarkEntryPage() {
                         ...prev,
                         cos: { ...prev.cos, [co]: { ...prev.cos[co], max_marks: Number(e.target.value) || 0 } },
                       }) : prev)}
-                      className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                      className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                   </div>
                   <div>
@@ -3123,7 +3361,7 @@ export default function MarkEntryPage() {
                         ...prev,
                         cos: { ...prev.cos, [co]: { ...prev.cos[co], weight: Number(e.target.value) || 0 } },
                       }) : prev)}
-                      className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                      className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                   </div>
                 </div>
@@ -3132,30 +3370,59 @@ export default function MarkEntryPage() {
           </div>
 
           {/* Total + Confirm */}
-          {(Object.values(mmSetup.cos).some(c => c.enabled) || mmSetup.cia_enabled) && (
-            <div className="flex items-center justify-between pt-2">
-              <div className="text-sm">
-                <span className="font-medium px-2 py-0.5 bg-green-100 text-green-700 rounded">
-                  Total: {(mmSetup.cia_enabled ? mmSetup.cia_max_marks : 0) + Object.values(mmSetup.cos).filter(c => c.enabled).reduce((s, c) => s + c.max_marks * c.num_items, 0)} marks
-                </span>
-                <span className="font-medium px-2 py-0.5 bg-blue-100 text-blue-700 rounded ml-2">
-                  Weights: {((mmSetup.cia_enabled ? mmSetup.cia_weight : 0) + Object.values(mmSetup.cos).filter(c => c.enabled).reduce((s, c) => s + c.weight, 0)).toFixed(2)}
-                </span>
-                <span className="text-xs text-gray-400 ml-2">
-                  {Object.values(mmSetup.cos).filter(c => c.enabled).reduce((s, c) => s + c.num_items, 0)} items across {Object.values(mmSetup.cos).filter(c => c.enabled).length} COs
-                  {mmSetup.cia_enabled ? ' + Exam' : ''}
-                </span>
+          {(() => {
+            const enabledCos = Object.values(mmSetup.cos).filter(c => c.enabled);
+            const coMarksTotal = enabledCos.reduce((s, c) => s + (Number(c.max_marks) || 0) * (Number(c.num_items) || 1), 0);
+            const coWeightsTotal = enabledCos.reduce((s, c) => s + (Number(c.weight) || 0), 0);
+
+            let examMarksTotal = 0;
+            let examWeightsTotal = 0;
+            let examLabelSummary = '';
+
+            if (Array.isArray(mmSetup.exam_columns) && mmSetup.exam_columns.length > 0) {
+              const enabledExams = mmSetup.exam_columns.filter(ex => ex.enabled !== false);
+              examMarksTotal = enabledExams.reduce((s, ex) => s + (Number(ex.max_marks) || 0), 0);
+              examWeightsTotal = enabledExams.reduce((s, ex) => s + (Number(ex.weight) || 0), 0);
+              if (enabledExams.length > 0) {
+                examLabelSummary = ` + ${enabledExams.length} Exam${enabledExams.length > 1 ? 's' : ''}`;
+              }
+            } else if (mmSetup.cia_enabled) {
+              examMarksTotal = Number(mmSetup.cia_max_marks) || 0;
+              examWeightsTotal = Number(mmSetup.cia_weight) || 0;
+              examLabelSummary = ' + Exam';
+            }
+
+            const totalMarks = coMarksTotal + examMarksTotal;
+            const totalWeights = coWeightsTotal + examWeightsTotal;
+            const hasAnyEnabled = enabledCos.length > 0 || examMarksTotal > 0 || (Array.isArray(mmSetup.exam_columns) && mmSetup.exam_columns.some(ex => ex.enabled !== false)) || mmSetup.cia_enabled;
+
+            if (!hasAnyEnabled) return null;
+
+            return (
+              <div className="flex items-center justify-between pt-2">
+                <div className="text-sm">
+                  <span className="font-medium px-2 py-0.5 bg-green-100 text-green-700 rounded">
+                    Total: {totalMarks} marks
+                  </span>
+                  <span className="font-medium px-2 py-0.5 bg-blue-100 text-blue-700 rounded ml-2">
+                    Weights: {totalWeights.toFixed(2)}
+                  </span>
+                  <span className="text-xs text-gray-400 ml-2">
+                    {enabledCos.reduce((s, c) => s + c.num_items, 0)} items across {enabledCos.length} COs
+                    {examLabelSummary}
+                  </span>
+                </div>
+                <button
+                  onClick={confirmMarkManager}
+                  disabled={mmConfirming || !hasAnyEnabled}
+                  className="flex items-center gap-2 px-5 py-2 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 disabled:opacity-50"
+                >
+                  {mmConfirming ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                  {mmConfirming ? 'Confirming...' : 'Confirm & Generate Table'}
+                </button>
               </div>
-              <button
-                onClick={confirmMarkManager}
-                disabled={mmConfirming || (!Object.values(mmSetup.cos).some(c => c.enabled) && !mmSetup.cia_enabled)}
-                className="flex items-center gap-2 px-5 py-2 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 disabled:opacity-50"
-              >
-                {mmConfirming ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
-                {mmConfirming ? 'Confirming...' : 'Confirm & Generate Table'}
-              </button>
-            </div>
-          )}
+            );
+          })()}
         </div>
       )}
 
@@ -3291,7 +3558,7 @@ export default function MarkEntryPage() {
                             min="0"
                             max={q.max_marks}
                             step={wholeNumber ? '1' : '0.01'}
-                            className={`w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:text-gray-400 ${
+                            className={`w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:text-gray-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                               btlNotSelected
                                 ? 'disabled:bg-amber-50 border-amber-200 cursor-not-allowed'
                                 : 'disabled:bg-gray-100'
@@ -3345,7 +3612,7 @@ export default function MarkEntryPage() {
                             min="0"
                             max={examInfo.max_marks}
                             step={wholeNumber ? '1' : '0.01'}
-                            className={`w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-400 ${hasQ ? 'font-semibold bg-gray-50' : ''} ${selected ? 'ring-2 ring-blue-400' : ''}`}
+                            className={`w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${hasQ ? 'font-semibold bg-gray-50' : ''} ${selected ? 'ring-2 ring-blue-400' : ''}`}
                           />
                         );
                       })()}

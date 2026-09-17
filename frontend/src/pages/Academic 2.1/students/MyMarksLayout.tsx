@@ -1,5 +1,5 @@
 import React from 'react';
-import { BarChart3, BookOpen, ChevronLeft } from 'lucide-react';
+import { BarChart3, BookOpen, ChevronLeft, History } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 interface MyMarksLayoutProps {
@@ -22,6 +22,7 @@ export default function MyMarksLayout({
   const tabs = [
     { key: 'dashboard' as const, label: 'Dashboard', to: '/academic-v2/student/dashboard', icon: BarChart3 },
     { key: 'courses' as const, label: 'My Courses', to: '/academic-v2/student/courses', icon: BookOpen },
+    { key: 'past-courses' as const, label: 'Past Courses', to: '/academic-v2/student/past-courses', icon: History },
   ];
 
   return (

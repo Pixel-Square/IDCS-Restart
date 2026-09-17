@@ -68,6 +68,10 @@ type CourseLink = {
 type SheetMappingConfig = {
   regNoColumn: string;
   nameColumn: string;
+  coRow?: number | string;
+  maxMarksRow?: number | string;
+  titleRow?: number | string;
+  startRow?: number | string;
   questionColumns: Record<string, string>;
   sheetTab: string;
 };
@@ -177,9 +181,13 @@ const groupCourseLinks = (items: CourseLink[]) => {
 };
 
 const createInitialMapping = (examId: string, questionTitles: string[] = []): SheetMappingConfig => ({
-  regNoColumn: 'A',
-  nameColumn: 'B',
-  questionColumns: Object.fromEntries(questionTitles.map((question, index) => [question, String.fromCharCode(67 + index)])),
+  regNoColumn: 'D',
+  nameColumn: 'E',
+  coRow: 6,
+  maxMarksRow: 8,
+  titleRow: 5,
+  startRow: 9,
+  questionColumns: Object.fromEntries(questionTitles.map((question, index) => [question, String.fromCharCode(70 + index)])),
   sheetTab: examId,
 });
 
@@ -202,10 +210,12 @@ export default function GoogleSheetsPage() {
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
   const [savedState, setSavedState] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
   const [scriptStatusMap, setScriptStatusMap] = useState<Record<string, { status: ScriptStatus; message?: string }>>({});
+  const [isDeriving, setIsDeriving] = useState(false);
+  const [derivePreviewData, setDerivePreviewData] = useState<any>(null);
   // Connect tab state
   const [oauthStatus, setOauthStatus] = useState<{ authorized: boolean; userEmail: string | null; hasScriptScope: boolean }>({ authorized: false, userEmail: null, hasScriptScope: false });
   const [oauthLoading, setOauthLoading] = useState(false);
-  const [serviceConfig, setServiceConfig] = useState<GoogleSheetConfig>(initialConfig);;
+  const [serviceConfig, setServiceConfig] = useState<GoogleSheetConfig>(initialConfig);
 
   useEffect(() => {
     try {
@@ -1107,8 +1117,12 @@ export default function GoogleSheetsPage() {
     const id = configActiveExam?.id || '';
     if (columnMapping[id]) return columnMapping[id];
     return {
-      regNoColumn: configActiveExam?.columnMapping?.regNoColumn || 'A',
-      nameColumn: configActiveExam?.columnMapping?.nameColumn || 'B',
+      regNoColumn: configActiveExam?.columnMapping?.regNoColumn || 'D',
+      nameColumn: configActiveExam?.columnMapping?.nameColumn || 'E',
+      coRow: (configActiveExam?.columnMapping as any)?.coRow ?? 6,
+      maxMarksRow: (configActiveExam?.columnMapping as any)?.maxMarksRow ?? 8,
+      titleRow: (configActiveExam?.columnMapping as any)?.titleRow ?? 5,
+      startRow: (configActiveExam?.columnMapping as any)?.startRow ?? 9,
       questionColumns: configActiveExam?.columnMapping?.questionColumns || {},
       sheetTab: configActiveExam?.sheetTab || configActiveExam?.assignment || '',
     };
@@ -1201,8 +1215,12 @@ export default function GoogleSheetsPage() {
             examAssignmentId: ea.id,
             sheetTab: configActiveMapping.sheetTab || ea.assignment,
             mapping: {
-              regNoColumn: configActiveMapping.regNoColumn,
-              nameColumn: configActiveMapping.nameColumn,
+              regNoColumn: configActiveMapping.regNoColumn || 'D',
+              nameColumn: configActiveMapping.nameColumn || 'E',
+              coRow: configActiveMapping.coRow || 6,
+              maxMarksRow: configActiveMapping.maxMarksRow || 8,
+              titleRow: configActiveMapping.titleRow || 5,
+              startRow: configActiveMapping.startRow || 9,
               questionColumns: configActiveMapping.questionColumns,
             },
           }),
@@ -1213,6 +1231,75 @@ export default function GoogleSheetsPage() {
     }).catch(() => {
       setSavedState({ message: 'Unable to save mapping for some sections.', type: 'error' });
     });
+  };
+
+  const handleDeriveMarkManager = async (apply = false) => {
+    if (!configActiveExam?.sectionId) {
+      setSavedState({ message: 'Select an exam assignment first.', type: 'error' });
+      return;
+    }
+    const sectionLink = links.find((item) => item.id === configActiveExam.sectionId);
+    if (!sectionLink?.sheetUrl) {
+      setSavedState({ message: 'Link a Google Sheet in the Links tab first.', type: 'error' });
+      return;
+    }
+    setIsDeriving(true);
+    try {
+      const resp = await fetchEndpoint('/google-sheets/derive-mark-manager/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sectionId: configActiveExam.sectionId,
+          examAssignmentId: configActiveExam.id,
+          sheetTab: configActiveMapping.sheetTab || configActiveExam.assignment,
+          coRow: configActiveMapping.coRow || 6,
+          maxMarksRow: configActiveMapping.maxMarksRow || 8,
+          titleRow: configActiveMapping.titleRow || 5,
+          startRow: configActiveMapping.startRow || 9,
+          regNoColumn: configActiveMapping.regNoColumn || 'D',
+          nameColumn: configActiveMapping.nameColumn || 'E',
+          apply,
+        }),
+      });
+      const payload = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(payload?.detail || 'Failed to derive Mark Manager from sheet.');
+      setDerivePreviewData(payload);
+      if (payload.resolved_sheet_tab || payload.questionColumns) {
+        setColumnMapping((current) => {
+          const base = current[configActiveExam.id] || configActiveMapping;
+          return {
+            ...current,
+            [configActiveExam.id]: {
+              ...base,
+              sheetTab: payload.resolved_sheet_tab || base.sheetTab,
+              questionColumns: payload.questionColumns ? { ...base.questionColumns, ...payload.questionColumns } : base.questionColumns,
+            },
+          };
+        });
+      }
+      if (apply) {
+        setSavedState({
+          message: `✅ Mark Manager derived & applied (${payload.total_marks} total marks, ${payload.columns?.length || 0} columns mapped).`,
+          type: 'success',
+        });
+        // Refresh links to reload assignments
+        fetchEndpoint('/google-sheets/links/').then(async (r) => {
+          if (r.ok) {
+            const p = await r.json().catch(() => null);
+            if (Array.isArray(p)) setLinks(p);
+          }
+        }).catch(() => null);
+      } else {
+        setSavedState({
+          message: `Header preview generated from "${payload.resolved_sheet_tab || configActiveMapping.sheetTab}": ${payload.columns?.length || 0} columns detected (${payload.total_marks} total marks). Review and click "Apply to Mark Manager".`,
+          type: 'success',
+        });
+      }
+    } catch (error) {
+      setSavedState({ message: error instanceof Error ? error.message : 'Failed to derive Mark Manager.', type: 'error' });
+    } finally {
+      setIsDeriving(false);
+    }
   };
 
   const pullConfigLiveData = async () => {
@@ -1368,145 +1455,263 @@ export default function GoogleSheetsPage() {
 
         {/* Step 4 — Column Mapping */}
         {configActiveExam && (
-          <div className={`rounded-3xl border p-6 shadow-sm space-y-5 ${
-            isUserDefined ? 'border-amber-200 bg-amber-50/60' : 'border-slate-200 bg-white'
-          }`}>
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
             <div className="flex items-center gap-2">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">4</span>
-              <p className="text-sm font-semibold text-slate-800">Column Mapping</p>
+              <p className="text-sm font-semibold text-slate-800">Column & Header Mapping</p>
               {hasMarkManager && (
                 <span className={`ml-auto rounded-full px-2.5 py-1 text-[11px] font-semibold flex items-center gap-1 ${
                   isUserDefined ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
                 }`}>
-                  {isUserDefined ? <Lock className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
-                  {isUserDefined ? 'User Defined (Mark Manager)' : 'Mark Manager — Admin Defined'}
+                  {isUserDefined ? <Sparkles className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
+                  {isUserDefined ? 'User Defined Mark Manager (Auto-Derive Available)' : 'Mark Manager — Admin Defined'}
                 </span>
               )}
             </div>
 
+            {/* Explanatory banner for User-Defined vs Admin */}
             {isUserDefined ? (
-              /* ── Blocked: user_defined mark manager ── */
-              <div className="rounded-2xl border border-amber-300 bg-amber-100/70 p-5 flex items-start gap-4">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-200 text-amber-700">
-                  <Lock className="h-5 w-5" />
-                </div>
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 flex items-start gap-2.5">
+                <Sparkles className="h-4 w-4 shrink-0 mt-0.5 text-amber-600" />
                 <div>
-                  <p className="text-sm font-semibold text-amber-900">No Sheet Mapping Required</p>
-                  <p className="mt-1 text-xs text-amber-800 leading-relaxed">
-                    This exam uses <strong>User Defined Mark Manager</strong>. Faculty members configure the question structure themselves directly in the ERP — not via a Google Sheet column mapping.
-                    Sheet data will not be pulled for this exam type.
+                  <p className="font-semibold">User Defined Mark Manager — Auto-Derive from Sheet Headers</p>
+                  <p className="mt-0.5 text-amber-700 leading-relaxed">
+                    Set the <strong>CO Row</strong> (e.g. 6) and <strong>Max Marks Row</strong> (e.g. 8). Click <strong>"Auto-Derive from Sheet"</strong> to automatically detect experiments per CO (e.g. 25 marks each) and multi-CO Exam columns (e.g. 50 marks split across COs 1,2,3).
                   </p>
                 </div>
               </div>
-            ) : (
-              /* ── Normal mapping (or admin_defined mark manager) ── */
-              <>
-                {isAdminDefined && (
-                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-700 flex items-start gap-2">
-                    <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5 text-emerald-600" />
-                    <p>This exam uses <strong>Admin Defined Mark Manager</strong>. The question columns below correspond to the pre-configured question structure. Map each question to its sheet column.</p>
+            ) : isAdminDefined ? (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-700 flex items-start gap-2">
+                <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5 text-emerald-600" />
+                <p>This exam uses <strong>Admin Defined Mark Manager</strong>. Map each question column to its sheet column letter, or use the header row configuration below.</p>
+              </div>
+            ) : null}
+
+            {/* Base columns & Header Rows */}
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <label className="space-y-1.5 text-sm text-slate-700">
+                <span className="font-medium">Sheet Tab Name</span>
+                <input
+                  value={configActiveMapping.sheetTab}
+                  onChange={(e) => updateMappingField(configActiveExam.id, 'sheetTab', e.target.value, configActiveMapping)}
+                  placeholder={configActiveExam.assignment}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                />
+                <p className="text-[10px] text-slate-400">e.g. CYCLE I MARKS, LAB 1</p>
+              </label>
+              <label className="space-y-1.5 text-sm text-slate-700">
+                <span className="font-medium">Register No. Column</span>
+                <input
+                  value={configActiveMapping.regNoColumn}
+                  onChange={(e) => updateMappingField(configActiveExam.id, 'regNoColumn', e.target.value, configActiveMapping)}
+                  placeholder="D"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                />
+                <p className="text-[10px] text-slate-400">Column with Student Roll No.</p>
+              </label>
+              <label className="space-y-1.5 text-sm text-slate-700">
+                <span className="font-medium">Name Column</span>
+                <input
+                  value={configActiveMapping.nameColumn}
+                  onChange={(e) => updateMappingField(configActiveExam.id, 'nameColumn', e.target.value, configActiveMapping)}
+                  placeholder="E"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                />
+                <p className="text-[10px] text-slate-400">Column with Student Name</p>
+              </label>
+              <label className="space-y-1.5 text-sm text-slate-700">
+                <span className="font-medium">Title / Item Row</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={configActiveMapping.titleRow ?? 5}
+                  onChange={(e) => updateMappingField(configActiveExam.id, 'titleRow', e.target.value, configActiveMapping)}
+                  placeholder="5"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                />
+                <p className="text-[10px] text-slate-400">Row with EXP 1, EXP 2, CIA I...</p>
+              </label>
+              <label className="space-y-1.5 text-sm text-slate-700">
+                <span className="font-medium">CO Header Row</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={configActiveMapping.coRow ?? 6}
+                  onChange={(e) => updateMappingField(configActiveExam.id, 'coRow', e.target.value, configActiveMapping)}
+                  placeholder="6"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                />
+                <p className="text-[10px] text-slate-400">Row with CO1, CO2, 1,2,3...</p>
+              </label>
+              <label className="space-y-1.5 text-sm text-slate-700">
+                <span className="font-medium">Max Marks Row</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={configActiveMapping.maxMarksRow ?? 8}
+                  onChange={(e) => updateMappingField(configActiveExam.id, 'maxMarksRow', e.target.value, configActiveMapping)}
+                  placeholder="8"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                />
+                <p className="text-[10px] text-slate-400">Row with 25, 50, etc.</p>
+              </label>
+              <label className="space-y-1.5 text-sm text-slate-700">
+                <span className="font-medium">Student Start Row</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={configActiveMapping.startRow ?? 9}
+                  onChange={(e) => updateMappingField(configActiveExam.id, 'startRow', e.target.value, configActiveMapping)}
+                  placeholder="9"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                />
+                <p className="text-[10px] text-slate-400">First row of student marks</p>
+              </label>
+            </div>
+
+            {/* Auto-derive preview card */}
+            {derivePreviewData && (
+              <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-5 space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-5 w-5 text-indigo-600" />
+                    <h3 className="text-sm font-bold text-indigo-900">Derived Mark Manager Structure</h3>
                   </div>
-                )}
-
-                <p className="text-xs text-slate-500">
-                  These settings apply to all sections sharing this exam type ({configSelectedExamGroup.length || 1} section{(configSelectedExamGroup.length || 1) !== 1 ? 's' : ''}).
-                  Column letters: A, B, C …
-                </p>
-
-                {/* Base columns */}
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <label className="space-y-1.5 text-sm text-slate-700">
-                    <span className="font-medium">Sheet Tab Name</span>
-                    <input
-                      value={configActiveMapping.sheetTab}
-                      onChange={(e) => updateMappingField(configActiveExam.id, 'sheetTab', e.target.value, configActiveMapping)}
-                      placeholder={configActiveExam.assignment}
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-                    />
-                    <p className="text-[10px] text-slate-400">Tab name inside the Google Sheet</p>
-                  </label>
-                  <label className="space-y-1.5 text-sm text-slate-700">
-                    <span className="font-medium">Register No. Column</span>
-                    <input
-                      value={configActiveMapping.regNoColumn}
-                      onChange={(e) => updateMappingField(configActiveExam.id, 'regNoColumn', e.target.value, configActiveMapping)}
-                      placeholder="A"
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-                    />
-                  </label>
-                  <label className="space-y-1.5 text-sm text-slate-700">
-                    <span className="font-medium">Name Column</span>
-                    <input
-                      value={configActiveMapping.nameColumn}
-                      onChange={(e) => updateMappingField(configActiveExam.id, 'nameColumn', e.target.value, configActiveMapping)}
-                      placeholder="B"
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-                    />
-                    <p className="text-[10px] text-slate-400">Optional</p>
-                  </label>
+                  <span className="rounded-full bg-indigo-600 px-3 py-1 text-xs font-bold text-white shadow-sm">
+                    Total: {derivePreviewData.total_marks} Marks
+                  </span>
                 </div>
 
-                {/* Question columns */}
-                {configQuestionFields.length > 0 && (
+                {/* CO breakdown */}
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {Object.entries(derivePreviewData.mark_manager?.cos || {})
+                    .filter(([_, cfg]: [string, any]) => cfg.enabled)
+                    .map(([coNum, cfg]: [string, any]) => (
+                      <div key={coNum} className="rounded-xl border border-indigo-100 bg-white p-3 shadow-xs">
+                        <div className="flex items-center justify-between text-xs font-bold text-slate-800">
+                          <span>CO-{coNum}</span>
+                          <span className="text-indigo-600">{cfg.num_items} Item{cfg.num_items !== 1 ? 's' : ''} × {cfg.max_marks} M</span>
+                        </div>
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          Total CO{coNum}: {Number(cfg.num_items) * Number(cfg.max_marks)} marks
+                        </p>
+                      </div>
+                    ))}
+                  {derivePreviewData.mark_manager?.cia_enabled && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-3 shadow-xs">
+                      <div className="flex items-center justify-between text-xs font-bold text-amber-900">
+                        <span>{derivePreviewData.mark_manager?.cia_label || 'Exam'}</span>
+                        <span className="text-amber-700">{derivePreviewData.mark_manager?.cia_max_marks} Marks</span>
+                      </div>
+                      <p className="mt-1 text-[11px] text-amber-800">
+                        COs: {Array.isArray(derivePreviewData.mark_manager?.cia_cos) ? derivePreviewData.mark_manager.cia_cos.join(', ') : 'All'} (marks split equally)
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Detected columns pill list */}
+                {derivePreviewData.columns?.length > 0 && (
                   <div>
-                    <p className="text-xs font-semibold text-slate-600 mb-3">Question Column Mapping</p>
-                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                      {configQuestionFields.map((item, idx) => {
-                        const colVal =
-                          configActiveMapping.questionColumns[item.key] ??
-                          (item.id ? configActiveMapping.questionColumns[item.id] : undefined) ??
-                          configActiveMapping.questionColumns[`q_${idx}`] ??
-                          configActiveMapping.questionColumns[`q${idx}`] ??
-                          '';
-                        return (
-                          <label key={item.key || `q_${idx}`} className="space-y-1 text-sm text-slate-700">
-                            <span className="text-xs font-medium text-slate-600">{item.title}</span>
-                            <input
-                              value={colVal}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setColumnMapping((current) => {
-                                  const base = current[configActiveExam.id] || configActiveMapping || createInitialMapping(configActiveExam.id, selectedPatternQuestionTitles);
-                                  const nextCols = { ...base.questionColumns, [item.key]: val, [`q_${idx}`]: val, [`q${idx}`]: val };
-                                  if (item.id) nextCols[item.id] = val;
-                                  return {
-                                    ...current,
-                                    [configActiveExam.id]: {
-                                      ...base,
-                                      questionColumns: nextCols,
-                                    },
-                                  };
-                                });
-                              }}
-                              placeholder="C"
-                              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-                            />
-                          </label>
-                        );
-                      })}
+                    <p className="text-xs font-semibold text-slate-700 mb-2">Mapped Sheet Columns ({derivePreviewData.columns.length}):</p>
+                    <div className="flex flex-wrap gap-1.5 max-h-36 overflow-auto">
+                      {derivePreviewData.columns.map((col: any) => (
+                        <span key={col.col} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 shadow-2xs">
+                          <strong className="font-mono text-indigo-700">{col.col}</strong>: {col.title} ({col.max_marks}M)
+                        </span>
+                      ))}
                     </div>
                   </div>
                 )}
 
-                {/* Actions */}
-                <div className="flex flex-wrap items-center gap-3 pt-1">
+                <div className="flex flex-wrap items-center gap-2 pt-1">
                   <button
                     type="button"
-                    onClick={saveConfigMapping}
-                    className="flex items-center gap-2 rounded-full bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 active:scale-95 transition-all shadow-md shadow-indigo-200"
+                    onClick={() => handleDeriveMarkManager(true)}
+                    disabled={isDeriving}
+                    className="flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50 transition-all shadow-sm"
                   >
-                    <Save className="h-4 w-4" /> Save Mapping
+                    <CheckCircle2 className="h-4 w-4" /> Apply to Mark Manager & Save
                   </button>
                   <button
                     type="button"
-                    onClick={pullConfigLiveData}
-                    className="flex items-center gap-2 rounded-full border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 active:scale-95 transition-all"
+                    onClick={() => setDerivePreviewData(null)}
+                    className="rounded-full border border-slate-300 bg-white px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-all"
                   >
-                    <RefreshCw className="h-4 w-4" /> Pull Live Data Now
+                    Dismiss Preview
                   </button>
                 </div>
-              </>
+              </div>
             )}
+
+            {/* Question columns (manual overrides if needed — only for standard non-User-Defined patterns) */}
+            {!isUserDefined && !hasMarkManager && configQuestionFields.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-slate-600 mb-3">Individual Question Column Overrides</p>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  {configQuestionFields.map((item, idx) => {
+                    const colVal =
+                      configActiveMapping.questionColumns[item.key] ??
+                      (item.id ? configActiveMapping.questionColumns[item.id] : undefined) ??
+                      configActiveMapping.questionColumns[`q_${idx}`] ??
+                      configActiveMapping.questionColumns[`q${idx}`] ??
+                      '';
+                    return (
+                      <label key={item.key || `q_${idx}`} className="space-y-1 text-sm text-slate-700">
+                        <span className="text-xs font-medium text-slate-600">{item.title}</span>
+                        <input
+                          value={colVal}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setColumnMapping((current) => {
+                              const base = current[configActiveExam.id] || configActiveMapping || createInitialMapping(configActiveExam.id, selectedPatternQuestionTitles);
+                              const nextCols = { ...base.questionColumns, [item.key]: val, [`q_${idx}`]: val, [`q${idx}`]: val };
+                              if (item.id) nextCols[item.id] = val;
+                              return {
+                                ...current,
+                                [configActiveExam.id]: {
+                                  ...base,
+                                  questionColumns: nextCols,
+                                },
+                              };
+                            });
+                          }}
+                          placeholder="F"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex flex-wrap items-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => handleDeriveMarkManager(false)}
+                disabled={isDeriving}
+                className="flex items-center gap-2 rounded-full bg-amber-500 px-5 py-2.5 text-sm font-bold text-white hover:bg-amber-600 active:scale-95 transition-all shadow-md shadow-amber-200 disabled:opacity-50"
+              >
+                {isDeriving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                {isDeriving ? 'Deriving from Sheet…' : '⚡ Auto-Derive from Sheet'}
+              </button>
+              <button
+                type="button"
+                onClick={saveConfigMapping}
+                className="flex items-center gap-2 rounded-full bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 active:scale-95 transition-all shadow-md shadow-indigo-200"
+              >
+                <Save className="h-4 w-4" /> Save Mapping
+              </button>
+              <button
+                type="button"
+                onClick={pullConfigLiveData}
+                className="flex items-center gap-2 rounded-full border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 active:scale-95 transition-all"
+              >
+                <RefreshCw className="h-4 w-4" /> Pull Live Data Now
+              </button>
+            </div>
           </div>
         )}
       </div>

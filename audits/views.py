@@ -32,6 +32,7 @@ from .services import (
     get_atr_required_scores,
     get_user_department_ids,
     get_user_staff_profile,
+    resequence_active_questions,
     user_is_auditor_for_assignment,
     user_is_hod_for_assignment,
     user_is_iqac,
@@ -132,8 +133,13 @@ class AuditQuestionListView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
-        qs = AuditQuestion.objects.filter(is_active=True).order_by('sl_no')
-        data = AuditQuestionSerializer(qs, many=True).data
+        resequence_active_questions()
+        qs = AuditQuestion.objects.filter(is_active=True).order_by('sl_no', 'id')
+        data = []
+        for idx, q in enumerate(qs, start=1):
+            serialized = AuditQuestionSerializer(q).data
+            serialized['sl_no'] = idx
+            data.append(serialized)
         return Response({'results': data})
 
     def post(self, request):
@@ -141,9 +147,14 @@ class AuditQuestionListView(APIView):
         if not can_manage_assignments(request.user):
             return Response({'detail': 'Only IQAC can create audit questions.'},
                             status=status.HTTP_403_FORBIDDEN)
-        serializer = AuditQuestionSerializer(data=request.data)
+        data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        max_sl = AuditQuestion.objects.filter(is_active=True).count() + 1
+        data['sl_no'] = max_sl
+        serializer = AuditQuestionSerializer(data=data)
         serializer.is_valid(raise_exception=True)
         question = serializer.save()
+        resequence_active_questions()
+        question.refresh_from_db()
         return Response(AuditQuestionSerializer(question).data, status=status.HTTP_201_CREATED)
 
 
@@ -176,6 +187,7 @@ class AuditQuestionDetailView(APIView):
             return Response({'detail': err}, status=status.HTTP_400_BAD_REQUEST)
         question.is_active = False
         question.save(update_fields=['is_active'])
+        resequence_active_questions()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -244,6 +256,7 @@ class AuditQuestionImportView(APIView):
                 )
                 imported += 1
 
+        resequence_active_questions()
         return Response({
             'imported': imported,
             'skipped': skipped,
