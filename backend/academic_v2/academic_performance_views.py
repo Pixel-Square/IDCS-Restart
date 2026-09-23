@@ -2092,7 +2092,7 @@ class StudentReportPDFView(APIView):
         try:
             from reportlab.lib.pagesizes import A4
             from reportlab.lib.units import mm
-            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, PageTemplate, Frame, KeepTogether
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageTemplate, Frame
             from reportlab.lib import colors
             from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
             from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
@@ -2110,40 +2110,45 @@ class StudentReportPDFView(APIView):
         def on_page(canvas, doc):
             canvas.saveState()
             # Draw professional border
-            canvas.setStrokeColor(colors.HexColor('#CBD5E1'))
+            canvas.setStrokeColor(colors.HexColor('#94A3B8'))
             canvas.setLineWidth(1)
             canvas.rect(10*mm, 10*mm, A4[0] - 20*mm, A4[1] - 20*mm)
             
-            # Header
-            y_pos = A4[1] - 10*mm
+            # Header area
+            y_pos = A4[1] - 12*mm
+            # Left Logo (KRCT)
             if os.path.exists(krct_logo):
-                canvas.drawImage(krct_logo, 15*mm, y_pos - 15*mm, width=50*mm, height=15*mm, preserveAspectRatio=True, anchor='nw', mask='auto')
+                canvas.drawImage(krct_logo, 15*mm, y_pos - 16*mm, width=50*mm, height=16*mm, preserveAspectRatio=True, anchor='nw', mask='auto')
+            # Right Logo (IDCS)
             if os.path.exists(idcs_logo):
-                canvas.drawImage(idcs_logo, A4[0] - 45*mm, y_pos - 15*mm, width=30*mm, height=15*mm, preserveAspectRatio=True, anchor='ne', mask='auto')
+                canvas.drawImage(idcs_logo, A4[0] - 45*mm, y_pos - 16*mm, width=30*mm, height=16*mm, preserveAspectRatio=True, anchor='ne', mask='auto')
             
             # Draw subtle line under header
-            canvas.setStrokeColor(colors.HexColor('#E2E8F0'))
-            canvas.line(10*mm, y_pos - 17*mm, A4[0] - 10*mm, y_pos - 17*mm)
+            canvas.setStrokeColor(colors.HexColor('#CBD5E1'))
+            canvas.setLineWidth(1)
+            canvas.line(10*mm, y_pos - 20*mm, A4[0] - 10*mm, y_pos - 20*mm)
             canvas.restoreState()
 
         doc = SimpleDocTemplate(
             buffer, pagesize=A4,
             leftMargin=15*mm, rightMargin=15*mm,
-            topMargin=30*mm, bottomMargin=15*mm,
+            topMargin=35*mm, bottomMargin=15*mm,
         )
-        frame = Frame(15*mm, 15*mm, A4[0] - 30*mm, A4[1] - 45*mm, id='normal')
-        template = PageTemplate(id='test', frames=frame, onPage=on_page)
+        
+        frame = Frame(15*mm, 15*mm, A4[0] - 30*mm, A4[1] - 50*mm, id='normal')
+        template = PageTemplate(id='ReportPage', frames=frame, onPage=on_page)
         doc.addPageTemplates([template])
 
         elements = []
         styles = getSampleStyleSheet()
-        primary_color = colors.HexColor('#3B82F6') # Attractive blue
+        primary_color = colors.HexColor('#1E3A8A') # Deep professional blue
         
         # --- Title ---
-        title_style = ParagraphStyle('PDFTitle', parent=styles['Title'], fontSize=16, alignment=TA_CENTER, textColor=primary_color, spaceAfter=2, fontName='Helvetica-Bold')
-        elements.append(Paragraph('Individual Student Analysis Report', title_style))
-        subtitle_style = ParagraphStyle('PDFSubtitle', parent=styles['Normal'], fontSize=10, alignment=TA_CENTER, textColor=colors.grey, spaceAfter=14)
-        elements.append(Paragraph(f'Assessment: {exam_type or "All Assessments"}', subtitle_style))
+        title_style = ParagraphStyle('PDFTitle', parent=styles['Title'], fontSize=16, alignment=TA_CENTER, textColor=primary_color, spaceAfter=4, fontName='Helvetica-Bold')
+        elements.append(Spacer(1, 4))
+        elements.append(Paragraph('INDIVIDUAL STUDENT ANALYSIS REPORT', title_style))
+        subtitle_style = ParagraphStyle('PDFSubtitle', parent=styles['Normal'], fontSize=11, alignment=TA_CENTER, textColor=colors.HexColor('#475569'), spaceAfter=16, fontName='Helvetica')
+        elements.append(Paragraph(f'Assessment: <b>{exam_type or "All Assessments"}</b>', subtitle_style))
 
         # --- Student Details ---
         dept_lbl = 'N/A'
@@ -2163,45 +2168,47 @@ class StudentReportPDFView(APIView):
             ['Department:', dept_lbl, 'Section:', sec_lbl],
             ['Semester:', sem_lbl, 'Academic Year:', ay_lbl],
         ]
-        info_tbl = Table(info_data, colWidths=[25*mm, 65*mm, 25*mm, 65*mm])
+        info_tbl = Table(info_data, colWidths=[30*mm, 60*mm, 30*mm, 60*mm])
         info_tbl.setStyle(TableStyle([
-            ('FONTSIZE', (0, 0), (-1, -1), 9),
-            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#64748B')),
-            ('TEXTCOLOR', (2, 0), (2, -1), colors.HexColor('#64748B')),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#475569')),
+            ('TEXTCOLOR', (2, 0), (2, -1), colors.HexColor('#475569')),
             ('TEXTCOLOR', (1, 0), (1, -1), colors.HexColor('#0F172A')),
             ('TEXTCOLOR', (3, 0), (3, -1), colors.HexColor('#0F172A')),
-            ('FONTNAME', (1, 0), (1, -1), 'Helvetica-Bold'),
-            ('FONTNAME', (3, 0), (3, -1), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (2, 0), (2, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
+            ('FONTNAME', (3, 0), (3, -1), 'Helvetica'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
             ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#F8FAFC')),
-            ('ROUNDEDCORNERS', [4, 4, 4, 4]),
-            ('BOX', (0,0), (-1,-1), 0.5, colors.HexColor('#E2E8F0')),
+            ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#CBD5E1')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
         ]))
         elements.append(info_tbl)
-        elements.append(Spacer(1, 10))
+        elements.append(Spacer(1, 14))
 
         # --- Summary Ribbon ---
         ribbon_data = [[
-            Paragraph(f'<font color="#64748B" size="8"><b>AVERAGE MARK</b></font><br/><font size="14"><b>{avg_mark_text}</b></font>', ParagraphStyle('r1', alignment=TA_CENTER)),
-            Paragraph(f'<font color="#64748B" size="8"><b>PERCENTAGE</b></font><br/><font size="14"><b>{avg_pct}%</b></font>', ParagraphStyle('r2', alignment=TA_CENTER)),
-            Paragraph(f'<font color="#64748B" size="8"><b>REMARKS</b></font><br/><font size="12"><b>{remarks}</b></font>', ParagraphStyle('r3', alignment=TA_CENTER))
+            Paragraph(f'<font color="#475569" size="9"><b>AVERAGE MARK</b></font><br/><br/><font size="16" color="#0F172A"><b>{avg_mark_text}</b></font>', ParagraphStyle('r1', alignment=TA_CENTER)),
+            Paragraph(f'<font color="#475569" size="9"><b>PERCENTAGE</b></font><br/><br/><font size="16" color="#0F172A"><b>{avg_pct}%</b></font>', ParagraphStyle('r2', alignment=TA_CENTER)),
+            Paragraph(f'<font color="#475569" size="9"><b>REMARKS</b></font><br/><br/><font size="14" color="#0F172A"><b>{remarks}</b></font>', ParagraphStyle('r3', alignment=TA_CENTER))
         ]]
         ribbon_tbl = Table(ribbon_data, colWidths=[60*mm, 60*mm, 60*mm])
         ribbon_tbl.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, -1), colors.white),
-            ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
+            ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#CBD5E1')),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 8),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
         ]))
         elements.append(ribbon_tbl)
-        elements.append(Spacer(1, 14))
+        elements.append(Spacer(1, 18))
 
         # --- Subject Performance Table ---
-        section_title = ParagraphStyle('SectionTitle', parent=styles['Heading3'], fontSize=11, textColor=primary_color, spaceAfter=6, fontName='Helvetica-Bold')
-        elements.append(Paragraph('Subject Performance Details', section_title))
+        section_title = ParagraphStyle('SectionTitle', parent=styles['Heading3'], fontSize=12, textColor=primary_color, spaceAfter=8, fontName='Helvetica-Bold')
+        elements.append(Paragraph('SUBJECT PERFORMANCE DETAILS', section_title))
 
         def _fmt(val):
             if val is None or val == '—': return '—'
@@ -2229,30 +2236,34 @@ class StudentReportPDFView(APIView):
             except:
                 pass
             
-            res_p = Paragraph(f"<font color=\"{'#10B981' if res == 'Pass' else '#EF4444' if res == 'Fail' else 'black'}\"><b>{res}</b></font>")
+            res_p = Paragraph(f"<font color=\"{'#16A34A' if res == 'Pass' else '#DC2626' if res == 'Fail' else '#0F172A'}\"><b>{res}</b></font>", ParagraphStyle('Res', alignment=TA_CENTER))
 
             table_data.append([
-                md.get('subject_code', ''),
-                Paragraph(md.get('subject_name', ''), ParagraphStyle('CellWrap', fontSize=8, leading=10)),
-                Paragraph(md.get('assessment', ''), ParagraphStyle('CellWrap', fontSize=8, leading=10)),
+                Paragraph(md.get('subject_code', ''), ParagraphStyle('Code', fontSize=9, leading=11, fontName='Helvetica')),
+                Paragraph(md.get('subject_name', ''), ParagraphStyle('Name', fontSize=9, leading=11, fontName='Helvetica')),
+                Paragraph(md.get('assessment', ''), ParagraphStyle('Asmt', fontSize=9, leading=11, fontName='Helvetica')),
                 mark_max,
                 pct_str,
                 res_p,
-                Paragraph(md.get('remark', '—'), ParagraphStyle('CellWrap', fontSize=8, leading=10)),
+                Paragraph(md.get('remark', '—'), ParagraphStyle('Rmk', fontSize=9, leading=11, fontName='Helvetica')),
             ])
 
-        tbl = Table(table_data, colWidths=[18*mm, 45*mm, 30*mm, 20*mm, 20*mm, 15*mm, 32*mm], repeatRows=1)
+        # Widths: 22 + 48 + 26 + 20 + 19 + 15 + 30 = 180mm
+        tbl = Table(table_data, colWidths=[22*mm, 48*mm, 26*mm, 20*mm, 19*mm, 15*mm, 30*mm], repeatRows=1)
         style_cmds = [
             ('BACKGROUND', (0, 0), (-1, 0), primary_color),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
             ('ALIGN', (3, 0), (-1, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+            ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#CBD5E1')),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
-            ('TOPPADDING', (0, 0), (-1, -1), 5),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
         ]
         tbl.setStyle(TableStyle(style_cmds))
         elements.append(tbl)
