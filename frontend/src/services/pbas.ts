@@ -434,6 +434,237 @@ export async function fetchMenteesList(): Promise<PBASMenteeItem[]> {
   return data.mentees || []
 }
 
+export type PBASSubmissionLogRow = {
+  id: string
+  user: {
+    id: number
+    name: string
+    username: string
+    email?: string
+    reg_or_staff_id: string
+    profile_image?: string | null
+    applicant_type: 'student' | 'staff'
+    roles: string[]
+    semester?: number | null
+    section_name?: string | null
+    batch?: string | null
+    designation?: string | null
+  }
+  department: {
+    id?: number | null
+    code?: string | null
+    name?: string | null
+  }
+  leaf_title: string
+  node_id: string
+  node_ancestor_ids?: string[]
+  parent_path: string
+  category: string
+  applicant_type: 'student' | 'staff'
+  submission_type: 'form' | 'upload' | 'link'
+  form_data?: Record<string, any>
+  form_schema?: PBASFormField[]
+  link?: string | null
+  file_url?: string | null
+  file_name?: string | null
+  pbas_credit: number
+  mentor_credit?: number
+  status: 'pending' | 'approved' | 'rejected'
+  current_step?: string
+  approval_history?: Array<{
+    action: string
+    reason?: string
+    user_id?: number
+    user_name?: string
+    timestamp?: string
+  }>
+  created_at?: string | null
+  reviewed_at?: string | null
+  approved_by_name?: string | null
+  rejection_reason?: string
+}
+
+export type PBASSubmissionLogsParams = {
+  role?: string
+  department_id?: number | string
+  semester?: number | string
+  status?: string
+  category?: string
+  submission_type?: string
+  from_date?: string
+  to_date?: string
+  q?: string
+  limit?: number | string
+}
+
+export type PBASSubmissionLogsResponse = {
+  stats: {
+    total: number
+    pending: number
+    approved: number
+    rejected: number
+    total_credits: number
+  }
+  submissions: PBASSubmissionLogRow[]
+}
+
+export async function fetchPBASSubmissionLogs(params?: PBASSubmissionLogsParams): Promise<PBASSubmissionLogsResponse> {
+  const query = new URLSearchParams()
+  if (params) {
+    if (params.role) query.set('role', params.role)
+    if (params.department_id) query.set('department_id', String(params.department_id))
+    if (params.semester) query.set('semester', String(params.semester))
+    if (params.status) query.set('status', params.status)
+    if (params.category) query.set('category', params.category)
+    if (params.submission_type) query.set('submission_type', params.submission_type)
+    if (params.from_date) query.set('from_date', params.from_date)
+    if (params.to_date) query.set('to_date', params.to_date)
+    if (params.q) query.set('q', params.q)
+    if (params.limit !== undefined && params.limit !== '') query.set('limit', String(params.limit))
+  }
+  const url = `/api/pbas/submissions/logs/${query.toString() ? `?${query.toString()}` : ''}`
+  const res = await fetchWithAuth(url)
+  if (!res.ok) throw new Error(await parseError(res))
+  return await res.json()
+}
+
+export type PBASUserActivityRow = {
+  id: number
+  name: string
+  username: string
+  email: string
+  reg_or_staff_id: string
+  profile_image?: string | null
+  role: 'STAFF' | 'STUDENT'
+  roles: string[]
+  designation?: string | null
+  department: {
+    id?: number | string | null
+    code: string
+    name: string
+  }
+  semester?: number | null
+  section_name?: string | null
+  batch?: string | null
+  total_leaf_nodes: number
+  completed_leaf_nodes: number
+  completion_percentage: number
+  total_submissions: number
+  total_credits: number
+  last_submitted_at?: string | null
+  status: 'completed' | 'in_progress' | 'not_started'
+}
+
+export type PBASUserActivityParams = {
+  role?: string
+  department_id?: number | string
+  semester?: number | string
+  status?: string
+  q?: string
+  limit?: number | string
+}
+
+export type PBASUserActivityListResponse = {
+  stats: {
+    total_users: number
+    completed_users: number
+    in_progress_users: number
+    not_started_users: number
+    avg_completion_pct: number
+    matched_count: number
+  }
+  users: PBASUserActivityRow[]
+}
+
+export type PBASActivitySubmissionItem = {
+  id: string
+  submission_type: 'form' | 'upload' | 'link'
+  status: 'pending' | 'approved' | 'rejected'
+  file_name?: string | null
+  file_url?: string | null
+  link?: string | null
+  form_data?: Record<string, any>
+  created_at?: string | null
+  reviewed_at?: string | null
+  approved_by_name?: string | null
+  rejection_reason?: string
+}
+
+export type PBASActivityNodeItem = {
+  id: string
+  label: string
+  audience: string
+  input_mode: string
+  form_schema?: PBASFormField[]
+  link?: string | null
+  uploaded_name?: string | null
+  limit?: number | null
+  pbas_credit: number
+  mentor_credit: number
+  college_required: boolean
+  is_leaf: boolean
+  is_completed: boolean
+  status_color: 'green' | 'red'
+  submissions_count: number
+  submissions: PBASActivitySubmissionItem[]
+  total_leaf_children: number
+  completed_leaf_children: number
+  children: PBASActivityNodeItem[]
+}
+
+export type PBASUserActivityDetailResponse = {
+  user: {
+    id: number
+    name: string
+    username: string
+    email: string
+    reg_or_staff_id: string
+    profile_image?: string | null
+    role: 'STAFF' | 'STUDENT'
+    roles: string[]
+    designation?: string | null
+    department: {
+      id?: number | string | null
+      code: string
+      name: string
+    }
+    semester?: number | null
+    section_name?: string | null
+    batch?: string | null
+  }
+  stats: {
+    total_leaf_nodes: number
+    completed_leaf_nodes: number
+    completion_percentage: number
+    total_submissions: number
+    total_credits: number
+  }
+  nodes_tree: PBASActivityNodeItem[]
+}
+
+export async function fetchPBASUserActivityList(params?: PBASUserActivityParams): Promise<PBASUserActivityListResponse> {
+  const query = new URLSearchParams()
+  if (params) {
+    if (params.role) query.set('role', params.role)
+    if (params.department_id) query.set('department_id', String(params.department_id))
+    if (params.semester) query.set('semester', String(params.semester))
+    if (params.status) query.set('status', params.status)
+    if (params.q) query.set('q', params.q)
+    if (params.limit !== undefined && params.limit !== '') query.set('limit', String(params.limit))
+  }
+  const url = `/api/pbas/activity/users/${query.toString() ? `?${query.toString()}` : ''}`
+  const res = await fetchWithAuth(url)
+  if (!res.ok) throw new Error(await parseError(res))
+  return await res.json()
+}
+
+export async function fetchPBASUserActivityDetail(userId: number | string): Promise<PBASUserActivityDetailResponse> {
+  const url = `/api/pbas/activity/users/${encodeURIComponent(userId)}/`
+  const res = await fetchWithAuth(url)
+  if (!res.ok) throw new Error(await parseError(res))
+  return await res.json()
+}
+
 export default {
   listCustomDepartments,
   createCustomDepartment,
@@ -458,7 +689,11 @@ export default {
   updateApprovalFlow,
   fetchAllRoles,
   fetchMenteesList,
+  fetchPBASSubmissionLogs,
+  fetchPBASUserActivityList,
+  fetchPBASUserActivityDetail,
   getStoredPBASTree,
   saveStoredPBASTree,
 }
+
 

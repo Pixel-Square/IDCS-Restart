@@ -8,7 +8,7 @@ export default defineConfig({
     port: 5174,
     proxy: {
       '/api': {
-        target: process.env.VITE_DEV_API_PROXY_TARGET || 'https://db.zynix.us',
+        target: process.env.VITE_DEV_API_PROXY_TARGET || 'https://db.krgi.co.in',
         changeOrigin: true,
         secure: true,
       },

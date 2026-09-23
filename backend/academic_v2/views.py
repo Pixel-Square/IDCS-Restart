@@ -311,6 +311,7 @@ def google_sheet_links(request):
                 or 'Theory'
             )
 
+            qp_questions = _get_qp_specs_for_exam(exam_assignment)
             exam_assignments.append({
                 'id': str(exam_assignment.id),
                 'sectionId': str(section.id),
@@ -322,9 +323,10 @@ def google_sheet_links(request):
                 'classType': class_type_name or 'THEORY',
                 'classTypeName': class_type_display,
                 'qpType': getattr(exam_assignment, 'qp_type', '') or '',
+                'questions': qp_questions,
                 'columnMapping': {
-                    'regNoColumn': assignment_config.get('regNoColumn') or ('D' if (mm_info and mm_info.get('mode') == 'user_defined') else 'A'),
-                    'nameColumn': assignment_config.get('nameColumn') or ('E' if (mm_info and mm_info.get('mode') == 'user_defined') else 'B'),
+                    'regNoColumn': assignment_config.get('regNoColumn') or ('D' if (mm_info and mm_info.get('mode') == 'user_defined') else 'D'),
+                    'nameColumn': assignment_config.get('nameColumn') or ('E' if (mm_info and mm_info.get('mode') == 'user_defined') else 'E'),
                     'coRow': assignment_config.get('coRow') or (6 if (mm_info and mm_info.get('mode') == 'user_defined') else None),
                     'maxMarksRow': assignment_config.get('maxMarksRow') or (8 if (mm_info and mm_info.get('mode') == 'user_defined') else None),
                     'titleRow': assignment_config.get('titleRow') or (5 if (mm_info and mm_info.get('mode') == 'user_defined') else None),
@@ -6738,8 +6740,23 @@ def faculty_exam_confirm_mark_manager(request, exam_id):
             btls.append(None)
             enabled.append(True)
 
-    # Exam column after all CO items, before Total
-    if cia_enabled and cia_max_marks > 0:
+    # Exam / CIA columns after all CO items
+    exam_cols = config.get('exam_columns') or config.get('special_columns')
+    if isinstance(exam_cols, list) and exam_cols:
+        for ex_it in exam_cols:
+            if ex_it.get('enabled') is False:
+                continue
+            ex_lbl = str(ex_it.get('label') or ex_it.get('title') or 'Exam').strip() or 'Exam'
+            ex_max = float(ex_it.get('max_marks') or 0)
+            ex_cos = ex_it.get('cos') or ex_it.get('co')
+            if ex_max > 0:
+                titles.append(ex_lbl)
+                marks.append(ex_max)
+                cos_list.append(ex_cos if ex_cos else None)
+                btls.append(None)
+                enabled.append(True)
+                total_max += ex_max
+    elif cia_enabled and cia_max_marks > 0:
         cia_label = str(config.get('cia_label') or 'Exam').strip() or 'Exam'
         cia_cos = config.get('cia_cos')
         titles.append(cia_label)
@@ -7599,21 +7616,16 @@ def faculty_course_co_summary(request, ta_id):
             if derived_cos:
                 covered_cos = derived_cos
 
-            # Build per-CO max marks
-            for i, c in enumerate(qp_cos):
-                if c is not None and i < len(qp_enabled) and qp_enabled[i]:
-                    co_list = _extract_co_list(c)
-                    if not co_list:
-                        continue
-                    split_max = (qp_marks[i] if i < len(qp_marks) else 0) / max(len(co_list), 1)
-                    for co in co_list:
-                        co_max_map[co] = co_max_map.get(co, 0) + split_max
-
             # Determine if Mark Manager is active for this exam
             is_mm = bool(ct_mm_enabled_map.get(ea_key, False))
             mm_config = p.get('mark_manager', {}) if isinstance(p.get('mark_manager'), dict) else {}
             if mm_config.get('enabled'):
                 is_mm = True
+
+            cia_enabled = False
+            exam_max_marks = 0.0
+            exam_q_indices = []
+            exam_q_index = None
 
             if is_mm:
                 cia_enabled = bool(mm_config.get('cia_enabled', False))
@@ -7662,12 +7674,12 @@ def faculty_course_co_summary(request, ta_id):
                             exam_max = 0
                         exam_q_indices.append(last_idx)
 
-                if exam_max == 0 and mm_raw and isinstance(mm_raw, dict):
-                    ex_cols = mm_raw.get('exam_columns') or mm_raw.get('special_columns')
+                if exam_max == 0 and mm_config and isinstance(mm_config, dict):
+                    ex_cols = mm_config.get('exam_columns') or mm_config.get('special_columns')
                     if isinstance(ex_cols, list) and ex_cols:
                         exam_max = sum(float(ex.get('max_marks') or 0) for ex in ex_cols if ex.get('enabled') is not False)
-                    if exam_max == 0 and mm_raw.get('cia_max_marks'):
-                        exam_max = float(mm_raw.get('cia_max_marks') or 0)
+                    if exam_max == 0 and mm_config.get('cia_max_marks'):
+                        exam_max = float(mm_config.get('cia_max_marks') or 0)
 
                 exam_max_marks = float(exam_max or 0)
                 exam_q_index = exam_q_indices[0] if exam_q_indices else None
@@ -7695,6 +7707,18 @@ def faculty_course_co_summary(request, ta_id):
             else:
                 # Fall back to global non-Mark Manager ClassType configuration
                 co_weights = ct_co_weights_map.get(ea_key, {})
+
+            # Build per-CO max marks (direct items only for MM)
+            for i, c in enumerate(qp_cos):
+                if c is not None and i < len(qp_enabled) and qp_enabled[i]:
+                    if is_mm and cia_enabled and (i in exam_q_indices):
+                        continue
+                    co_list = _extract_co_list(c)
+                    if not co_list:
+                        continue
+                    split_max = (qp_marks[i] if i < len(qp_marks) else 0) / max(len(co_list), 1)
+                    for co in co_list:
+                        co_max_map[co] = co_max_map.get(co, 0) + split_max
 
 
 
@@ -7811,6 +7835,7 @@ def faculty_course_co_summary(request, ta_id):
         # This avoids relying on stale co1..co5 columns when Mark Manager logic changes.
         internal = {
             '_exam_q_index': exam_q_index,
+            '_exam_q_indices': exam_q_indices,
             '_qp_marks': qp_marks if isinstance(qp_marks, list) else [],
         }
         if ea_kind == 'cqi' and isinstance(cqi_sub, dict):
@@ -8021,9 +8046,13 @@ def faculty_course_co_summary(request, ta_id):
                 if combo_cols:
                     einfo['combo_questions'] = combo_cols
 
-                # Base totals from CO-mapped questions
+                # Base totals from CO-mapped questions (direct experiments only)
                 co_totals_direct = {c: 0.0 for c in range(1, co_count + 1)}
                 total_from_questions = 0.0
+                exam_indices_set = set(einfo.get('_exam_q_indices') or [])
+                if einfo.get('_exam_q_index') is not None:
+                    exam_indices_set.add(einfo['_exam_q_index'])
+
                 for i, co in enumerate(qp_cos_local):
                     if i < len(qp_enabled_local) and not qp_enabled_local[i]:
                         continue
@@ -8034,6 +8063,10 @@ def faculty_course_co_summary(request, ta_id):
 
                     # Total mark should reflect all enabled question marks (including Exam)
                     total_from_questions += float(q_mark)
+
+                    # Exclude Exam / CIA questions from direct CO experiment totals
+                    if einfo.get('cia_enabled') and (i in exam_indices_set):
+                        continue
 
                     co_list = _extract_cos(co)
                     if not co_list:
@@ -8071,12 +8104,20 @@ def faculty_course_co_summary(request, ta_id):
                 # What we persist to DB (direct + Exam split), so downstream reports remain correct.
                 co_totals_effective = dict(co_totals_direct)
                 if einfo.get('cia_enabled'):
-                    covered = einfo.get('covered_cos') or []
-                    enabled_cos = [int(c) for c in covered if isinstance(c, int) and 1 <= int(c) <= co_count]
-                    if exam_raw_for_split and enabled_cos:
-                        share = float(exam_raw_for_split) / len(enabled_cos)
-                        for c in enabled_cos:
-                            co_totals_effective[c] = float(co_totals_effective.get(c, 0.0) + share)
+                    exam_indices = einfo.get('_exam_q_indices') or []
+                    if not exam_indices and isinstance(einfo.get('_exam_q_index'), int) and einfo['_exam_q_index'] >= 0:
+                        exam_indices = [einfo['_exam_q_index']]
+                    for idx in exam_indices:
+                        v = qmarks.get(_qkey(idx), 0) or 0
+                        v_num = float(v) if isinstance(v, (int, float)) else 0.0
+                        q_cos = _extract_cos(qp_cos_local[idx]) if idx < len(qp_cos_local) else []
+                        if not q_cos:
+                            q_cos = [int(c) for c in (einfo.get('cia_cos') or einfo.get('covered_cos') or []) if 1 <= int(c) <= co_count]
+                        if v_num > 0 and q_cos:
+                            share = v_num / len(q_cos)
+                            for c in q_cos:
+                                if 1 <= c <= co_count:
+                                    co_totals_effective[c] = float(co_totals_effective.get(c, 0.0) + share)
 
                 effective_for_db = co_totals_effective
                 computed_total_from_questions = round(total_from_questions, 2)
@@ -8189,30 +8230,56 @@ def faculty_course_co_summary(request, ta_id):
                     student_entry['weighted_marks'][key] = weighted
                     student_entry['co_totals'][co_num - 1] += weighted
 
-                # Exam split weighted contribution (ONLY to right-side CO totals)
+                # Exam split weighted contribution (ONLY to right-side CO totals and purple E wt: columns)
                 if einfo.get('cia_enabled'):
-                    enabled_cos = [
-                        int(c) for c in (covered_cos or [])
-                        if isinstance(c, int) and 1 <= int(c) <= co_count
-                    ]
                     exam_max_marks_local = float(einfo.get('exam_max_marks') or 0)
                     exam_weight_local = float(einfo.get('cia_weight') or 0)
                     per_co_local = bool(einfo.get('cia_weight_per_co', False))
-                    if enabled_cos and exam_max_marks_local > 0 and exam_weight_local > 0 and exam_raw_for_split:
-                        share_raw = float(exam_raw_for_split) if per_co_local else (float(exam_raw_for_split) / len(enabled_cos))
-                        share_max = float(exam_max_marks_local) if per_co_local else (float(exam_max_marks_local) / len(enabled_cos))
-                        share_wt = float(exam_weight_local) if per_co_local else (float(exam_weight_local) / len(enabled_cos))
-                        if share_max > 0:
-                            for c in enabled_cos:
-                                add_w = round((share_raw / share_max) * share_wt, 2)
-                                student_entry['co_totals'][c - 1] += add_w
-                                # Store per-CO exam split weighted mark for display in CO Summary
-                                wm_key = f"{einfo['id']}_exam_CO{c}"
-                                student_entry['weighted_marks'][wm_key] = round(add_w, 2)
-                    elif enabled_cos:
-                        for c in enabled_cos:
-                            wm_key = f"{einfo['id']}_exam_CO{c}"
-                            student_entry['weighted_marks'][wm_key] = 0.0
+                    qp_marks_local = einfo.get('_qp_marks') or []
+                    exam_indices = einfo.get('_exam_q_indices') or []
+                    if not exam_indices and isinstance(einfo.get('_exam_q_index'), int) and einfo['_exam_q_index'] >= 0:
+                        exam_indices = [einfo['_exam_q_index']]
+
+                    # Initialize all COs to 0.0 for this exam's purple weighted_marks
+                    for c in range(1, co_count + 1):
+                        wm_key = f"{einfo['id']}_exam_CO{c}"
+                        student_entry['weighted_marks'][wm_key] = 0.0
+
+                    if exam_weight_local > 0 and exam_indices:
+                        for idx in exam_indices:
+                            v = qmarks.get(_qkey(idx), 0) or 0
+                            v_num = float(v) if isinstance(v, (int, float)) else 0.0
+                            q_max = float(qp_marks_local[idx] or 0) if idx < len(qp_marks_local) else 0.0
+                            if q_max <= 0:
+                                q_max = float(exam_max_marks_local or 50.0)
+                            q_cos = _extract_cos(qp_cos_local[idx]) if idx < len(qp_cos_local) else []
+                            if not q_cos:
+                                q_cos = [int(c) for c in (einfo.get('cia_cos') or einfo.get('covered_cos') or []) if 1 <= int(c) <= co_count]
+                            if not q_cos:
+                                continue
+
+                            # Weight share for this specific exam question
+                            if exam_max_marks_local > 0:
+                                q_wt = (q_max / exam_max_marks_local) * exam_weight_local
+                            else:
+                                q_wt = exam_weight_local / len(exam_indices)
+
+                            if per_co_local:
+                                share_raw = v_num
+                                share_max = q_max
+                                share_wt = q_wt
+                            else:
+                                share_raw = v_num / len(q_cos)
+                                share_max = q_max / len(q_cos)
+                                share_wt = q_wt / len(q_cos)
+
+                            if share_max > 0 and share_wt > 0:
+                                for c in q_cos:
+                                    if 1 <= c <= co_count:
+                                        add_w = round((share_raw / share_max) * share_wt, 2)
+                                        student_entry['co_totals'][c - 1] += add_w
+                                        wm_key = f"{einfo['id']}_exam_CO{c}"
+                                        student_entry['weighted_marks'][wm_key] = round(student_entry['weighted_marks'].get(wm_key, 0.0) + add_w, 2)
 
         # Apply CQI exam(s) after non-CQI totals are known.
         if pending_cqi:

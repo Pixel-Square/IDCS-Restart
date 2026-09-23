@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { ModalPortal } from '../../../components/ModalPortal'
+import PBASSubmissionLogsTab from './PBASSubmissionLogsTab'
+import PBASUserActivityTab from './PBASUserActivityTab'
 import {
   PBASAudience,
   PBASFormField,
@@ -46,6 +48,23 @@ function draftToPayload(n: PBASNode): any {
 }
 
 export default function PBASAdminPage() {
+  const [activeMainTab, setActiveMainTab] = useState<'config' | 'logs' | 'activity'>('config')
+  const [initialUserId, setInitialUserId] = useState<number | null>(null)
+
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const tab = params.get('tab')
+      const uid = params.get('user_id')
+      if (tab === 'logs' || tab === 'activity' || tab === 'config') {
+        setActiveMainTab(tab)
+      }
+      if (uid && !isNaN(Number(uid))) {
+        setInitialUserId(Number(uid))
+        setActiveMainTab('activity')
+      }
+    } catch {}
+  }, [])
   const [tree, setTree] = useState<PBASNode[]>([])
   const [loading, setLoading] = useState(true)
   const [savingDB, setSavingDB] = useState(false)
@@ -498,104 +517,211 @@ export default function PBASAdminPage() {
   }
 
   return (
-    <div className="p-4 md:p-8 max-w-6xl mx-auto space-y-6">
-      {/* Header Banner */}
-      <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200/80 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="bg-indigo-100 text-indigo-700 text-xs font-semibold px-2.5 py-1 rounded-full uppercase tracking-wider">
-              PBAS Configuration
-            </span>
-            {dbStatusMsg && (
-              <span className="bg-emerald-100 text-emerald-700 text-xs font-semibold px-2.5 py-1 rounded-full animate-pulse">
-                {dbStatusMsg}
+    <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
+      {/* Top Slidebar Tab Switcher */}
+      <div className="bg-white/95 backdrop-blur rounded-2xl p-2.5 sm:p-3 shadow-sm border border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="inline-flex items-center gap-1.5 p-1 bg-slate-100/90 rounded-xl border border-slate-200/80 w-full sm:w-auto">
+          <button
+            type="button"
+            onClick={() => {
+              setInitialUserId(null)
+              setActiveMainTab('config')
+            }}
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-4 sm:px-5 py-2.5 rounded-lg text-xs sm:text-sm font-bold transition-all duration-200 ${
+              activeMainTab === 'config'
+                ? 'bg-white text-indigo-700 shadow-sm border border-slate-200/70 scale-[1.01]'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+            }`}
+          >
+            <span className="text-sm">⚙️</span>
+            <span>PBAS Config</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setInitialUserId(null)
+              setActiveMainTab('logs')
+            }}
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-4 sm:px-5 py-2.5 rounded-lg text-xs sm:text-sm font-bold transition-all duration-200 ${
+              activeMainTab === 'logs'
+                ? 'bg-white text-indigo-700 shadow-sm border border-slate-200/70 scale-[1.01]'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+            }`}
+          >
+            <span className="text-sm">📋</span>
+            <span>Submission Logs</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setInitialUserId(null)
+              setActiveMainTab('activity')
+            }}
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-4 sm:px-5 py-2.5 rounded-lg text-xs sm:text-sm font-bold transition-all duration-200 ${
+              activeMainTab === 'activity'
+                ? 'bg-white text-indigo-700 shadow-sm border border-slate-200/70 scale-[1.01]'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+            }`}
+          >
+            <span className="text-sm">👥</span>
+            <span>User Activity</span>
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {activeMainTab !== 'activity' && (
+            <button
+              type="button"
+              onClick={() => {
+                setInitialUserId(null)
+                setActiveMainTab('activity')
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 text-xs font-semibold shadow-xs transition-all active:scale-95"
+            >
+              <span>👥 View User Activity</span>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          )}
+          {activeMainTab !== 'logs' && (
+            <button
+              type="button"
+              onClick={() => {
+                setInitialUserId(null)
+                setActiveMainTab('logs')
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 text-xs font-semibold shadow-xs transition-all active:scale-95"
+            >
+              <span>📋 View Submission Logs</span>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          )}
+          {activeMainTab !== 'config' && (
+            <button
+              type="button"
+              onClick={() => {
+                setInitialUserId(null)
+                setActiveMainTab('config')
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 text-xs font-semibold shadow-xs transition-all active:scale-95"
+            >
+              <span>⚙️ Manage PBAS Config</span>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {activeMainTab === 'activity' ? (
+        <PBASUserActivityTab initialUserId={initialUserId} />
+      ) : activeMainTab === 'logs' ? (
+        <PBASSubmissionLogsTab />
+      ) : (
+        <>
+          {/* Header Banner */}
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200/80 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="bg-indigo-100 text-indigo-700 text-xs font-semibold px-2.5 py-1 rounded-full uppercase tracking-wider">
+                  PBAS Configuration
+                </span>
+                {dbStatusMsg && (
+                  <span className="bg-emerald-100 text-emerald-700 text-xs font-semibold px-2.5 py-1 rounded-full animate-pulse">
+                    {dbStatusMsg}
+                  </span>
+                )}
+              </div>
+              <h1 className="text-2xl font-bold text-slate-900 mt-2">PBAS Admin - Tree & Form Manager</h1>
+              <p className="text-sm text-slate-500 mt-1">
+                Build hierarchical PBAS groups, set audience visibility (Staff/Student/Both), authorize approvers, and build dynamic forms for leaf submissions.
+              </p>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center gap-3 shrink-0">
+              {/* Approval Flow Config Button */}
+              <button
+                type="button"
+                onClick={handleOpenFlowModal}
+                disabled={loading || savingDB}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-semibold text-sm shadow-md transition-all duration-200 active:scale-95 border border-slate-800"
+              >
+                <span>🔄</span>
+                <span>Approval Flow</span>
+              </button>
+
+              {/* Create Group Button */}
+              <button
+                type="button"
+                onClick={handleOpenCreateGroupModal}
+                disabled={loading || savingDB}
+                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium text-sm shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/30 transition-all duration-200 active:scale-95"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+                <span>Create Group</span>
+              </button>
+            </div>
+          </div>
+
+          {apiError && (
+            <div className="p-4 rounded-xl border border-red-200 bg-red-50 text-red-800 text-sm font-medium">
+              {apiError}
+            </div>
+          )}
+
+          {/* Tree Visualization Container */}
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200/80 space-y-4">
+            <div className="flex items-center justify-between border-b pb-4 flex-wrap gap-2">
+              <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+                <svg className="w-5 h-5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+                Group Tree Hierarchy ({tree.length} Root Groups)
+              </h2>
+              <span className="text-xs text-slate-400">
+                Click "Auth" for approvers • Click "Form" on leaf nodes to build custom Google Forms-like questionnaires.
               </span>
+            </div>
+
+            {loading ? (
+              <div className="py-12 text-center text-slate-500 text-sm font-medium">
+                Loading tree from Database…
+              </div>
+            ) : tree.length === 0 ? (
+              <div className="py-12 text-center border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                <svg className="w-12 h-12 text-slate-300 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+                <p className="text-slate-600 font-medium">No PBAS Groups created yet.</p>
+                <p className="text-xs text-slate-400 mt-1">Click the "Create Group" button above to add your first category.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {tree.map((node) => (
+                  <TreeNodeItem
+                    key={node.id}
+                    node={node}
+                    depth={0}
+                    onAddSubgroup={handleOpenCreateSubgroupModal}
+                    onOpenAuth={handleOpenAuthModal}
+                    onOpenForm={handleOpenFormModal}
+                    onOpenConfig={handleOpenConfigModal}
+                    onChangeNode={handleNodeChange}
+                    onDeleteNode={handleDeleteNode}
+                  />
+                ))}
+              </div>
             )}
           </div>
-          <h1 className="text-2xl font-bold text-slate-900 mt-2">PBAS Admin - Tree & Form Manager</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            Build hierarchical PBAS groups, set audience visibility (Staff/Student/Both), authorize approvers, and build dynamic forms for leaf submissions.
-          </p>
-        </div>
-
-        {/* Action Buttons */}
-        <div className="flex items-center gap-3 shrink-0">
-          {/* Approval Flow Config Button */}
-          <button
-            type="button"
-            onClick={handleOpenFlowModal}
-            disabled={loading || savingDB}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-semibold text-sm shadow-md transition-all duration-200 active:scale-95 border border-slate-800"
-          >
-            <span>🔄</span>
-            <span>Approval Flow</span>
-          </button>
-
-          {/* Create Group Button */}
-          <button
-            type="button"
-            onClick={handleOpenCreateGroupModal}
-            disabled={loading || savingDB}
-            className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium text-sm shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/30 transition-all duration-200 active:scale-95"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
-            <span>Create Group</span>
-          </button>
-        </div>
-      </div>
-
-      {apiError && (
-        <div className="p-4 rounded-xl border border-red-200 bg-red-50 text-red-800 text-sm font-medium">
-          {apiError}
-        </div>
+        </>
       )}
-
-      {/* Tree Visualization Container */}
-      <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200/80 space-y-4">
-        <div className="flex items-center justify-between border-b pb-4 flex-wrap gap-2">
-          <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
-            <svg className="w-5 h-5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-            </svg>
-            Group Tree Hierarchy ({tree.length} Root Groups)
-          </h2>
-          <span className="text-xs text-slate-400">
-            Click "Auth" for approvers • Click "Form" on leaf nodes to build custom Google Forms-like questionnaires.
-          </span>
-        </div>
-
-        {loading ? (
-          <div className="py-12 text-center text-slate-500 text-sm font-medium">
-            Loading tree from Database…
-          </div>
-        ) : tree.length === 0 ? (
-          <div className="py-12 text-center border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
-            <svg className="w-12 h-12 text-slate-300 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-            </svg>
-            <p className="text-slate-600 font-medium">No PBAS Groups created yet.</p>
-            <p className="text-xs text-slate-400 mt-1">Click the "Create Group" button above to add your first category.</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {tree.map((node) => (
-              <TreeNodeItem
-                key={node.id}
-                node={node}
-                depth={0}
-                onAddSubgroup={handleOpenCreateSubgroupModal}
-                onOpenAuth={handleOpenAuthModal}
-                onOpenForm={handleOpenFormModal}
-                onOpenConfig={handleOpenConfigModal}
-                onChangeNode={handleNodeChange}
-                onDeleteNode={handleDeleteNode}
-              />
-            ))}
-          </div>
-        )}
-      </div>
 
       {/* MODAL POPUP FOR CREATING GROUP / SUBGROUP */}
       {isModalOpen && (

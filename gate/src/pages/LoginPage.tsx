@@ -52,7 +52,7 @@ export default function LoginPage({ onLoggedIn }: LoginPageProps): JSX.Element {
           <div>
             <div className="eyebrow">Login</div>
             <h1>Gate</h1>
-            <p>db.zynix.us</p>
+            <p>db.krgi.co.in</p>
           </div>
         </div>
 

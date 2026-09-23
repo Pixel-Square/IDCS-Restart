@@ -149,6 +149,65 @@ interface MarkManagerData {
   cos: Record<string, MarkManagerCOConfig>;
 }
 
+function extractExamColumns(mm: any, qpQuestions?: any[]): Array<{ col?: string; title?: string; label?: string; co?: number[]; cos?: number[]; max_marks?: number; weight?: number; enabled?: boolean }> {
+  let cols: any[] = mm?.exam_columns || mm?.special_columns || [];
+  if ((!cols || cols.length === 0) && Array.isArray(qpQuestions)) {
+    const multiCoQuestions = qpQuestions.filter((q: any) => {
+      const coSpec = q.co_number || q.co;
+      const isMulti = Array.isArray(coSpec) && coSpec.length > 1;
+      const isCommaStr = typeof coSpec === 'string' && /[,\-&]/.test(coSpec);
+      const isExamTitle = /exam|cia/i.test(q.question_number || q.title || '');
+      return isMulti || isCommaStr || isExamTitle;
+    });
+    if (multiCoQuestions.length > 0) {
+      cols = multiCoQuestions.map((q: any, qIdx: number) => {
+        let cosList: number[] = [];
+        const coSpec = q.co_number || q.co;
+        if (Array.isArray(coSpec)) {
+          cosList = coSpec.map((x: any) => Number(x)).filter((n: number) => Number.isFinite(n) && n > 0);
+        } else if (typeof coSpec === 'string') {
+          const parts = coSpec.split(/[^0-9]+/).filter(Boolean).map(Number);
+          cosList = parts.filter((n: number) => Number.isFinite(n) && n > 0);
+        } else if (Number(coSpec) > 0) {
+          cosList = [Number(coSpec)];
+        }
+        return {
+          col: q.col || `Q${qIdx + 1}`,
+          title: q.question_number || q.title || `Exam ${qIdx + 1}`,
+          label: q.question_number || q.title || `Exam ${qIdx + 1}`,
+          cos: cosList.length ? cosList : [1, 2, 3],
+          co: cosList.length ? cosList : [1, 2, 3],
+          max_marks: Number(q.max_marks) || 50,
+          weight: Number(q.weight) || 0,
+          enabled: q.enabled !== false,
+        };
+      });
+    }
+  }
+  return (cols || []).map((ex: any, idx: number) => {
+    let cosList: number[] = [];
+    const coSpec = ex.cos || ex.co;
+    if (Array.isArray(coSpec)) {
+      cosList = coSpec.map((x: any) => Number(x)).filter((n: number) => Number.isFinite(n) && n > 0);
+    } else if (typeof coSpec === 'string') {
+      const parts = coSpec.split(/[^0-9]+/).filter(Boolean).map(Number);
+      cosList = parts.filter((n: number) => Number.isFinite(n) && n > 0);
+    } else if (Number(coSpec) > 0) {
+      cosList = [Number(coSpec)];
+    }
+    return {
+      col: ex.col || `Col${idx + 1}`,
+      title: ex.title || ex.label || `Exam ${idx + 1}`,
+      label: ex.label || ex.title || `Exam ${idx + 1}`,
+      cos: cosList,
+      co: cosList,
+      max_marks: Number(ex.max_marks) || 50,
+      weight: Number(ex.weight) || 0,
+      enabled: ex.enabled !== false,
+    };
+  });
+}
+
 /** Pinned bypass header shown in MarkEntryPage when accessed via admin bypass. */
 function BypassPinnedBar({
   facultyName,
@@ -1318,14 +1377,15 @@ export default function MarkEntryPage() {
               cos[c] = { enabled: coveredSet.has(c), num_items: 2, max_marks: 25, weight: 0 };
             }
           });
+          const examCols = extractExamColumns(examData.mark_manager, examData.qp_pattern?.questions);
           setMmSetup({
             cos,
-            cia_enabled: Boolean(examData.mark_manager?.cia_enabled),
+            cia_enabled: Boolean(examData.mark_manager?.cia_enabled) || (examCols.length > 0),
             cia_label: (examData.mark_manager as any)?.cia_label || 'Exam',
             cia_max_marks: Number(examData.mark_manager?.cia_max_marks) || 50,
             cia_weight: Number(examData.mark_manager?.cia_weight) || 0,
             cia_cos: (examData.mark_manager as any)?.cia_cos || undefined,
-            exam_columns: (examData.mark_manager as any)?.exam_columns || (examData.mark_manager as any)?.special_columns || undefined,
+            exam_columns: examCols.length > 0 ? examCols : undefined,
             item_name: (examData.mark_manager as any)?.item_name || 'Experiments',
           });
           setShowMarkManagerToggle(true);
@@ -2172,14 +2232,15 @@ export default function MarkEntryPage() {
         ? { enabled: Boolean(c.enabled), num_items: Math.max(1, Number(c.num_items) || 1), max_marks: Number(c.max_marks) || 25, weight: Number((c as any).weight) || 0 }
         : { enabled: false, num_items: 2, max_marks: 25, weight: 0 };
     });
+    const examCols = extractExamColumns(mm, examInfo.qp_pattern?.questions);
     setMmSetup({
       cos,
-      cia_enabled: Boolean(mm.cia_enabled),
+      cia_enabled: Boolean(mm.cia_enabled) || (examCols.length > 0),
       cia_label: (mm as any).cia_label || 'Exam',
       cia_max_marks: Number(mm.cia_max_marks) || 50,
       cia_weight: Number((mm as any).cia_weight) || 0,
       cia_cos: (mm as any).cia_cos || undefined,
-      exam_columns: (mm as any).exam_columns || (mm as any).special_columns || undefined,
+      exam_columns: examCols.length > 0 ? examCols : undefined,
       item_name: (mm as any).item_name || 'Experiments',
     });
     setShowMarkManagerToggle(true);
@@ -3158,14 +3219,15 @@ export default function MarkEntryPage() {
                           }
                         : { enabled: false, num_items: 2, max_marks: 25, weight: 0 };
                     });
+                    const examCols = extractExamColumns(derived);
                     setMmSetup({
                       cos,
-                      cia_enabled: Boolean(derived.cia_enabled),
+                      cia_enabled: Boolean(derived.cia_enabled) || (examCols.length > 0),
                       cia_label: derived.cia_label || 'Exam',
                       cia_max_marks: Number(derived.cia_max_marks) || 50,
                       cia_weight: Number(derived.cia_weight) || 0,
                       cia_cos: derived.cia_cos || undefined,
-                      exam_columns: derived.exam_columns || derived.special_columns || undefined,
+                      exam_columns: examCols.length > 0 ? examCols : undefined,
                       item_name: derived.item_name || 'Experiments',
                     });
                     const enabledSummary = Object.entries(cos)

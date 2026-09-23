@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.db import transaction
 from django.http import FileResponse
-from django.db.models import Q
+from django.db.models import Q, Sum
 from rest_framework import status, viewsets
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
@@ -885,19 +885,54 @@ class PBASSubmissionDocumentView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, submission_id):
-        submission = _get_user_accessible_submissions(request.user, 'all').filter(pk=submission_id).first()
+        submission = PBASSubmission.objects.filter(pk=submission_id).select_related('user', 'node', 'node__department').first()
         if not submission:
+            return Response({'detail': 'Submission not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        is_manager = _is_iqac_manager(request.user)
+        is_owner = (submission.user_id == request.user.id)
+        is_staff_user = getattr(request.user, 'is_staff', False) or getattr(request.user, 'is_superuser', False)
+        is_staff_profile = hasattr(request.user, 'staff_profile') and request.user.staff_profile is not None
+        has_manager_role = False
+        try:
+            has_manager_role = request.user.roles.filter(
+                name__iregex=r'^(IQAC|ADMIN|PRINCIPAL|PS|PBAS|HOD|AHOD|DEAN|STAFF|FACULTY)'
+            ).exists()
+        except Exception:
+            has_manager_role = False
+
+        if not (
+            is_manager
+            or is_owner
+            or is_staff_user
+            or is_staff_profile
+            or has_manager_role
+            or _can_view_submission_report(request.user, submission)
+            or _user_can_access_submission(request.user, submission)
+        ):
             return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
+
         if not submission.file:
             return Response({'detail': 'No document is attached to this submission.'}, status=status.HTTP_404_NOT_FOUND)
 
-        response = FileResponse(
-            submission.file.open('rb'),
-            as_attachment=False,
-            filename=submission.file_name or submission.file.name.rsplit('/', 1)[-1],
-        )
-        response['Content-Disposition'] = 'inline'
-        return response
+        try:
+            filename = submission.file_name or submission.file.name.rsplit('/', 1)[-1]
+            import mimetypes
+            content_type, _ = mimetypes.guess_type(filename)
+            if not content_type:
+                content_type = 'application/octet-stream'
+
+            response = FileResponse(
+                submission.file.open('rb'),
+                content_type=content_type,
+                as_attachment=False,
+                filename=filename,
+            )
+            response['Content-Disposition'] = f'inline; filename="{filename}"'
+            response['Access-Control-Allow-Origin'] = '*'
+            return response
+        except Exception as e:
+            return Response({'detail': f'Error loading file: {str(e)}'}, status=status.HTTP_404_NOT_FOUND)
 
 
 from .models import PBASCustomDepartment, PBASNode, PBASSubmission, PBASVerificationTicket, PBASNodeApproverHistory, PBASApprovalFlow
@@ -1098,5 +1133,678 @@ class PBASSubmissionActionView(APIView):
             'status': sub.status,
             'detail': f'Submission successfully {sub.status}.',
         })
+
+
+class PBASSubmissionLogsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not _is_iqac_manager(request.user):
+            user_accessible = _get_user_accessible_submissions(request.user, 'all')
+            if not user_accessible.exists():
+                return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
+            qs = user_accessible
+        else:
+            qs = PBASSubmission.objects.all()
+
+        qs = qs.select_related(
+            'node',
+            'node__department',
+            'node__department__academic_department',
+            'user',
+            'user__staff_profile',
+            'user__staff_profile__department',
+            'user__student_profile',
+            'user__student_profile__home_department',
+            'user__student_profile__section',
+            'user__student_profile__section__semester',
+            'user__student_profile__section__batch',
+            'college',
+            'approved_by',
+        ).prefetch_related('user__roles')
+
+        # Filters
+        role_param = (request.query_params.get('role') or '').strip().upper()
+        if role_param in ['STUDENT', 'STUDENTS']:
+            qs = qs.filter(user__student_profile__isnull=False)
+        elif role_param in ['STAFF', 'FACULTY']:
+            qs = qs.filter(user__staff_profile__isnull=False)
+
+        dept_id_param = request.query_params.get('department_id') or request.query_params.get('department')
+        if dept_id_param:
+            if str(dept_id_param).isdigit():
+                dept_int = int(dept_id_param)
+                qs = qs.filter(
+                    Q(user__staff_profile__department_id=dept_int) |
+                    Q(user__student_profile__home_department_id=dept_int) |
+                    Q(user__student_profile__section__batch__course__department_id=dept_int) |
+                    Q(node__department__academic_department_id=dept_int)
+                )
+            else:
+                code_str = str(dept_id_param).strip()
+                qs = qs.filter(
+                    Q(user__staff_profile__department__code__iexact=code_str) |
+                    Q(user__staff_profile__department__short_name__iexact=code_str) |
+                    Q(user__student_profile__home_department__code__iexact=code_str) |
+                    Q(user__student_profile__home_department__short_name__iexact=code_str) |
+                    Q(node__department__academic_department__code__iexact=code_str) |
+                    Q(node__department__academic_department__short_name__iexact=code_str)
+                )
+
+        semester_param = request.query_params.get('semester')
+        if semester_param and str(semester_param).isdigit():
+            sem_val = int(semester_param)
+            qs = qs.filter(user__student_profile__section__semester__number=sem_val)
+
+        status_param = (request.query_params.get('status') or '').strip().lower()
+        if status_param and status_param != 'all':
+            qs = qs.filter(status=status_param)
+
+        sub_type_param = (request.query_params.get('submission_type') or '').strip().lower()
+        if sub_type_param and sub_type_param != 'all':
+            qs = qs.filter(submission_type=sub_type_param)
+
+        from_date = request.query_params.get('from_date') or request.query_params.get('from')
+        if from_date:
+            try:
+                qs = qs.filter(created_at__date__gte=from_date)
+            except Exception:
+                pass
+
+        to_date = request.query_params.get('to_date') or request.query_params.get('to')
+        if to_date:
+            try:
+                qs = qs.filter(created_at__date__lte=to_date)
+            except Exception:
+                pass
+
+        search_q = (request.query_params.get('q') or '').strip()
+        if search_q:
+            qs = qs.filter(
+                Q(user__first_name__icontains=search_q) |
+                Q(user__last_name__icontains=search_q) |
+                Q(user__username__icontains=search_q) |
+                Q(user__email__icontains=search_q) |
+                Q(user__staff_profile__staff_id__icontains=search_q) |
+                Q(user__student_profile__reg_no__icontains=search_q) |
+                Q(node__label__icontains=search_q) |
+                Q(node__department__title__icontains=search_q) |
+                Q(rejection_reason__icontains=search_q) |
+                Q(approved_by__first_name__icontains=search_q) |
+                Q(approved_by__last_name__icontains=search_q) |
+                Q(approved_by__username__icontains=search_q)
+            )
+
+        category_param = (request.query_params.get('category') or '').strip()
+
+        total_count = qs.count()
+        pending_count = qs.filter(status='pending').count()
+        approved_count = qs.filter(status='approved').count()
+        rejected_count = qs.filter(status='rejected').count()
+
+        total_credits = qs.filter(status='approved').aggregate(total=Sum('node__pbas_credit'))['total'] or 0
+
+        limit_param = request.query_params.get('limit')
+        if limit_param and str(limit_param).isdigit():
+            limit_val = int(limit_param)
+            if limit_val > 0:
+                qs = qs[:limit_val]
+        elif limit_param == 'all':
+            pass
+        else:
+            qs = qs[:200]
+
+        items = []
+        for sub in qs:
+            u = sub.user
+            academic_department = None
+            try:
+                academic_department = sub.node.department.academic_department
+            except Exception:
+                pass
+            if academic_department is None:
+                try:
+                    academic_department = u.staff_profile.department
+                except Exception:
+                    pass
+            if academic_department is None:
+                try:
+                    academic_department = u.student_profile.home_department
+                except Exception:
+                    pass
+
+            sp = getattr(u, 'staff_profile', None)
+            stp = getattr(u, 'student_profile', None)
+
+            applicant_type = 'student' if stp is not None else 'staff'
+            full_name = u.get_full_name().strip() or u.username
+            reg_or_staff = (stp.reg_no if stp else None) or (sp.staff_id if sp else None) or u.username
+
+            profile_img = None
+            if sp and sp.profile_image:
+                profile_img = request.build_absolute_uri(sp.profile_image.url)
+            elif stp and stp.profile_image:
+                profile_img = request.build_absolute_uri(stp.profile_image.url)
+
+            semester_num = None
+            section_name = None
+            batch_name = None
+            if stp and stp.section:
+                section_name = stp.section.name
+                if stp.section.semester:
+                    semester_num = getattr(stp.section.semester, 'number', None)
+                if stp.section.batch:
+                    batch_name = stp.section.batch.name
+            if not batch_name and stp and stp.batch:
+                batch_name = stp.batch
+
+            designation = getattr(sp, 'designation', None) if sp else None
+
+            node_category = _get_node_category(sub.node)
+            if category_param and category_param.lower() not in node_category.lower():
+                continue
+
+            file_url = request.build_absolute_uri(sub.file.url) if sub.file else None
+
+            role_names = [r.name for r in u.roles.all()]
+
+            items.append({
+                'id': str(sub.id),
+                'user': {
+                    'id': u.id,
+                    'name': full_name,
+                    'username': u.username,
+                    'email': u.email,
+                    'reg_or_staff_id': reg_or_staff,
+                    'profile_image': profile_img,
+                    'applicant_type': applicant_type,
+                    'roles': role_names,
+                    'semester': semester_num,
+                    'section_name': section_name,
+                    'batch': batch_name,
+                    'designation': designation,
+                },
+                'department': {
+                    'id': getattr(academic_department, 'id', None),
+                    'code': getattr(academic_department, 'short_name', None) or getattr(academic_department, 'code', None) or '—',
+                    'name': getattr(academic_department, 'name', None) or '—',
+                },
+                'leaf_title': sub.node.label,
+                'node_id': str(sub.node_id),
+                'node_ancestor_ids': _get_node_ancestor_ids(sub.node),
+                'parent_path': _get_node_parent_path(sub.node),
+                'category': node_category,
+                'applicant_type': applicant_type,
+                'submission_type': sub.submission_type,
+                'form_data': sub.form_data or {},
+                'form_schema': sub.node.form_schema or [],
+                'link': sub.link,
+                'file_url': file_url,
+                'file_name': sub.file_name or (sub.file.name.rsplit('/', 1)[-1] if sub.file else None),
+                'pbas_credit': sub.node.pbas_credit if sub.node.pbas_credit is not None else 0,
+                'mentor_credit': sub.node.mentor_credit if sub.node.mentor_credit is not None else 0,
+                'status': sub.status,
+                'current_step': sub.current_step,
+                'approval_history': sub.approval_history or [],
+                'created_at': sub.created_at.isoformat() if sub.created_at else None,
+                'reviewed_at': sub.reviewed_at.isoformat() if sub.reviewed_at else None,
+                'approved_by_name': sub.approved_by.get_full_name() if sub.approved_by else (sub.approved_by.username if sub.approved_by else None),
+                'rejection_reason': sub.rejection_reason,
+            })
+
+        return Response({
+            'stats': {
+                'total': total_count,
+                'pending': pending_count,
+                'approved': approved_count,
+                'rejected': rejected_count,
+                'total_credits': total_credits,
+            },
+            'submissions': items,
+        })
+
+
+class PBASUserActivityListView(APIView):
+    """Returns a list of users with their PBAS leaf node completion percentages and status metrics."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not (
+            _is_iqac_manager(request.user)
+            or getattr(request.user, 'is_staff', False)
+            or getattr(request.user, 'is_superuser', False)
+            or request.user.roles.filter(name__iregex=r'^(IQAC|ADMIN|PRINCIPAL|PS|PBAS|HOD|AHOD|DEAN)').exists()
+        ):
+            return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Filters
+        role_param = (request.query_params.get('role') or '').strip().lower()
+        dept_param = (request.query_params.get('department_id') or request.query_params.get('department') or '').strip()
+        semester_param = (request.query_params.get('semester') or '').strip()
+        status_param = (request.query_params.get('status') or '').strip().lower()
+        q_param = (request.query_params.get('q') or '').strip()
+        limit_param = request.query_params.get('limit')
+        try:
+            limit = int(limit_param) if limit_param and str(limit_param).isdigit() else 200
+        except Exception:
+            limit = 200
+
+        # Precompute leaf nodes
+        master_dept = _get_or_create_master_dept()
+        parent_ids = set(PBASNode.objects.filter(parent__isnull=False).values_list('parent_id', flat=True))
+        all_leaf_qs = PBASNode.objects.filter(department=master_dept).exclude(id__in=parent_ids)
+        if not all_leaf_qs.exists():
+            all_leaf_qs = PBASNode.objects.exclude(id__in=parent_ids)
+
+        faculty_leaf_ids = set(all_leaf_qs.filter(audience__in=['faculty', 'both']).values_list('id', flat=True))
+        student_leaf_ids = set(all_leaf_qs.filter(audience__in=['student', 'both']).values_list('id', flat=True))
+
+        total_faculty_leaf_count = len(faculty_leaf_ids)
+        total_student_leaf_count = len(student_leaf_ids)
+
+        # Build user queryset
+        users_qs = User.objects.filter(is_active=True).select_related(
+            'staff_profile',
+            'staff_profile__department',
+            'student_profile',
+            'student_profile__home_department',
+            'student_profile__section',
+            'student_profile__section__semester',
+            'student_profile__section__batch',
+        ).prefetch_related('roles')
+
+        if role_param in ['staff', 'faculty']:
+            users_qs = users_qs.filter(staff_profile__isnull=False)
+        elif role_param in ['student', 'students']:
+            users_qs = users_qs.filter(student_profile__isnull=False)
+        else:
+            users_qs = users_qs.filter(Q(staff_profile__isnull=False) | Q(student_profile__isnull=False))
+
+        if dept_param and dept_param.isdigit():
+            dept_int = int(dept_param)
+            users_qs = users_qs.filter(
+                Q(staff_profile__department_id=dept_int) |
+                Q(student_profile__home_department_id=dept_int) |
+                Q(student_profile__section__batch__course__department_id=dept_int)
+            )
+
+        if semester_param and semester_param.isdigit():
+            sem_int = int(semester_param)
+            users_qs = users_qs.filter(
+                Q(student_profile__section__semester__number=sem_int) |
+                Q(student_profile__section__semester_num=sem_int)
+            )
+
+        if q_param:
+            users_qs = users_qs.filter(
+                Q(first_name__icontains=q_param) |
+                Q(last_name__icontains=q_param) |
+                Q(username__icontains=q_param) |
+                Q(email__icontains=q_param) |
+                Q(staff_profile__staff_id__icontains=q_param) |
+                Q(student_profile__reg_no__icontains=q_param)
+            )
+
+        user_list = list(users_qs.order_by('first_name', 'username')[:1500])
+        user_ids = [u.id for u in user_list]
+
+        # Fetch submissions for all queried users
+        submissions = PBASSubmission.objects.filter(user_id__in=user_ids).values(
+            'user_id', 'node_id', 'status', 'created_at', 'node__pbas_credit'
+        )
+        user_submissions_map: dict[int, list[dict]] = {}
+        for s in submissions:
+            uid = s['user_id']
+            if uid not in user_submissions_map:
+                user_submissions_map[uid] = []
+            user_submissions_map[uid].append(s)
+
+        user_items = []
+        stats_completed = 0
+        stats_in_progress = 0
+        stats_not_started = 0
+        total_completion_sum = 0.0
+
+        for u in user_list:
+            sp = getattr(u, 'staff_profile', None)
+            stp = getattr(u, 'student_profile', None)
+
+            is_student = stp is not None
+            applicant_type = 'STUDENT' if is_student else 'STAFF'
+            applicable_leaf_ids = student_leaf_ids if is_student else faculty_leaf_ids
+            total_leaf_count = total_student_leaf_count if is_student else total_faculty_leaf_count
+
+            # Department resolution
+            academic_department = None
+            semester_num = None
+            section_name = None
+            batch_name = None
+            profile_img = None
+            designation = None
+
+            if sp:
+                academic_department = sp.department
+                designation = sp.designation
+                if sp.profile_image:
+                    try:
+                        profile_img = request.build_absolute_uri(sp.profile_image.url)
+                    except Exception:
+                        pass
+            elif stp:
+                academic_department = stp.home_department
+                if not academic_department and stp.section and getattr(stp.section, 'batch', None):
+                    academic_department = getattr(stp.section.batch.course, 'department', None)
+                if stp.section:
+                    section_name = stp.section.name
+                    if getattr(stp.section, 'semester', None):
+                        semester_num = stp.section.semester.number
+                    elif getattr(stp.section, 'semester_num', None):
+                        semester_num = stp.section.semester_num
+                    if getattr(stp.section, 'batch', None):
+                        batch_name = stp.section.batch.name
+                if stp.profile_image:
+                    try:
+                        profile_img = request.build_absolute_uri(stp.profile_image.url)
+                    except Exception:
+                        pass
+
+            reg_or_staff = (stp.reg_no if stp else None) or (sp.staff_id if sp else None) or u.username
+            full_name = u.get_full_name().strip() or u.username
+
+            # Calculate completion
+            u_subs = user_submissions_map.get(u.id, [])
+            submitted_leaf_ids = set()
+            total_credits = 0
+            latest_sub_at = None
+
+            for s in u_subs:
+                nid = s['node_id']
+                if nid in applicable_leaf_ids:
+                    submitted_leaf_ids.add(nid)
+                if s.get('status') == 'approved' and s.get('node__pbas_credit'):
+                    total_credits += (s['node__pbas_credit'] or 0)
+                if s.get('created_at'):
+                    if not latest_sub_at or s['created_at'] > latest_sub_at:
+                        latest_sub_at = s['created_at']
+
+            completed_leaf_count = len(submitted_leaf_ids)
+            completion_pct = round((completed_leaf_count / total_leaf_count * 100.0), 1) if total_leaf_count > 0 else 0.0
+
+            # Status classification
+            if completion_pct >= 100.0:
+                stats_completed += 1
+                user_status = 'completed'
+            elif completion_pct > 0:
+                stats_in_progress += 1
+                user_status = 'in_progress'
+            else:
+                stats_not_started += 1
+                user_status = 'not_started'
+
+            total_completion_sum += completion_pct
+
+            # Apply status filter if present
+            if status_param and status_param != 'all':
+                if status_param == 'completed' and user_status != 'completed':
+                    continue
+                if status_param == 'in_progress' and user_status != 'in_progress':
+                    continue
+                if status_param == 'not_started' and user_status != 'not_started':
+                    continue
+
+            user_items.append({
+                'id': u.id,
+                'name': full_name,
+                'username': u.username,
+                'email': u.email,
+                'reg_or_staff_id': reg_or_staff,
+                'profile_image': profile_img,
+                'role': applicant_type,
+                'roles': [r.name for r in u.roles.all()],
+                'designation': designation,
+                'department': {
+                    'id': getattr(academic_department, 'id', None),
+                    'code': getattr(academic_department, 'short_name', None) or getattr(academic_department, 'code', None) or '—',
+                    'name': getattr(academic_department, 'name', None) or '—',
+                },
+                'semester': semester_num,
+                'section_name': section_name,
+                'batch': batch_name,
+                'total_leaf_nodes': total_leaf_count,
+                'completed_leaf_nodes': completed_leaf_count,
+                'completion_percentage': completion_pct,
+                'total_submissions': len(u_subs),
+                'total_credits': total_credits,
+                'last_submitted_at': latest_sub_at.isoformat() if latest_sub_at else None,
+                'status': user_status,
+            })
+
+        displayed_items = user_items[:limit]
+        total_matched = len(user_items)
+        avg_pct = round(total_completion_sum / len(user_list), 1) if user_list else 0.0
+
+        return Response({
+            'stats': {
+                'total_users': len(user_list),
+                'completed_users': stats_completed,
+                'in_progress_users': stats_in_progress,
+                'not_started_users': stats_not_started,
+                'avg_completion_pct': avg_pct,
+                'matched_count': total_matched,
+            },
+            'users': displayed_items,
+        })
+
+
+class PBASUserActivityDetailView(APIView):
+    """Returns the full hierarchical node tree annotated with completion status for a specific user."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, user_id):
+        if not (
+            _is_iqac_manager(request.user)
+            or getattr(request.user, 'is_staff', False)
+            or getattr(request.user, 'is_superuser', False)
+            or str(request.user.id) == str(user_id)
+            or request.user.roles.filter(name__iregex=r'^(IQAC|ADMIN|PRINCIPAL|PS|PBAS|HOD|AHOD|DEAN)').exists()
+        ):
+            return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
+
+        target_user = User.objects.filter(pk=user_id).select_related(
+            'staff_profile',
+            'staff_profile__department',
+            'student_profile',
+            'student_profile__home_department',
+            'student_profile__section',
+            'student_profile__section__semester',
+            'student_profile__section__batch',
+        ).prefetch_related('roles').first()
+
+        if not target_user:
+            return Response({'detail': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        sp = getattr(target_user, 'staff_profile', None)
+        stp = getattr(target_user, 'student_profile', None)
+        is_student = stp is not None
+        viewer = 'student' if is_student else 'faculty'
+        allowed_audiences = allowed_audiences_for_viewer(viewer)
+
+        # Department resolution
+        academic_department = None
+        semester_num = None
+        section_name = None
+        batch_name = None
+        profile_img = None
+        designation = None
+
+        if sp:
+            academic_department = sp.department
+            designation = sp.designation
+            if sp.profile_image:
+                try:
+                    profile_img = request.build_absolute_uri(sp.profile_image.url)
+                except Exception:
+                    pass
+        elif stp:
+            academic_department = stp.home_department
+            if not academic_department and stp.section and getattr(stp.section, 'batch', None):
+                academic_department = getattr(stp.section.batch.course, 'department', None)
+            if stp.section:
+                section_name = stp.section.name
+                if getattr(stp.section, 'semester', None):
+                    semester_num = stp.section.semester.number
+                elif getattr(stp.section, 'semester_num', None):
+                    semester_num = stp.section.semester_num
+                if getattr(stp.section, 'batch', None):
+                    batch_name = stp.section.batch.name
+            if stp.profile_image:
+                try:
+                    profile_img = request.build_absolute_uri(stp.profile_image.url)
+                except Exception:
+                    pass
+
+        reg_or_staff = (stp.reg_no if stp else None) or (sp.staff_id if sp else None) or target_user.username
+        full_name = target_user.get_full_name().strip() or target_user.username
+
+        # Submissions by this user
+        submissions = PBASSubmission.objects.filter(user=target_user).select_related('approved_by', 'node').order_by('-created_at')
+        subs_by_node: dict[str, list[dict]] = {}
+        total_credits = 0
+        for s in submissions:
+            nid = str(s.node_id)
+            if nid not in subs_by_node:
+                subs_by_node[nid] = []
+
+            file_url = request.build_absolute_uri(s.file.url) if s.file else None
+            subs_by_node[nid].append({
+                'id': str(s.id),
+                'submission_type': s.submission_type,
+                'status': s.status,
+                'file_name': s.file_name or (s.file.name.rsplit('/', 1)[-1] if s.file else None),
+                'file_url': file_url,
+                'link': s.link,
+                'form_data': s.form_data or {},
+                'created_at': s.created_at.isoformat() if s.created_at else None,
+                'reviewed_at': s.reviewed_at.isoformat() if s.reviewed_at else None,
+                'approved_by_name': s.approved_by.get_full_name() if s.approved_by else (s.approved_by.username if s.approved_by else None),
+                'rejection_reason': s.rejection_reason,
+            })
+            if s.status == 'approved' and getattr(s.node, 'pbas_credit', None):
+                total_credits += (s.node.pbas_credit or 0)
+
+        # Get master or dept nodes tree
+        master_dept = _get_or_create_master_dept()
+        root_nodes = PBASNode.objects.filter(
+            department=master_dept,
+            parent__isnull=True,
+            audience__in=allowed_audiences
+        ).order_by('position', 'created_at')
+        if not root_nodes.exists():
+            root_nodes = PBASNode.objects.filter(
+                parent__isnull=True,
+                audience__in=allowed_audiences
+            ).order_by('position', 'created_at')
+
+        total_applicable_leafs = 0
+        completed_applicable_leafs = 0
+
+        def build_node_dict(node: PBASNode) -> dict:
+            nonlocal total_applicable_leafs, completed_applicable_leafs
+
+            child_qs = node.children.filter(audience__in=allowed_audiences).order_by('position', 'created_at')
+            children = list(child_qs)
+            node_id_str = str(node.id)
+
+            if not children:
+                # Leaf node
+                node_subs = subs_by_node.get(node_id_str, [])
+                is_completed = len(node_subs) >= 1
+                total_applicable_leafs += 1
+                if is_completed:
+                    completed_applicable_leafs += 1
+
+                return {
+                    'id': node_id_str,
+                    'label': node.label,
+                    'audience': node.audience,
+                    'input_mode': node.input_mode,
+                    'form_schema': node.form_schema or [],
+                    'link': node.link,
+                    'uploaded_name': node.uploaded_name,
+                    'limit': node.limit,
+                    'pbas_credit': node.pbas_credit or 0,
+                    'mentor_credit': node.mentor_credit or 0,
+                    'college_required': node.college_required,
+                    'is_leaf': True,
+                    'is_completed': is_completed,
+                    'status_color': 'green' if is_completed else 'red',
+                    'submissions_count': len(node_subs),
+                    'submissions': node_subs,
+                    'total_leaf_children': 1,
+                    'completed_leaf_children': 1 if is_completed else 0,
+                    'children': [],
+                }
+            else:
+                # Parent category node
+                child_dicts = [build_node_dict(c) for c in children]
+                tot_leafs = sum(c['total_leaf_children'] for c in child_dicts)
+                comp_leafs = sum(c['completed_leaf_children'] for c in child_dicts)
+                is_parent_all_completed = (comp_leafs == tot_leafs and tot_leafs > 0)
+
+                return {
+                    'id': node_id_str,
+                    'label': node.label,
+                    'audience': node.audience,
+                    'input_mode': node.input_mode,
+                    'form_schema': node.form_schema or [],
+                    'link': node.link,
+                    'uploaded_name': node.uploaded_name,
+                    'limit': node.limit,
+                    'pbas_credit': node.pbas_credit or 0,
+                    'mentor_credit': node.mentor_credit or 0,
+                    'college_required': node.college_required,
+                    'is_leaf': False,
+                    'is_completed': is_parent_all_completed,
+                    'status_color': 'green' if is_parent_all_completed else 'red',
+                    'submissions_count': sum(c['submissions_count'] for c in child_dicts),
+                    'submissions': [],
+                    'total_leaf_children': tot_leafs,
+                    'completed_leaf_children': comp_leafs,
+                    'children': child_dicts,
+                }
+
+        tree_data = [build_node_dict(root) for root in root_nodes]
+        completion_pct = round((completed_applicable_leafs / total_applicable_leafs * 100.0), 1) if total_applicable_leafs > 0 else 0.0
+
+        return Response({
+            'user': {
+                'id': target_user.id,
+                'name': full_name,
+                'username': target_user.username,
+                'email': target_user.email,
+                'reg_or_staff_id': reg_or_staff,
+                'profile_image': profile_img,
+                'role': 'STUDENT' if is_student else 'STAFF',
+                'roles': [r.name for r in target_user.roles.all()],
+                'designation': designation,
+                'department': {
+                    'id': getattr(academic_department, 'id', None),
+                    'code': getattr(academic_department, 'short_name', None) or getattr(academic_department, 'code', None) or '—',
+                    'name': getattr(academic_department, 'name', None) or '—',
+                },
+                'semester': semester_num,
+                'section_name': section_name,
+                'batch': batch_name,
+            },
+            'stats': {
+                'total_leaf_nodes': total_applicable_leafs,
+                'completed_leaf_nodes': completed_applicable_leafs,
+                'completion_percentage': completion_pct,
+                'total_submissions': submissions.count(),
+                'total_credits': total_credits,
+            },
+            'nodes_tree': tree_data,
+        })
+
 
 

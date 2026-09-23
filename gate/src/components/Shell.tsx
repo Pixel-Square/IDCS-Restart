@@ -88,7 +88,7 @@ export function Shell({ user, children }: ShellProps): JSX.Element {
           <div className="profile-hero-copy">
             <div className="eyebrow">Welcome back</div>
             <h1>{getDisplayName(user)}</h1>
-            <p>{user?.email || user?.username || 'Signed in securely with the backend at db.zynix.us'}</p>
+            <p>{user?.email || user?.username || 'Signed in securely with the backend at db.krgi.co.in'}</p>
           </div>
           <div className="profile-hero-badge">
             <ShieldCheck size={16} />

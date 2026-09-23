@@ -535,61 +535,72 @@ def _parse_co_spec(raw_co: Any, raw_title: Any = '') -> list[int]:
     """Parse CO specification from cell text or header title into a list of CO numbers (1..6).
 
     Handles:
+    - Comma/semicolon-separated lists: '1,2,3', '3,4,5', 'CO1, CO2, CO3', '1, 2, 3' -> [1, 2, 3]
     - Single COs: 'CO1', '1', 'CO 1', 'CO-1' -> [1]
-    - Comma/ampersand lists: '1,2,3', 'CO1, CO2, CO3', '1 & 2', 'CO1 & CO2' -> [1, 2, 3] or [1, 2]
-    - Ranges: '1-3', '1 - 3', '1 to 3', 'CO1-CO3', 'CO1 - CO3', 'CO1 to CO3', '1-5', 'CO1-5' -> [1, 2, 3]
-    - 'ALL' / 'ALL CO' -> [1, 2, 3, 4, 5]
+    - Ranges: '1-3', '1 - 3', 'CO1-CO3', 'CO1 to CO3' -> [1, 2, 3]
     - Fallback: extracts CO info from raw_title if raw_co is blank
     """
     co_str = str(raw_co or '').strip()
     title_str = str(raw_title or '').strip()
 
-    def _clean_and_extract(text: str) -> list[int]:
+    def _extract_from_text(text: str) -> list[int]:
         if not text:
             return []
         text_upper = text.upper().strip()
-        if text_upper in ('ALL', 'ALL CO', 'ALL COS', 'ALL CO\'S', 'ALL-CO'):
-            return [1, 2, 3, 4, 5]
 
-        # 1. Range pattern: '1-3', '1 - 3', '1 to 3', 'CO1-CO3', 'CO1 to CO3', 'CO1-3'
-        range_match = re.search(r'(?:CO\s*)?([1-6])\s*(?:-|TO|\.\.)\s*(?:CO\s*)?([1-6])', text_upper, re.IGNORECASE)
-        if range_match:
-            start = int(range_match.group(1))
-            end = int(range_match.group(2))
-            if 1 <= start <= end <= 6:
-                return list(range(start, end + 1))
-            elif 1 <= end <= start <= 6:
-                return list(range(end, start + 1))
-
-        # 2. Extract numbers
-        nums: list[int] = []
-        for part in re.split(r'[,;&/+\s]+', text_upper):
-            part = part.strip()
-            if not part:
-                continue
-            rm = re.search(r'([1-6])\s*(?:-|TO|\.\.)\s*([1-6])', part, re.IGNORECASE)
-            if rm:
-                s, e = int(rm.group(1)), int(rm.group(2))
-                if 1 <= s <= e <= 6:
-                    for n in range(s, e + 1):
-                        if n not in nums:
-                            nums.append(n)
+        # If comma-separated or semicolon-separated (e.g. '1,2,3', 'CO1, CO2, CO3', '1, 2, 3')
+        if ',' in text_upper or ';' in text_upper or '&' in text_upper:
+            nums = []
+            for part in re.split(r'[,;&]+', text_upper):
+                part = part.strip()
+                if not part:
                     continue
-            for digit_match in re.findall(r'[1-6]', part):
-                n = int(digit_match)
-                if 1 <= n <= 6 and n not in nums:
-                    nums.append(n)
-        return sorted(nums)
+                m = re.search(r'\b(?:CO\s*[-_]?)?([1-6])\b', part)
+                if not m:
+                    m = re.search(r'([1-6])', part)
+                if m:
+                    val = int(m.group(1))
+                    if 1 <= val <= 6 and val not in nums:
+                        nums.append(val)
+            return sorted(nums)
 
-    res = _clean_and_extract(co_str)
+        # If hyphenated range (e.g. '1-3', 'CO1-CO3', '1 to 3')
+        range_match = re.search(r'\b(?:CO\s*[-_]?)?([1-6])\s*(?:-|TO|\.\.)\s*(?:CO\s*[-_]?)?([1-6])\b', text_upper)
+        if range_match:
+            st, en = int(range_match.group(1)), int(range_match.group(2))
+            if 1 <= st <= en <= 6:
+                return list(range(st, en + 1))
+            elif 1 <= en <= st <= 6:
+                return list(range(en, st + 1))
+
+        # Single CO check (e.g. 'CO1', 'CO 1', '1', 'CO-1')
+        single_co = re.search(r'\bCO\s*[-_]?([1-6])\b', text_upper)
+        if single_co:
+            return [int(single_co.group(1))]
+
+        # Exact single digit in string (e.g. '1', '2', '3')
+        if text_upper in ('1', '2', '3', '4', '5', '6'):
+            return [int(text_upper)]
+
+        # If text is something like 'CO1' with no word boundary issues
+        m_co = re.match(r'^CO\s*[-_]?([1-6])$', text_upper)
+        if m_co:
+            return [int(m_co.group(1))]
+
+        return []
+
+    res = _extract_from_text(co_str)
     if not res and title_str:
-        co_in_title_match = re.search(r'\(?\s*CO\s*[:\-_]?\s*([1-6\s,\-&to/]+)\)?', title_str, re.IGNORECASE)
-        if co_in_title_match:
-            res = _clean_and_extract(co_in_title_match.group(1))
-        else:
+        co_title_match = re.search(r'\(?\s*CO\s*[:\-_]?\s*([1-6\s,\-&to/]+)\)?', title_str, re.IGNORECASE)
+        if co_title_match:
+            res = _extract_from_text(co_title_match.group(1))
+        if not res:
             paren_match = re.search(r'\(\s*([1-6\s,\-&to/]+)\s*\)', title_str)
             if paren_match:
-                res = _clean_and_extract(paren_match.group(1))
+                res = _extract_from_text(paren_match.group(1))
+        if not res:
+            res = _extract_from_text(title_str)
+
     return res
 
 
@@ -839,16 +850,16 @@ def derive_mark_manager_from_sheet(
             question_columns_mapping['Exam'] = exam_item['col']
             question_columns_mapping['cia'] = exam_item['col']
             question_columns_mapping['CIA'] = exam_item['col']
-        if 'CIA I' in lbl.upper() or 'CIA 1' in lbl.upper():
-            question_columns_mapping['CIA I MARKS'] = exam_item['col']
-            question_columns_mapping['cia i marks'] = exam_item['col']
-            question_columns_mapping['CIA I'] = exam_item['col']
-            question_columns_mapping['CIA 1'] = exam_item['col']
-        elif 'CIA II' in lbl.upper() or 'CIA 2' in lbl.upper():
+        if 'CIA II' in lbl.upper() or 'CIA 2' in lbl.upper():
             question_columns_mapping['CIA II MARKS'] = exam_item['col']
             question_columns_mapping['cia ii marks'] = exam_item['col']
             question_columns_mapping['CIA II'] = exam_item['col']
             question_columns_mapping['CIA 2'] = exam_item['col']
+        elif 'CIA I' in lbl.upper() or 'CIA 1' in lbl.upper():
+            question_columns_mapping['CIA I MARKS'] = exam_item['col']
+            question_columns_mapping['cia i marks'] = exam_item['col']
+            question_columns_mapping['CIA I'] = exam_item['col']
+            question_columns_mapping['CIA 1'] = exam_item['col']
 
         exam_columns_payload.append({
             'col': exam_item['col'],
@@ -857,6 +868,8 @@ def derive_mark_manager_from_sheet(
             'co': exam_item['co'],
             'cos': exam_item['co'],
             'max_marks': exam_item['max_marks'],
+            'weight': 0,
+            'enabled': True,
         })
         q_idx += 1
 
@@ -1075,101 +1088,112 @@ def sync_google_sheet_to_backend(
     max_marks_row_cfg = (column_mapping or {}).get('maxMarksRow') or (column_mapping or {}).get('max_marks_row') or 8
     title_row_cfg = (column_mapping or {}).get('titleRow') or (column_mapping or {}).get('title_row') or 5
 
+    is_mark_manager = False
     try:
-        derived_info = derive_mark_manager_from_sheet(
-            spreadsheet_id=spreadsheet_id,
-            sheet_name=sheet_title,
-            config=config,
-            exam_name=getattr(exam_assignment, 'exam_display_name', None) or getattr(exam_assignment, 'exam', None) or sheet_title,
-            co_row=co_row_cfg,
-            max_marks_row=max_marks_row_cfg,
-            title_row=title_row_cfg,
-            reg_no_column=(column_mapping or {}).get('regNoColumn') or (column_mapping or {}).get('reg_no_column') or 'D',
-            name_column=(column_mapping or {}).get('nameColumn') or (column_mapping or {}).get('name_column') or 'E',
-        )
-        if derived_info and derived_info.get('parsed_columns'):
-            derived_mm = derived_info.get('derived_mark_manager') or {}
-            cos_cfg = derived_mm.get('cos', {})
-            cia_enabled = derived_mm.get('cia_enabled', False)
-            cia_max_marks = float(derived_mm.get('cia_max_marks') or 0)
-            cia_cos = derived_mm.get('cia_cos') or []
-            cia_label = derived_mm.get('cia_label') or 'Exam'
-            item_name = derived_mm.get('item_name') or 'Experiments'
-
-            titles = []
-            marks_list = []
-            cos_list = []
-            btls = []
-            enabled = []
-            total_max = 0.0
-            covered_cos = []
-
-            for co_str in sorted(cos_cfg.keys(), key=lambda x: int(x)):
-                co_num = int(co_str)
-                c_cfg = cos_cfg[co_str]
-                if not c_cfg.get('enabled'):
-                    continue
-                covered_cos.append(co_num)
-                num_items = int(c_cfg.get('num_items', 1))
-                per_item_max = float(c_cfg.get('max_marks', 0))
-                total_max += per_item_max * num_items
-                for i in range(num_items):
-                    titles.append(f'CO{co_num} - {item_name} {i + 1}')
-                    marks_list.append(per_item_max)
-                    cos_list.append(co_num)
-                    btls.append(None)
-                    enabled.append(True)
-
-            exam_cols = derived_mm.get('exam_columns') or derived_mm.get('special_columns')
-            if isinstance(exam_cols, list) and exam_cols:
-                for ex_it in exam_cols:
-                    ex_lbl = str(ex_it.get('label') or ex_it.get('title') or 'Exam').strip() or 'Exam'
-                    ex_max = float(ex_it.get('max_marks') or 0)
-                    ex_cos = ex_it.get('cos') or ex_it.get('co')
-                    if ex_max > 0:
-                        titles.append(ex_lbl)
-                        marks_list.append(ex_max)
-                        cos_list.append(ex_cos if ex_cos else None)
-                        btls.append(None)
-                        enabled.append(True)
-                        total_max += ex_max
-            elif cia_enabled and cia_max_marks > 0:
-                titles.append(cia_label)
-                marks_list.append(cia_max_marks)
-                cos_list.append(cia_cos if cia_cos else None)
-                btls.append(None)
-                enabled.append(True)
-                total_max += cia_max_marks
-
-            new_user_pattern = {
-                'titles': titles,
-                'marks': marks_list,
-                'cos': cos_list,
-                'btls': btls,
-                'enabled': enabled,
-                'mark_manager': {
-                    **derived_mm,
-                    'confirmed': True,
-                },
-            }
-
-            d = exam_assignment.draft_data if isinstance(exam_assignment.draft_data, dict) else {}
-            d['user_pattern'] = new_user_pattern
-            exam_assignment.draft_data = d
-            exam_assignment.max_marks = total_max
-            exam_assignment.covered_cos = covered_cos
-            exam_assignment.save(update_fields=['draft_data', 'max_marks', 'covered_cos', 'updated_at'])
-
-            # Refresh questions from newly updated pattern
-            updated_questions = _get_qp_specs_for_exam(exam_assignment)
-            if updated_questions:
-                questions = updated_questions
-
-            for k, v in (derived_info.get('question_columns_mapping') or {}).items():
-                if k not in raw_question_columns:
-                    raw_question_columns[k] = v
+        raw_p = exam_assignment.get_qp_pattern()
+        if isinstance(raw_p, dict):
+            mm_raw = raw_p.get('mark_manager')
+            if isinstance(mm_raw, dict) and mm_raw.get('enabled'):
+                is_mark_manager = True
     except Exception:
         pass
+
+    if is_mark_manager:
+        try:
+            derived_info = derive_mark_manager_from_sheet(
+                spreadsheet_id=spreadsheet_id,
+                sheet_name=sheet_title,
+                config=config,
+                exam_name=getattr(exam_assignment, 'exam_display_name', None) or getattr(exam_assignment, 'exam', None) or sheet_title,
+                co_row=co_row_cfg,
+                max_marks_row=max_marks_row_cfg,
+                title_row=title_row_cfg,
+                reg_no_column=(column_mapping or {}).get('regNoColumn') or (column_mapping or {}).get('reg_no_column') or 'D',
+                name_column=(column_mapping or {}).get('nameColumn') or (column_mapping or {}).get('name_column') or 'E',
+            )
+            if derived_info and derived_info.get('parsed_columns'):
+                derived_mm = derived_info.get('derived_mark_manager') or {}
+                cos_cfg = derived_mm.get('cos', {})
+                cia_enabled = derived_mm.get('cia_enabled', False)
+                cia_max_marks = float(derived_mm.get('cia_max_marks') or 0)
+                cia_cos = derived_mm.get('cia_cos') or []
+                cia_label = derived_mm.get('cia_label') or 'Exam'
+                item_name = derived_mm.get('item_name') or 'Experiments'
+
+                titles = []
+                marks_list = []
+                cos_list = []
+                btls = []
+                enabled = []
+                total_max = 0.0
+                covered_cos = []
+
+                for co_str in sorted(cos_cfg.keys(), key=lambda x: int(x)):
+                    co_num = int(co_str)
+                    c_cfg = cos_cfg[co_str]
+                    if not c_cfg.get('enabled'):
+                        continue
+                    covered_cos.append(co_num)
+                    num_items = int(c_cfg.get('num_items', 1))
+                    per_item_max = float(c_cfg.get('max_marks', 0))
+                    total_max += per_item_max * num_items
+                    for i in range(num_items):
+                        titles.append(f'CO{co_num} - {item_name} {i + 1}')
+                        marks_list.append(per_item_max)
+                        cos_list.append(co_num)
+                        btls.append(None)
+                        enabled.append(True)
+
+                exam_cols = derived_mm.get('exam_columns') or derived_mm.get('special_columns')
+                if isinstance(exam_cols, list) and exam_cols:
+                    for ex_it in exam_cols:
+                        ex_lbl = str(ex_it.get('label') or ex_it.get('title') or 'Exam').strip() or 'Exam'
+                        ex_max = float(ex_it.get('max_marks') or 0)
+                        ex_cos = ex_it.get('cos') or ex_it.get('co')
+                        if ex_max > 0:
+                            titles.append(ex_lbl)
+                            marks_list.append(ex_max)
+                            cos_list.append(ex_cos if ex_cos else None)
+                            btls.append(None)
+                            enabled.append(True)
+                            total_max += ex_max
+                elif cia_enabled and cia_max_marks > 0:
+                    titles.append(cia_label)
+                    marks_list.append(cia_max_marks)
+                    cos_list.append(cia_cos if cia_cos else None)
+                    btls.append(None)
+                    enabled.append(True)
+                    total_max += cia_max_marks
+
+                new_user_pattern = {
+                    'titles': titles,
+                    'marks': marks_list,
+                    'cos': cos_list,
+                    'btls': btls,
+                    'enabled': enabled,
+                    'mark_manager': {
+                        **derived_mm,
+                        'confirmed': True,
+                    },
+                }
+
+                d = exam_assignment.draft_data if isinstance(exam_assignment.draft_data, dict) else {}
+                d['user_pattern'] = new_user_pattern
+                exam_assignment.draft_data = d
+                exam_assignment.max_marks = total_max
+                exam_assignment.covered_cos = covered_cos
+                exam_assignment.save(update_fields=['draft_data', 'max_marks', 'covered_cos', 'updated_at'])
+
+                # Refresh questions from newly updated pattern
+                updated_questions = _get_qp_specs_for_exam(exam_assignment)
+                if updated_questions:
+                    questions = updated_questions
+
+                for k, v in (derived_info.get('question_columns_mapping') or {}).items():
+                    if k not in raw_question_columns:
+                        raw_question_columns[k] = v
+        except Exception:
+            pass
 
     title_to_column_index: dict[str, int] = {}
     if isinstance(raw_question_columns, dict):
@@ -1186,17 +1210,25 @@ def sync_google_sheet_to_backend(
     # Start row index offset
     start_row_cfg = (column_mapping or {}).get('startRow') or (column_mapping or {}).get('start_row')
     start_row_offset = 0
-    if start_row_cfg:
-        try:
-            start_row_offset = max(0, int(start_row_cfg) - 1)
-        except Exception:
-            start_row_offset = 0
-    elif co_row_cfg or max_marks_row_cfg:
-        try:
-            header_max_row = max(int(co_row_cfg or 6), int(max_marks_row_cfg or 8), int(title_row_cfg or 5))
-            start_row_offset = max(0, header_max_row)
-        except Exception:
-            start_row_offset = 0
+    if is_mark_manager:
+        if start_row_cfg:
+            try:
+                start_row_offset = max(0, int(start_row_cfg) - 1)
+            except Exception:
+                start_row_offset = 8
+        elif co_row_cfg or max_marks_row_cfg:
+            try:
+                header_max_row = max(int(co_row_cfg or 6), int(max_marks_row_cfg or 8), int(title_row_cfg or 5))
+                start_row_offset = max(0, header_max_row)
+            except Exception:
+                start_row_offset = 8
+        else:
+            start_row_offset = 8
+    else:
+        # For non-mark manager exams, student data begins around row 6-7.
+        # Scan from row 0; valid student register numbers will be matched automatically
+        # without skipping starting student rows.
+        start_row_offset = 0
 
     # Preload section students for fast, accurate lookup
     sec_students_map: dict[str, StudentProfile] = {}

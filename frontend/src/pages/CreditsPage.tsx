@@ -3,6 +3,7 @@ import React from "react";
 type Member = {
   name: string;
   role: string;
+  batch?: string;
 };
 
 type CreditsSectionProps = {
@@ -15,15 +16,15 @@ function CreditsSection({ title, members, accent }: CreditsSectionProps) {
   const accentStyles =
     accent === "blue"
       ? {
-          badge: "bg-blue-100 text-blue-700 border-blue-200",
-          card: "hover:border-blue-300",
-          role: "text-blue-700",
-        }
+        badge: "bg-blue-100 text-blue-700 border-blue-200",
+        card: "hover:border-blue-300",
+        role: "text-blue-700",
+      }
       : {
-          badge: "bg-emerald-100 text-emerald-700 border-emerald-200",
-          card: "hover:border-emerald-300",
-          role: "text-emerald-700",
-        };
+        badge: "bg-emerald-100 text-emerald-700 border-emerald-200",
+        card: "hover:border-emerald-300",
+        role: "text-emerald-700",
+      };
 
   return (
     <section className="w-full">
@@ -39,14 +40,21 @@ function CreditsSection({ title, members, accent }: CreditsSectionProps) {
             key={member.name}
             className={`group rounded-2xl border border-slate-200 bg-white/80 backdrop-blur px-4 py-4 sm:px-5 sm:py-5 transition-all duration-200 shadow-sm hover:shadow-md ${accentStyles.card}`}
           >
-            <div className="flex items-start gap-3">
-              <span className="mt-0.5 inline-flex h-7 w-7 items-center justify-center rounded-full bg-slate-900 text-white text-xs font-semibold">
-                {index + 1}
-              </span>
-              <div>
-                <p className="text-base sm:text-lg font-semibold text-slate-900">{member.name}</p>
-                <p className={`text-sm font-medium ${accentStyles.role}`}>{member.role}</p>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white text-xs font-semibold">
+                  {index + 1}
+                </span>
+                <div>
+                  <p className="text-base sm:text-lg font-semibold text-slate-900">{member.name}</p>
+                  <p className={`text-sm font-medium ${accentStyles.role}`}>{member.role}</p>
+                </div>
               </div>
+              {member.batch && (
+                <span className="inline-flex shrink-0 items-center rounded-full border border-slate-200 bg-slate-100/90 px-2.5 py-0.5 text-xs font-semibold text-slate-600 shadow-sm">
+                  {member.batch}
+                </span>
+              )}
             </div>
           </li>
         ))}
@@ -57,21 +65,25 @@ function CreditsSection({ title, members, accent }: CreditsSectionProps) {
 
 export default function CreditsPage() {
   const teamBehindItMembers: Member[] = [
-    { name: "#Abi Varsan P", role: "Senior Core Architect" },
-    { name: "Lalith kishore N S", role: "App Forge Engineer" },
-    { name: "Hariprashath B", role: "System Stabilizer" },
-    { name: "Mohamed Firdous S", role: "Visual Systems Lead" },
-    { name: "Prasanna N", role: "UI Strategist" },
-    { name: "Hariswasthra S", role: "Senior Frontend Associate" },
-    { name: "Padmapriya S", role: "Interface Crafter" },
-    { name: "Nithyapriya S", role: "Doc Systems Curator" },
-    { name: "Rexcia A", role: "Module Architect" },
-    { name: "Rohit S K", role: "Junior Core Architect" },
-    { name: "Judson Asaph H", role: "Server Specialist" },
-    { name: "SharukK Hasthik M", role: "Infra Specialist" },
-    { name: "Harish K", role: "Frontend Associate" },
-    { name: "Amudeshwar H", role: "Interface Associate" },
-    { name: "Naveen Raj A", role: "Frontend Associate" },
+    { name: "#Abi Varsan P", role: "Senior Core Architect", batch: "2023-2027" },
+    { name: "Lalith kishore N S", role: "App Forge Engineer", batch: "2023-2027" },
+    { name: "Hariprashath B", role: "System Stabilizer", batch: "2023-2027" },
+    { name: "Mohamed Firdous S", role: "Visual Systems Lead", batch: "2023-2027" },
+    { name: "Prasanna N", role: "UI Strategist", batch: "2023-2027" },
+    { name: "Hariswasthra S", role: "Senior Frontend Associate", batch: "2023-2027" },
+    { name: "Padmapriya S", role: "Interface Crafter", batch: "2023-2027" },
+    { name: "Nithyapriya S", role: "Doc Systems Curator", batch: "2023-2027" },
+    { name: "Rexcia A", role: "Module Architect", batch: "2023-2027" },
+    { name: "Rohit S K", role: "Core Architect", batch: "2024-2028" },
+    { name: "Judson Asaph H", role: "Server Specialist", batch: "2024-2028" },
+    { name: "SharukK Hasthik M", role: "Infra Specialist", batch: "2024-2028" },
+    { name: "Harish K", role: "Hardware Specialist", batch: "2024-2028" },
+    { name: "Amudeshwar H", role: "Interface Associate", batch: "2024-2028" },
+    { name: "Naveen Raj A", role: "Frontend Associate", batch: "2024-2028" },
+    { name: "Karthika M", role: "Backend Associate", batch: "2023-2027" },
+    { name: "Vivetha M", role: "Data Scientist", batch: "2023-2027" },
+    { name: "Eshwaran K", role: "Senior Hardware Specialist (Sector A)", batch: "2023-2027" },
+    { name: "Aslam N", role: "Senior Hardware Specialist (Sector B)", batch: "2023-2027" },
   ];
 
   const guidanceAndSupportMembers: Member[] = [
