@@ -2161,7 +2161,7 @@ class StudentReportPDFView(APIView):
         sem_lbl = str(student.section.semester.number) if (student.section and student.section.semester) else 'N/A'
         ay_lbl = student.batch or (student.section.batch.name if (student.section and student.section.batch) else 'N/A')
         full_name = student.user.get_full_name() or student.user.username
-        reg_no = student.reg_no or str(student.id)
+git status --short        reg_no = student.reg_no or str(student.id)
 
         info_data = [
             ['Student Name:', full_name, 'Register No:', reg_no],

@@ -25,6 +25,11 @@ import {
   X,
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
+import newBannerSrc from '../../../assets/new_banner.png'
+import krLogoSrc from '../../../assets/krlogo.png'
+import idcsLogoSrc from '../../../assets/idcs-logo.png'
 import { ModalPortal } from '../../../components/ModalPortal'
 import fetchWithAuth from '../../../services/fetchAuth'
 import {
@@ -65,6 +70,79 @@ function fmtDateTime(value?: string | null): string {
   } catch {
     return '—'
   }
+}
+
+async function toBase64(src: string): Promise<string> {
+  const res = await fetch(src)
+  const blob = await res.blob()
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onloadend = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
+}
+
+async function imgSize(b64: string): Promise<{ w: number; h: number }> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight })
+    img.onerror = () => resolve({ w: 1, h: 1 })
+    img.src = b64
+  })
+}
+
+interface FlattenedNodeRow {
+  sno: number
+  categoryPath: string
+  label: string
+  inputMode: string
+  isCompleted: boolean
+  pbasCredit: number
+  submissionsCount: number
+  submissions: PBASActivitySubmissionItem[]
+  lastSubmittedAt?: string | null
+}
+
+function getFlattenedLeafNodes(
+  nodes: PBASActivityNodeItem[],
+  parentPath = ''
+): FlattenedNodeRow[] {
+  const rows: FlattenedNodeRow[] = []
+
+  function traverse(nodeList: PBASActivityNodeItem[], pathPrefix: string) {
+    for (const n of nodeList) {
+      const currentPath = pathPrefix ? `${pathPrefix} > ${n.label}` : n.label
+      if (n.is_leaf) {
+        let lastSubAt: string | null = null
+        if (n.submissions && n.submissions.length > 0) {
+          const dates = n.submissions
+            .map((s) => s.created_at)
+            .filter(Boolean) as string[]
+          if (dates.length > 0) {
+            dates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())
+            lastSubAt = dates[0]
+          }
+        }
+        rows.push({
+          sno: rows.length + 1,
+          categoryPath: pathPrefix || n.label,
+          label: n.label,
+          inputMode: n.input_mode || '—',
+          isCompleted: n.is_completed,
+          pbasCredit: n.pbas_credit || 0,
+          submissionsCount: n.submissions_count || 0,
+          submissions: n.submissions || [],
+          lastSubmittedAt: lastSubAt,
+        })
+      } else if (n.children && n.children.length > 0) {
+        traverse(n.children, currentPath)
+      }
+    }
+  }
+
+  traverse(nodes, parentPath)
+  return rows
 }
 
 interface PBASUserActivityTabProps {
@@ -110,6 +188,10 @@ export default function PBASUserActivityTab({ initialUserId }: PBASUserActivityT
   const [detailFilterStatus, setDetailFilterStatus] = useState<'all' | 'pending' | 'completed'>('all')
   const [detailSearch, setDetailSearch] = useState('')
   const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({})
+
+  // Download & Export State for Faculty Detail Report
+  const [showDownloadModal, setShowDownloadModal] = useState(false)
+  const [exportBusy, setExportBusy] = useState(false)
 
   // Modal for Viewing Submission Evidences
   const [selectedSubmission, setSelectedSubmission] = useState<{
@@ -331,7 +413,7 @@ export default function PBASUserActivityTab({ initialUserId }: PBASUserActivityT
   }
 
   // Export User Activity list to Excel
-  const handleExportExcel = () => {
+  const handleExportListExcel = () => {
     if (!listData.users.length) return
     const exportRows = listData.users.map((u, idx) => ({
       'S.No': idx + 1,
@@ -355,6 +437,273 @@ export default function PBASUserActivityTab({ initialUserId }: PBASUserActivityT
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'PBAS User Activity')
     XLSX.writeFile(wb, `PBAS_User_Activity_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
+
+  // Export Faculty Detail Report to PDF
+  const handleExportFacultyDetailPDF = async () => {
+    if (!detailData) return
+    setExportBusy(true)
+    setShowDownloadModal(false)
+
+    try {
+      const [b64Banner, b64Kr, b64Idcs] = await Promise.all([
+        toBase64(newBannerSrc).catch(() => ''),
+        toBase64(krLogoSrc).catch(() => ''),
+        toBase64(idcsLogoSrc).catch(() => ''),
+      ])
+
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+      const PW = 210, PH = 297, ML = 10, MR = 10, UW = 190
+      const user = detailData.user
+      const stats = detailData.stats
+      const completionPct = stats.completion_percentage
+      const isCompleted = stats.completed_leaf_nodes === stats.total_leaf_nodes && stats.total_leaf_nodes > 0
+
+      let curY = 10
+
+      /* ── Banner & Logos ── */
+      const HEADER_H = 24
+      if (b64Banner) {
+        const { w: bw, h: bh } = await imgSize(b64Banner)
+        const bW = Math.min(UW * 0.82, (bw / bh) * HEADER_H)
+        doc.addImage(b64Banner, 'PNG', ML, curY, bW, HEADER_H)
+      }
+      const logoH = 18, logoW = 22, logoGap = 3
+      const logosX = PW - MR - logoW * 2 - logoGap
+      if (b64Kr) {
+        const { w: kw, h: kh } = await imgSize(b64Kr)
+        const kH = Math.min(logoH, (kh / kw) * logoW)
+        doc.addImage(b64Kr, 'PNG', logosX, curY + (HEADER_H - kH) / 2, logoW, kH)
+      }
+      if (b64Idcs) {
+        const { w: iw, h: ih } = await imgSize(b64Idcs)
+        const iH = Math.min(logoH, (ih / iw) * logoW)
+        doc.addImage(b64Idcs, 'PNG', logosX + logoW + logoGap, curY + (HEADER_H - iH) / 2, logoW, iH)
+      }
+      curY += HEADER_H + 2
+
+      /* Navy Line */
+      doc.setDrawColor(30, 58, 95)
+      doc.setLineWidth(0.6)
+      doc.line(ML, curY, PW - MR, curY)
+      curY += 4
+
+      /* Title */
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(11)
+      doc.setTextColor(30, 58, 95)
+      doc.text('PBAS FACULTY ACTIVITY & PERFORMANCE REPORT', PW / 2, curY, { align: 'center' })
+      curY += 5
+
+      /* ── Staff Details Grid ── */
+      const infoRows: [string, string, string, string, string, string][] = [
+        ['Staff Name', user.name || '—', 'Staff/Reg ID', user.reg_or_staff_id || '—', 'Role', user.role || '—'],
+        ['Department', user.department?.name || user.department?.code || '—', 'Designation', user.designation || '—', 'Email', user.email || '—'],
+        ['Semester', user.semester ? String(user.semester) : '—', 'Section', user.section_name || '—', 'Status', isCompleted ? 'Fully Completed' : completionPct > 0 ? 'In Progress' : 'Not Started'],
+      ]
+      const colW3 = UW / 3
+      const infoRowH = 6.5
+      const infoTotalH = infoRows.length * infoRowH
+
+      doc.setFillColor(242, 246, 252)
+      doc.rect(ML, curY, UW, infoTotalH, 'F')
+      doc.setDrawColor(200, 212, 228)
+      doc.setLineWidth(0.25)
+      doc.rect(ML, curY, UW, infoTotalH, 'S')
+
+      // Column dividers
+      doc.line(ML + colW3, curY, ML + colW3, curY + infoTotalH)
+      doc.line(ML + colW3 * 2, curY, ML + colW3 * 2, curY + infoTotalH)
+      // Row dividers
+      for (let ri = 1; ri < infoRows.length; ri++) {
+        doc.setDrawColor(220, 228, 240)
+        doc.line(ML, curY + ri * infoRowH, ML + UW, curY + ri * infoRowH)
+      }
+
+      infoRows.forEach(([l0, v0, l1, v1, l2, v2], ri) => {
+        const rowY = curY + ri * infoRowH
+        ;[[l0, v0, 0], [l1, v1, 1], [l2, v2, 2]].forEach(([lbl, val, ci]) => {
+          const cx = ML + (ci as number) * colW3
+          doc.setFont('helvetica', 'bold')
+          doc.setFontSize(6.5)
+          doc.setTextColor(30, 58, 95)
+          doc.text(`${lbl}:`, cx + 2, rowY + 4.3)
+
+          doc.setFont('helvetica', 'normal')
+          doc.setFontSize(6.5)
+          doc.setTextColor(50, 60, 80)
+          const maxW = colW3 - 24
+          const truncated = doc.splitTextToSize(String(val), maxW)[0] || String(val)
+          doc.text(truncated, cx + 22, rowY + 4.3)
+        })
+      })
+      curY += infoTotalH + 4
+
+      /* ── Summary Statistics KPI Cards ── */
+      const kpiBoxW = (UW - 12) / 4
+      const kpiBoxH = 11
+      const kpiItems = [
+        { label: 'Total Leaf Nodes', val: String(stats.total_leaf_nodes), color: [30, 58, 95] },
+        { label: 'Completed Nodes', val: `${stats.completed_leaf_nodes} (${completionPct}%)`, color: [16, 185, 129] },
+        { label: 'Total Submissions', val: String(stats.total_submissions), color: [79, 70, 229] },
+        { label: 'Total Credits Earned', val: String(stats.total_credits), color: [217, 119, 6] },
+      ]
+
+      kpiItems.forEach((kpi, idx) => {
+        const bx = ML + idx * (kpiBoxW + 4)
+        doc.setFillColor(248, 250, 252)
+        doc.rect(bx, curY, kpiBoxW, kpiBoxH, 'F')
+        doc.setDrawColor(226, 232, 240)
+        doc.rect(bx, curY, kpiBoxW, kpiBoxH, 'S')
+
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(5.5)
+        doc.setTextColor(100, 116, 139)
+        doc.text(kpi.label.toUpperCase(), bx + kpiBoxW / 2, curY + 3.8, { align: 'center' })
+
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(8.5)
+        doc.setTextColor(kpi.color[0], kpi.color[1], kpi.color[2])
+        doc.text(kpi.val, bx + kpiBoxW / 2, curY + 8.8, { align: 'center' })
+      })
+
+      curY += kpiBoxH + 5
+
+      /* ── Submissions Breakdown Table ── */
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(8.5)
+      doc.setTextColor(30, 58, 95)
+      doc.text('ACTIVITY SUBMISSIONS BREAKDOWN', ML, curY)
+      curY += 2.5
+
+      const flattened = getFlattenedLeafNodes(detailData.nodes_tree)
+      const tableHead = [['S.No', 'Category / Path', 'Activity Title', 'Status', 'Submissions', 'Credits', 'Last Submitted']]
+      const tableBody = flattened.map((r, i) => [
+        String(i + 1),
+        r.categoryPath,
+        r.label,
+        r.isCompleted ? 'Completed' : 'Pending',
+        String(r.submissionsCount),
+        String(r.pbasCredit),
+        fmtDateTime(r.lastSubmittedAt),
+      ])
+
+      autoTable(doc, {
+        startY: curY,
+        margin: { left: ML, right: MR, bottom: 12 },
+        head: tableHead,
+        body: tableBody,
+        theme: 'grid',
+        headStyles: {
+          fillColor: [30, 58, 95],
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+          fontSize: 6.5,
+          halign: 'center',
+          cellPadding: 1.2,
+        },
+        bodyStyles: {
+          fontSize: 6,
+          textColor: [51, 65, 85],
+          cellPadding: 1,
+        },
+        columnStyles: {
+          0: { halign: 'center', cellWidth: 9 },
+          1: { halign: 'left', cellWidth: 48 },
+          2: { halign: 'left', cellWidth: 54 },
+          3: { halign: 'center', cellWidth: 19 },
+          4: { halign: 'center', cellWidth: 18 },
+          5: { halign: 'center', cellWidth: 15 },
+          6: { halign: 'left', cellWidth: 27 },
+        },
+        alternateRowStyles: {
+          fillColor: [248, 250, 252],
+        },
+        didParseCell: (data) => {
+          if (data.section === 'body' && data.column.index === 3) {
+            if (data.cell.raw === 'Completed') {
+              data.cell.styles.textColor = [16, 185, 129]
+              data.cell.styles.fontStyle = 'bold'
+            } else {
+              data.cell.styles.textColor = [225, 29, 72]
+              data.cell.styles.fontStyle = 'bold'
+            }
+          }
+        },
+        didDrawPage: (data) => {
+          const totalPages = doc.getNumberOfPages()
+          const pageCurrent = data.pageNumber
+          doc.setFont('helvetica', 'normal')
+          doc.setFontSize(6.5)
+          doc.setTextColor(148, 163, 184)
+          doc.text(
+            `Page ${pageCurrent} of ${totalPages} • PBAS User Activity Report`,
+            PW / 2,
+            PH - 5,
+            { align: 'center' }
+          )
+        },
+      })
+
+      const fileName = `PBAS_Activity_${(user.name || 'Faculty').replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`
+      doc.save(fileName)
+    } catch (err: any) {
+      console.error('PDF generation error:', err)
+      alert('PDF export failed: ' + (err?.message || err))
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
+  // Export Faculty Detail Report to Excel
+  const handleExportFacultyDetailExcel = () => {
+    if (!detailData) return
+    setShowDownloadModal(false)
+
+    const user = detailData.user
+    const stats = detailData.stats
+    const isCompleted = stats.completed_leaf_nodes === stats.total_leaf_nodes && stats.total_leaf_nodes > 0
+
+    // Sheet 1: Faculty Summary & Stats
+    const summaryRows = [
+      { Field: 'Faculty Name', Value: user.name || '—' },
+      { Field: 'Staff / Reg ID', Value: user.reg_or_staff_id || '—' },
+      { Field: 'Role', Value: user.role || '—' },
+      { Field: 'Department', Value: user.department?.name || user.department?.code || '—' },
+      { Field: 'Designation', Value: user.designation || '—' },
+      { Field: 'Email', Value: user.email || '—' },
+      { Field: 'Semester', Value: user.semester ? String(user.semester) : '—' },
+      { Field: 'Section', Value: user.section_name || '—' },
+      { Field: 'Overall Status', Value: isCompleted ? 'Fully Completed' : stats.completion_percentage > 0 ? 'In Progress' : 'Not Started' },
+      { Field: 'Completion Percentage', Value: `${stats.completion_percentage}%` },
+      { Field: 'Total Leaf Nodes', Value: stats.total_leaf_nodes },
+      { Field: 'Completed Leaf Nodes', Value: stats.completed_leaf_nodes },
+      { Field: 'Pending Leaf Nodes', Value: stats.total_leaf_nodes - stats.completed_leaf_nodes },
+      { Field: 'Total Submissions', Value: stats.total_submissions },
+      { Field: 'Total Credits Earned', Value: stats.total_credits },
+    ]
+
+    const flattened = getFlattenedLeafNodes(detailData.nodes_tree)
+    const detailRows = flattened.map((r) => ({
+      'S.No': r.sno,
+      'Category / Path': r.categoryPath,
+      'Activity Title': r.label,
+      'Input Mode': r.inputMode,
+      'Status': r.isCompleted ? 'Completed' : 'Pending',
+      'Earned Credits': r.pbasCredit,
+      'Submissions Count': r.submissionsCount,
+      'Last Submitted Date': fmtDateTime(r.lastSubmittedAt),
+    }))
+
+    const wb = XLSX.utils.book_new()
+    const wsSummary = XLSX.utils.json_to_sheet(summaryRows)
+    const wsDetail = XLSX.utils.json_to_sheet(detailRows)
+
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'Faculty Summary')
+    XLSX.utils.book_append_sheet(wb, wsDetail, 'Activity Submissions')
+
+    const fileName = `PBAS_User_Activity_${(user.name || 'Faculty').replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().slice(0, 10)}.xlsx`
+    XLSX.writeFile(wb, fileName)
   }
 
   // ==========================================
@@ -402,7 +751,7 @@ export default function PBASUserActivityTab({ initialUserId }: PBASUserActivityT
         {/* Top Navigation & Profile Header */}
         <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm overflow-hidden">
           {/* Top Banner Bar */}
-          <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
+          <div className="p-4 bg-slate-900 text-white flex items-center justify-between flex-wrap gap-3">
             <button
               type="button"
               onClick={() => setSelectedUserId(null)}
@@ -411,9 +760,68 @@ export default function PBASUserActivityTab({ initialUserId }: PBASUserActivityT
               <ArrowLeft className="w-4 h-4" />
               <span>Back to User Activity List</span>
             </button>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-300 font-medium">Viewing PBAS Activity for:</span>
-              <span className="text-xs font-bold text-indigo-300">{user.name}</span>
+
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-300 font-medium">Viewing PBAS Activity for:</span>
+                <span className="text-xs font-bold text-indigo-300">{user.name}</span>
+              </div>
+
+              {/* Download Report Dropdown Button */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowDownloadModal(!showDownloadModal)}
+                  disabled={exportBusy}
+                  className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md hover:shadow-indigo-500/25 transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>{exportBusy ? 'Generating Export...' : 'Download Report'}</span>
+                  <ChevronDown className="w-3.5 h-3.5 opacity-80" />
+                </button>
+
+                {/* Dropdown Menu / Selection Modal */}
+                {showDownloadModal && (
+                  <div className="absolute right-0 mt-2 w-64 rounded-2xl bg-white shadow-2xl border border-slate-200 py-2 z-50 animate-in fade-in zoom-in-95">
+                    <div className="px-3.5 py-2 border-b border-slate-100 flex items-center justify-between">
+                      <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Export Report Template</p>
+                      <button
+                        type="button"
+                        onClick={() => setShowDownloadModal(false)}
+                        className="text-slate-400 hover:text-slate-600"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleExportFacultyDetailPDF}
+                      className="w-full px-3.5 py-2.5 text-left text-xs text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 flex items-center gap-3 font-semibold transition-colors"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-100">
+                        <FileText className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="font-bold text-slate-900">PDF Report Template</div>
+                        <div className="text-[10px] text-slate-400 font-normal">Logos, staff details & formatted grid</div>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleExportFacultyDetailExcel}
+                      className="w-full px-3.5 py-2.5 text-left text-xs text-slate-700 hover:bg-emerald-50 hover:text-emerald-600 flex items-center gap-3 font-semibold transition-colors"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 border border-emerald-100">
+                        <Download className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="font-bold text-slate-900">Excel Workbook Template</div>
+                        <div className="text-[10px] text-slate-400 font-normal">Multi-sheet summary & granular data</div>
+                      </div>
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -921,7 +1329,7 @@ export default function PBASUserActivityTab({ initialUserId }: PBASUserActivityT
             </button>
             <button
               type="button"
-              onClick={handleExportExcel}
+              onClick={handleExportListExcel}
               disabled={listData.users.length === 0}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-all disabled:opacity-50"
             >
