@@ -213,6 +213,16 @@ def _compute_scope(user) -> dict:
             mentee_pk_set.add(str(sid))
             mentee_ids.append(str(sid))
 
+    if 'STUDENT' in role_names:
+        from academics.models import StudentProfile
+        try:
+            sp = StudentProfile.objects.filter(user=user).first()
+            if sp:
+                mentee_pk_set.add(str(sp.pk))
+                mentee_ids.append(str(sp.pk))
+        except Exception:
+            pass
+
     scope['_staff_profile_id'] = str(staff_profile.pk) if staff_profile else None
     scope['current_department'] = current_department
     scope['department_id'] = current_department['id'] if current_department else None

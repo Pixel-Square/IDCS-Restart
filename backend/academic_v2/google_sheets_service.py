@@ -599,7 +599,12 @@ def _parse_co_spec(raw_co: Any, raw_title: Any = '') -> list[int]:
             if paren_match:
                 res = _extract_from_text(paren_match.group(1))
         if not res:
-            res = _extract_from_text(title_str)
+            t_clean = title_str.upper().strip()
+            # Only accept if title is strictly a CO designation (e.g. '1', 'CO1', 'CO-1', '1,2,3')
+            # Avoid extracting numbers from 'CIA 1', 'EXP 1', 'ITEM 1', 'REVIEW 1', etc.
+            if not any(ign in t_clean for ign in ('CIA', 'EXP', 'ITEM', 'REVIEW', 'TASK', 'CYCLE', 'PART', 'MODULE', 'UNIT', 'SL', 'SNO', 'Q', 'QUESTION', 'MODEL', 'TEST', 'ASSIGNMENT', 'SSA')):
+                if t_clean in ('1', '2', '3', '4', '5', '6') or re.match(r'^CO\s*[-_]?([1-6])$', t_clean):
+                    res = _extract_from_text(title_str)
 
     return res
 
@@ -641,8 +646,10 @@ def _is_summary_or_ignored_column(raw_title: Any, raw_co: Any = '', raw_max: Any
     if c in ('COS', 'CO', "CO'S", 'BTL', 'MAX MARKS', 'MAX MARKS PER ITEM'):
         return True
 
-    # Ignore summary Cycle columns like "CYCLE I (50)", "CYCLE II (50)", "CYCLE I (AVG)", "CYCLE 1 (50)", "CYCLE I (100)"
+    # Ignore summary Cycle / CIA columns like "CYCLE I (50)", "CYCLE II (50)", "CIA 1", "CIA 2", "CIA EXAM" when no explicit CO spec
     if 'CYCLE' in t and ('(50)' in t or '(100)' in t or 'AVG' in t or 'TOTAL' in t or 'CONVERTED' in t or 'CHECK' in t):
+        return True
+    if any(k in t for k in ('CIA EXAM', 'CIA 1', 'CIA 2', 'CIA-1', 'CIA-2', 'CIA I', 'CIA II')) and not any(c_num in c for c_num in ('1', '2', '3', '4', '5', '6')):
         return True
 
     return False
@@ -752,6 +759,8 @@ def derive_mark_manager_from_sheet(
         raw_title = _get_best_title_for_col(c)
         raw_co = str(_safe_row_value(cos_data, c) or '').strip()
         raw_max = _safe_row_value(max_marks_data, c)
+        if raw_max is None or str(raw_max).strip() in ('', '0', '0.0', '%', '#VALUE!', '#DIV/0!', '#REF!'):
+            continue
 
         if _is_summary_or_ignored_column(raw_title, raw_co, raw_max):
             continue
@@ -1189,9 +1198,21 @@ def sync_google_sheet_to_backend(
                 if updated_questions:
                     questions = updated_questions
 
-                for k, v in (derived_info.get('question_columns_mapping') or {}).items():
-                    if k not in raw_question_columns:
-                        raw_question_columns[k] = v
+                derived_q_map = derived_info.get('question_columns_mapping') or {}
+                if derived_q_map:
+                    raw_question_columns = dict(derived_q_map)
+
+                # Persist updated questionColumns back to GoogleSheetLink exam_configs
+                try:
+                    sec_link = AcV2GoogleSheetLink.objects.filter(section=exam_assignment.section, is_active=True).first()
+                    if sec_link and isinstance(sec_link.exam_configs, dict):
+                        ea_cfg = sec_link.exam_configs.get(str(exam_assignment.id))
+                        if isinstance(ea_cfg, dict):
+                            ea_cfg['questionColumns'] = raw_question_columns
+                            sec_link.exam_configs[str(exam_assignment.id)] = ea_cfg
+                            sec_link.save(update_fields=['exam_configs', 'updated_at'])
+                except Exception:
+                    pass
         except Exception:
             pass
 

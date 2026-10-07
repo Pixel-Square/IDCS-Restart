@@ -1,12 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getMe, requestMobileOtp, verifyMobileOtp, removeMobileNumber, changePassword, getCachedMe } from '../../services/auth';
-import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2, Key, Eye, EyeOff, Edit2, Save, X, Camera, CreditCard, XCircle, Award } from 'lucide-react';
+import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2, Key, Eye, EyeOff, Edit2, Save, X, Camera, CreditCard, XCircle, Award, MapPin, Bus, Users, Sparkles, AlertCircle, Navigation, Heart, Calendar } from 'lucide-react';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import { ModalPortal } from '../../components/ModalPortal';
 import logo from '../../assets/idcs-logo.png';
 import indiaFlag from '../../assets/india-flag.svg';
 import fetchWithAuth from '../../services/fetchAuth';
 import { getApiBase } from '../../services/apiBase';
+
+export const BLOOD_GROUPS = [
+  'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-',
+  'A1+', 'A1-', 'A2+', 'A2-', 'A1B+', 'A1B-', 'A2B+', 'A2B-',
+  'Bombay Blood Group', 'Other'
+] as const;
 
 type RoleObj = { name: string };
 type Me = {
@@ -89,6 +95,17 @@ function getDisplayName(me: Me | null | undefined): string {
   return String(`${first} ${last}`).trim();
 }
 
+export function formatDobDisplay(val?: string | null): string {
+  if (!val) return '';
+  const s = String(val).trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y, m, d] = s.split('-');
+    return `${d}-${m}-${y}`;
+  }
+  return s;
+}
+
 export default function ProfilePage({ user: initialUser }: { user?: Me | null }) {
   const [user, setUser] = useState<Me | null | undefined>(initialUser === undefined ? null : initialUser);
   const [loading, setLoading] = useState(initialUser ? false : true);
@@ -148,6 +165,64 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   const [emailEditing, setEmailEditing] = useState(false);
   const [emailSaving, setEmailSaving] = useState(false);
   const [emailEditError, setEmailEditError] = useState<string | null>(null);
+
+  // Student specific data & completion config
+  const [modesOfTransportation, setModesOfTransportation] = useState<Array<{ id: number; name: string }>>([]);
+  const [completionConfig, setCompletionConfig] = useState<{
+    is_overall_compulsory: boolean;
+    fields_config: Record<string, boolean>;
+  } | null>(null);
+
+  // Personal Details editing states (DOB & Blood Group)
+  const [isEditingPersonal, setIsEditingPersonal] = useState(false);
+  const [personalDraft, setPersonalDraft] = useState({
+    dob: '',
+    blood_group: '',
+  });
+  const [personalSaving, setPersonalSaving] = useState(false);
+  const [personalError, setPersonalError] = useState<string | null>(null);
+
+  // Parents Information editing states (Father's Name & Mother's Name)
+  const [isEditingParentNames, setIsEditingParentNames] = useState(false);
+  const [parentNamesDraft, setParentNamesDraft] = useState({
+    father_name: '',
+    mother_name: '',
+  });
+  const [parentNamesSaving, setParentNamesSaving] = useState(false);
+  const [parentNamesError, setParentNamesError] = useState<string | null>(null);
+
+  // Address editing states
+  const [isEditingAddress, setIsEditingAddress] = useState(false);
+  const [addressDraft, setAddressDraft] = useState({
+    address_line1: '',
+    address_line2: '',
+    address_line3: '',
+    district: '',
+    pincode: '',
+  });
+  const [addressSaving, setAddressSaving] = useState(false);
+  const [addressError, setAddressError] = useState<string | null>(null);
+
+  // Parent contact editing states
+  const [isEditingParents, setIsEditingParents] = useState(false);
+  const [parentsDraft, setParentsDraft] = useState({
+    father_mobile: '',
+    mother_mobile: '',
+  });
+  const [parentsSaving, setParentsSaving] = useState(false);
+  const [parentsError, setParentsError] = useState<string | null>(null);
+
+  // Mode of Transportation editing states
+  const [isEditingTransport, setIsEditingTransport] = useState(false);
+  const [transportDraft, setTransportDraft] = useState<{
+    mode_of_transportation_id: number | string;
+    boarding_point: string;
+  }>({
+    mode_of_transportation_id: '',
+    boarding_point: '',
+  });
+  const [transportSaving, setTransportSaving] = useState(false);
+  const [transportError, setTransportError] = useState<string | null>(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
   const [avatarCandidateIndex, setAvatarCandidateIndex] = useState(0);
@@ -309,7 +384,147 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       nameEdited: edited,
     });
     if (edited) setIsEditingName(false);
+
+    const prof = (user as any)?.profile || {};
+    setPersonalDraft({
+      dob: String(prof.dob || ''),
+      blood_group: String(prof.blood_group || ''),
+    });
+    setParentNamesDraft({
+      father_name: String(prof.father_name || ''),
+      mother_name: String(prof.mother_name || ''),
+    });
+    setAddressDraft({
+      address_line1: String(prof.address_line1 || ''),
+      address_line2: String(prof.address_line2 || ''),
+      address_line3: String(prof.address_line3 || ''),
+      district: String(prof.district || ''),
+      pincode: String(prof.pincode || ''),
+    });
+    setParentsDraft({
+      father_mobile: String(prof.father_mobile || ''),
+      mother_mobile: String(prof.mother_mobile || ''),
+    });
+    setTransportDraft({
+      mode_of_transportation_id: prof.mode_of_transportation_id || '',
+      boarding_point: String(prof.boarding_point || ''),
+    });
   }, [user]);
+
+  useEffect(() => {
+    if (user?.profile_type === 'STUDENT') {
+      fetchWithAuth('/api/academics/modes-of-transportation/')
+        .then((res) => res.ok ? res.json() : [])
+        .then((data) => setModesOfTransportation(data || []))
+        .catch(() => {});
+
+      fetchWithAuth('/api/academics/student-profile/completion-config/')
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => {
+          if (data) setCompletionConfig(data);
+        })
+        .catch(() => {});
+    }
+  }, [user?.profile_type]);
+
+  const completionDetails = useMemo(() => {
+    if (user?.profile_type !== 'STUDENT') return null;
+
+    const prof = (user as any)?.profile || {};
+    const config = completionConfig?.fields_config || {
+      father_name: true,
+      mother_name: true,
+      dob: true,
+      blood_group: true,
+      address_line1: true,
+      address_line2: true,
+      address_line3: false,
+      district: true,
+      pincode: true,
+      father_mobile: true,
+      mother_mobile: true,
+      mode_of_transportation: true,
+    };
+
+    const isBus = (() => {
+      const modeId = prof.mode_of_transportation_id;
+      const modeName = prof.mode_of_transportation;
+      if (!modeId && !modeName) return false;
+      const found = modesOfTransportation.find((m) => String(m.id) === String(modeId));
+      const name = found ? found.name : String(modeName || '');
+      return name.toLowerCase().includes('college bus') || name.toLowerCase().includes('bus');
+    })();
+
+    const fieldValues: Record<string, any> = {
+      father_name: prof.father_name,
+      mother_name: prof.mother_name,
+      dob: prof.dob,
+      blood_group: prof.blood_group,
+      address_line1: prof.address_line1,
+      address_line2: prof.address_line2,
+      address_line3: prof.address_line3,
+      district: prof.district,
+      pincode: prof.pincode,
+      father_mobile: prof.father_mobile,
+      mother_mobile: prof.mother_mobile,
+      mode_of_transportation: prof.mode_of_transportation_id || prof.mode_of_transportation,
+      boarding_point: prof.boarding_point,
+    };
+
+    const fieldLabels: Record<string, string> = {
+      father_name: "Father's Name",
+      mother_name: "Mother's Name",
+      dob: 'Date of Birth',
+      blood_group: 'Blood Group',
+      address_line1: 'Address Line 1',
+      address_line2: 'Address Line 2',
+      address_line3: 'Address Line 3',
+      district: 'District',
+      pincode: 'Pincode',
+      father_mobile: 'Parent/Guardian Number 1 (Compulsory)',
+      mother_mobile: 'Parent Mobile Number 2',
+      mode_of_transportation: 'Mode of Transportation',
+      boarding_point: 'Boarding Point',
+    };
+
+    const evaluatedKeys = Object.keys(config).filter((k) => config[k] === true);
+    if (config.mode_of_transportation && isBus && !evaluatedKeys.includes('boarding_point')) {
+      evaluatedKeys.push('boarding_point');
+    }
+
+    if (evaluatedKeys.length === 0) {
+      return {
+        percentage: 100,
+        completedCount: 0,
+        totalCount: 0,
+        missingFields: [],
+        isOverallCompulsory: Boolean(completionConfig?.is_overall_compulsory),
+      };
+    }
+
+    let completedCount = 0;
+    const missingFields: string[] = [];
+
+    evaluatedKeys.forEach((key) => {
+      const val = fieldValues[key];
+      const isFilled = val !== undefined && val !== null && String(val).trim().length > 0;
+      if (isFilled) {
+        completedCount += 1;
+      } else {
+        missingFields.push(fieldLabels[key] || key);
+      }
+    });
+
+    const percentage = Math.round((completedCount / evaluatedKeys.length) * 100);
+
+    return {
+      percentage,
+      completedCount,
+      totalCount: evaluatedKeys.length,
+      missingFields,
+      isOverallCompulsory: Boolean(completionConfig?.is_overall_compulsory),
+    };
+  }, [user, completionConfig, modesOfTransportation]);
 
   if (loading) return (
     <DashboardLayout>
@@ -737,6 +952,197 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     setEmailEditError(null);
   }
 
+  async function handleSavePersonal() {
+    setPersonalSaving(true);
+    setPersonalError(null);
+    try {
+      const res = await fetchWithAuth('/api/accounts/profile/update/', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dob: personalDraft.dob || null,
+          blood_group: personalDraft.blood_group.trim(),
+        }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData?.detail || 'Failed to update personal details');
+      }
+      const updated = await getMe();
+      applyUserUpdate(updated);
+      setIsEditingPersonal(false);
+    } catch (err: any) {
+      setPersonalError(err?.message || 'Failed to update personal details');
+    } finally {
+      setPersonalSaving(false);
+    }
+  }
+
+  function cancelEditingPersonal() {
+    const prof = (user as any)?.profile || {};
+    setPersonalDraft({
+      dob: String(prof.dob || ''),
+      blood_group: String(prof.blood_group || ''),
+    });
+    setIsEditingPersonal(false);
+    setPersonalError(null);
+  }
+
+  async function handleSaveParentNames() {
+    setParentNamesSaving(true);
+    setParentNamesError(null);
+    try {
+      const res = await fetchWithAuth('/api/accounts/profile/update/', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          father_name: parentNamesDraft.father_name.trim(),
+          mother_name: parentNamesDraft.mother_name.trim(),
+        }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData?.detail || "Failed to update parent's names");
+      }
+      const updated = await getMe();
+      applyUserUpdate(updated);
+      setIsEditingParentNames(false);
+    } catch (err: any) {
+      setParentNamesError(err?.message || "Failed to update parent's names");
+    } finally {
+      setParentNamesSaving(false);
+    }
+  }
+
+  function cancelEditingParentNames() {
+    const prof = (user as any)?.profile || {};
+    setParentNamesDraft({
+      father_name: String(prof.father_name || ''),
+      mother_name: String(prof.mother_name || ''),
+    });
+    setIsEditingParentNames(false);
+    setParentNamesError(null);
+  }
+
+  async function handleSaveAddress() {
+    setAddressSaving(true);
+    setAddressError(null);
+    try {
+      const res = await fetchWithAuth('/api/accounts/profile/update/', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          address_line1: addressDraft.address_line1.trim(),
+          address_line2: addressDraft.address_line2.trim(),
+          address_line3: addressDraft.address_line3.trim(),
+          district: addressDraft.district.trim(),
+          pincode: addressDraft.pincode.trim(),
+        }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData?.detail || 'Failed to update address');
+      }
+      const updated = await getMe();
+      applyUserUpdate(updated);
+      setIsEditingAddress(false);
+    } catch (err: any) {
+      setAddressError(err?.message || 'Failed to update address');
+    } finally {
+      setAddressSaving(false);
+    }
+  }
+
+  function cancelEditingAddress() {
+    const prof = (user as any)?.profile || {};
+    setAddressDraft({
+      address_line1: String(prof.address_line1 || ''),
+      address_line2: String(prof.address_line2 || ''),
+      address_line3: String(prof.address_line3 || ''),
+      district: String(prof.district || ''),
+      pincode: String(prof.pincode || ''),
+    });
+    setIsEditingAddress(false);
+    setAddressError(null);
+  }
+
+  async function handleSaveParents() {
+    setParentsSaving(true);
+    setParentsError(null);
+    try {
+      const res = await fetchWithAuth('/api/accounts/profile/update/', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          father_mobile: parentsDraft.father_mobile.trim(),
+          mother_mobile: parentsDraft.mother_mobile.trim(),
+        }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData?.detail || 'Failed to update parent contacts');
+      }
+      const updated = await getMe();
+      applyUserUpdate(updated);
+      setIsEditingParents(false);
+    } catch (err: any) {
+      setParentsError(err?.message || 'Failed to update parent contacts');
+    } finally {
+      setParentsSaving(false);
+    }
+  }
+
+  function cancelEditingParents() {
+    const prof = (user as any)?.profile || {};
+    setParentsDraft({
+      father_mobile: String(prof.father_mobile || ''),
+      mother_mobile: String(prof.mother_mobile || ''),
+    });
+    setIsEditingParents(false);
+    setParentsError(null);
+  }
+
+  async function handleSaveTransport() {
+    setTransportSaving(true);
+    setTransportError(null);
+    try {
+      const modeId = transportDraft.mode_of_transportation_id;
+      const found = modesOfTransportation.find((m) => String(m.id) === String(modeId));
+      const modeName = found ? found.name : '';
+      const isBus = modeName.toLowerCase().includes('college bus') || modeName.toLowerCase().includes('bus');
+
+      const res = await fetchWithAuth('/api/accounts/profile/update/', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode_of_transportation_id: modeId ? Number(modeId) : null,
+          boarding_point: isBus ? transportDraft.boarding_point.trim() : '',
+        }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData?.detail || 'Failed to update mode of transportation');
+      }
+      const updated = await getMe();
+      applyUserUpdate(updated);
+      setIsEditingTransport(false);
+    } catch (err: any) {
+      setTransportError(err?.message || 'Failed to update mode of transportation');
+    } finally {
+      setTransportSaving(false);
+    }
+  }
+
+  function cancelEditingTransport() {
+    const prof = (user as any)?.profile || {};
+    setTransportDraft({
+      mode_of_transportation_id: prof.mode_of_transportation_id || '',
+      boarding_point: String(prof.boarding_point || ''),
+    });
+    setIsEditingTransport(false);
+    setTransportError(null);
+  }
+
   function handleAvatarEditClick() {
     if (avatarLocked || avatarUploading) return;
     avatarInputRef.current?.click();
@@ -1050,6 +1456,91 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
             </div>
           </div>
         </div>
+
+        {/* Profile Completion Progress Bar (placed between Name section and Details section) */}
+        {completionDetails && (
+          <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-200">
+            <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-base ${
+                    completionDetails.percentage === 100
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : completionDetails.percentage >= 50
+                        ? 'bg-indigo-100 text-indigo-700'
+                        : 'bg-amber-100 text-amber-700'
+                  }`}
+                >
+                  <CheckCircle2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-slate-900">Profile Completion</h3>
+                    {completionDetails.isOverallCompulsory ? (
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200">
+                        Compulsory
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                        Optional
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    {completionDetails.completedCount} of {completionDetails.totalCount} compulsory fields completed
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span
+                  className={`text-2xl font-black ${
+                    completionDetails.percentage === 100
+                      ? 'text-emerald-600'
+                      : completionDetails.percentage >= 50
+                        ? 'text-indigo-600'
+                        : 'text-amber-600'
+                  }`}
+                >
+                  {completionDetails.percentage}%
+                </span>
+                <span className="text-xs text-slate-500 font-medium">Completed</span>
+              </div>
+            </div>
+
+            {/* Line Progress Bar */}
+            <div className="w-full bg-slate-100 rounded-full h-3.5 overflow-hidden p-0.5 border border-slate-200">
+              <div
+                className={`h-full rounded-full transition-all duration-700 ease-out ${
+                  completionDetails.percentage === 100
+                    ? 'bg-gradient-to-r from-emerald-500 to-teal-500'
+                    : completionDetails.percentage >= 50
+                      ? 'bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-600'
+                      : 'bg-gradient-to-r from-amber-500 to-orange-500'
+                }`}
+                style={{ width: `${Math.max(4, completionDetails.percentage)}%` }}
+              />
+            </div>
+
+            {/* Missing required fields alert */}
+            {completionDetails.missingFields.length > 0 ? (
+              <div className="mt-3 flex items-start sm:items-center gap-2 text-xs text-slate-600 bg-amber-50/70 border border-amber-200/80 p-3 rounded-xl">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5 sm:mt-0" />
+                <div>
+                  <span className="font-semibold text-slate-800">Pending compulsory fields: </span>
+                  <span className="text-amber-800 font-medium">
+                    {completionDetails.missingFields.join(', ')}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 flex items-center gap-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span className="font-medium">All compulsory profile fields are complete!</span>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Details Section */}
         <div>
@@ -1398,6 +1889,563 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                 </div>
               </div>
             </div>
+
+            {/* Student Specific Field Groups: Personal, Parents Info, Parents Contacts, Transport, Address */}
+            {user.profile_type === 'STUDENT' && (
+              <>
+                {/* Group 1: Personal Details (Date of Birth & Blood Group) */}
+                <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow lg:col-span-1 border-l-4 border-rose-500">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 bg-rose-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                      <Heart className="w-5 h-5 text-rose-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-semibold text-gray-700 mb-0.5">Personal Details</div>
+                          <div className="text-xs text-gray-500">Date of Birth & Blood Group</div>
+                        </div>
+                        {!isEditingPersonal && (
+                          <button
+                            type="button"
+                            onClick={() => { setIsEditingPersonal(true); setPersonalError(null); }}
+                            className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-medium px-2 py-1 rounded hover:bg-rose-50"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                            Edit
+                          </button>
+                        )}
+                      </div>
+
+                      {isEditingPersonal ? (
+                        <div className="mt-3 space-y-3">
+                          <div>
+                            <label className="text-xs font-semibold text-gray-600">Date of Birth (DD-MM-YYYY)</label>
+                            <input
+                              type="date"
+                              value={personalDraft.dob}
+                              onChange={(e) => setPersonalDraft((d) => ({ ...d, dob: e.target.value }))}
+                              className="w-full mt-1 px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-rose-500 bg-white"
+                              disabled={personalSaving}
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-semibold text-gray-600">Blood Group</label>
+                            <select
+                              value={personalDraft.blood_group}
+                              onChange={(e) => setPersonalDraft((d) => ({ ...d, blood_group: e.target.value }))}
+                              className="w-full mt-1 px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-rose-500 bg-white"
+                              disabled={personalSaving}
+                            >
+                              <option value="">-- Select Blood Group --</option>
+                              {BLOOD_GROUPS.map((bg) => (
+                                <option key={bg} value={bg}>
+                                  {bg}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {personalError && <div className="text-xs text-red-600">{personalError}</div>}
+
+                          <div className="flex items-center gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={handleSavePersonal}
+                              disabled={personalSaving}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-medium flex items-center gap-1.5 shadow-sm"
+                            >
+                              <Save className="w-3.5 h-3.5" />
+                              {personalSaving ? 'Saving...' : 'Save Details'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelEditingPersonal}
+                              disabled={personalSaving}
+                              className="px-3 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-xs font-medium"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-3 space-y-2 text-sm text-gray-800">
+                          <div>
+                            <span className="text-xs text-gray-500 block">Date of Birth:</span>
+                            <span className="font-medium text-gray-900">
+                              {(user as any)?.profile?.dob_display || formatDobDisplay((user as any)?.profile?.dob) || '—'}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-xs text-gray-500 block">Blood Group:</span>
+                            {(user as any)?.profile?.blood_group ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200 mt-0.5">
+                                {(user as any)?.profile?.blood_group}
+                              </span>
+                            ) : (
+                              <span className="font-medium text-gray-900">—</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Group 2: Parents Information (Father's Name & Mother's Name) */}
+                <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow lg:col-span-1 border-l-4 border-amber-500">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                      <Users className="w-5 h-5 text-amber-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-semibold text-gray-700 mb-0.5">Parents Information</div>
+                          <div className="text-xs text-gray-500">Father's & Mother's Name</div>
+                        </div>
+                        {!isEditingParentNames && (
+                          <button
+                            type="button"
+                            onClick={() => { setIsEditingParentNames(true); setParentNamesError(null); }}
+                            className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 font-medium px-2 py-1 rounded hover:bg-amber-50"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                            Edit
+                          </button>
+                        )}
+                      </div>
+
+                      {isEditingParentNames ? (
+                        <div className="mt-3 space-y-3">
+                          <div>
+                            <label className="text-xs font-semibold text-gray-600">Father's Name</label>
+                            <input
+                              type="text"
+                              value={parentNamesDraft.father_name}
+                              onChange={(e) => setParentNamesDraft((d) => ({ ...d, father_name: e.target.value }))}
+                              placeholder="Enter Father's Name"
+                              className="w-full mt-1 px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-amber-500"
+                              disabled={parentNamesSaving}
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-semibold text-gray-600">Mother's Name</label>
+                            <input
+                              type="text"
+                              value={parentNamesDraft.mother_name}
+                              onChange={(e) => setParentNamesDraft((d) => ({ ...d, mother_name: e.target.value }))}
+                              placeholder="Enter Mother's Name"
+                              className="w-full mt-1 px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-amber-500"
+                              disabled={parentNamesSaving}
+                            />
+                          </div>
+
+                          {parentNamesError && <div className="text-xs text-red-600">{parentNamesError}</div>}
+
+                          <div className="flex items-center gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={handleSaveParentNames}
+                              disabled={parentNamesSaving}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-medium flex items-center gap-1.5 shadow-sm"
+                            >
+                              <Save className="w-3.5 h-3.5" />
+                              {parentNamesSaving ? 'Saving...' : 'Save Names'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelEditingParentNames}
+                              disabled={parentNamesSaving}
+                              className="px-3 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-xs font-medium"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-3 space-y-2 text-sm text-gray-800">
+                          <div>
+                            <span className="text-xs text-gray-500 block">Father's Name:</span>
+                            <span className="font-medium text-gray-900">
+                              {(user as any)?.profile?.father_name || '—'}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-xs text-gray-500 block">Mother's Name:</span>
+                            <span className="font-medium text-gray-900">
+                              {(user as any)?.profile?.mother_name || '—'}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Group 3: Parent / Guardian Contact */}
+                <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow lg:col-span-1 border-l-4 border-blue-500">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                      <Phone className="w-5 h-5 text-blue-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-semibold text-gray-700 mb-0.5">Parent Contacts</div>
+                          <div className="text-xs text-gray-500">Parent / Guardian mobile numbers</div>
+                        </div>
+                        {!isEditingParents && (
+                          <button
+                            type="button"
+                            onClick={() => { setIsEditingParents(true); setParentsError(null); }}
+                            className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium px-2 py-1 rounded hover:bg-blue-50"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                            Edit
+                          </button>
+                        )}
+                      </div>
+
+                      {isEditingParents ? (
+                        <div className="mt-3 space-y-3">
+                          <div>
+                            <label className="text-xs font-semibold text-gray-600">Parent/Guardian Number 1 (Compulsory)</label>
+                            <div className="flex mt-1">
+                              <span className="inline-flex items-center px-2 py-1 border border-r-0 border-gray-300 bg-gray-50 text-gray-600 text-xs rounded-l">
+                                +91
+                              </span>
+                              <input
+                                type="tel"
+                                value={parentsDraft.father_mobile}
+                                onChange={(e) => setParentsDraft((d) => ({ ...d, father_mobile: e.target.value }))}
+                                placeholder="10-digit mobile number"
+                                maxLength={15}
+                                className="w-full px-3 py-1.5 border border-gray-300 rounded-r text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                disabled={parentsSaving}
+                              />
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-semibold text-gray-600">Parent Mobile Number 2</label>
+                            <div className="flex mt-1">
+                              <span className="inline-flex items-center px-2 py-1 border border-r-0 border-gray-300 bg-gray-50 text-gray-600 text-xs rounded-l">
+                                +91
+                              </span>
+                              <input
+                                type="tel"
+                                value={parentsDraft.mother_mobile}
+                                onChange={(e) => setParentsDraft((d) => ({ ...d, mother_mobile: e.target.value }))}
+                                placeholder="10-digit mobile number"
+                                maxLength={15}
+                                className="w-full px-3 py-1.5 border border-gray-300 rounded-r text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                disabled={parentsSaving}
+                              />
+                            </div>
+                          </div>
+
+                          {parentsError && <div className="text-xs text-red-600">{parentsError}</div>}
+
+                          <div className="flex items-center gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={handleSaveParents}
+                              disabled={parentsSaving}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-medium flex items-center gap-1.5 shadow-sm"
+                            >
+                              <Save className="w-3.5 h-3.5" />
+                              {parentsSaving ? 'Saving...' : 'Save Contacts'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelEditingParents}
+                              disabled={parentsSaving}
+                              className="px-3 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-xs font-medium"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-3 space-y-2 text-sm text-gray-800">
+                          <div>
+                            <span className="text-xs text-gray-500 block">Parent/Guardian Number 1 (Compulsory):</span>
+                            <span className="font-medium text-gray-900">
+                              {(user as any)?.profile?.father_mobile || '—'}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-xs text-gray-500 block">Parent Mobile Number 2:</span>
+                            <span className="font-medium text-gray-900">
+                              {(user as any)?.profile?.mother_mobile || '—'}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Group 4: Mode of Transportation (Dropdown select + dynamic Boarding Point) */}
+                <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow lg:col-span-1 border-l-4 border-emerald-500">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                      <Bus className="w-5 h-5 text-emerald-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-semibold text-gray-700 mb-0.5">Mode of Transportation</div>
+                          <div className="text-xs text-gray-500">Transit method to college</div>
+                        </div>
+                        {!isEditingTransport && (
+                          <button
+                            type="button"
+                            onClick={() => { setIsEditingTransport(true); setTransportError(null); }}
+                            className="flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-700 font-medium px-2 py-1 rounded hover:bg-emerald-50"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                            Edit
+                          </button>
+                        )}
+                      </div>
+
+                      {isEditingTransport ? (
+                        <div className="mt-3 space-y-3">
+                          <div>
+                            <label className="text-xs font-semibold text-gray-600">Select Mode</label>
+                            <select
+                              value={transportDraft.mode_of_transportation_id}
+                              onChange={(e) => setTransportDraft((d) => ({ ...d, mode_of_transportation_id: e.target.value }))}
+                              className="w-full mt-1 px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                              disabled={transportSaving}
+                            >
+                              <option value="">-- Select Mode of Transportation --</option>
+                              {modesOfTransportation.map((m) => (
+                                <option key={m.id} value={m.id}>
+                                  {m.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {/* Dynamic Boarding Point if College Bus is selected */}
+                          {(() => {
+                            const selectedId = transportDraft.mode_of_transportation_id;
+                            const found = modesOfTransportation.find((m) => String(m.id) === String(selectedId));
+                            const modeName = found ? found.name : '';
+                            const isBus = modeName.toLowerCase().includes('college bus') || modeName.toLowerCase().includes('bus');
+                            if (!isBus) return null;
+                            const isCompulsory = completionConfig?.fields_config?.mode_of_transportation !== false;
+
+                            return (
+                              <div className="p-3 bg-emerald-50/60 border border-emerald-200 rounded-lg space-y-1 animate-in fade-in duration-150">
+                                <div className="flex items-center justify-between">
+                                  <label className="text-xs font-semibold text-emerald-900 flex items-center gap-1">
+                                    <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                                    Boarding Point {isCompulsory && <span className="text-rose-600 font-bold">*</span>}
+                                  </label>
+                                  {isCompulsory && (
+                                    <span className="text-[10px] uppercase font-bold text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">
+                                      Compulsory
+                                    </span>
+                                  )}
+                                </div>
+                                <input
+                                  type="text"
+                                  value={transportDraft.boarding_point}
+                                  onChange={(e) => setTransportDraft((d) => ({ ...d, boarding_point: e.target.value }))}
+                                  placeholder="Enter Bus Stop / Boarding Point"
+                                  className="w-full px-3 py-1.5 border border-emerald-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                                  disabled={transportSaving}
+                                />
+                              </div>
+                            );
+                          })()}
+
+                          {transportError && <div className="text-xs text-red-600">{transportError}</div>}
+
+                          <div className="flex items-center gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={handleSaveTransport}
+                              disabled={transportSaving}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-medium flex items-center gap-1.5 shadow-sm"
+                            >
+                              <Save className="w-3.5 h-3.5" />
+                              {transportSaving ? 'Saving...' : 'Save Mode'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelEditingTransport}
+                              disabled={transportSaving}
+                              className="px-3 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-xs font-medium"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-3 space-y-2">
+                          <div>
+                            {(user as any)?.profile?.mode_of_transportation ? (
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <Bus className="w-3.5 h-3.5" />
+                                {(user as any)?.profile?.mode_of_transportation}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400 italic text-sm">Not selected</span>
+                            )}
+                          </div>
+                          {Boolean((user as any)?.profile?.boarding_point) && (
+                            <div className="text-xs text-gray-700">
+                              <span className="text-gray-500">Boarding Point: </span>
+                              <span className="font-semibold text-gray-900">{(user as any)?.profile?.boarding_point}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Group 5: Address Details (Line 1, Line 2, Line 3, District, Pincode) */}
+                <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow lg:col-span-2 border-l-4 border-indigo-500">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                      <MapPin className="w-5 h-5 text-indigo-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-semibold text-gray-700 mb-0.5">Address Details</div>
+                          <div className="text-xs text-gray-500">Line 1, Line 2, Line 3, District & Pincode</div>
+                        </div>
+                        {!isEditingAddress && (
+                          <button
+                            type="button"
+                            onClick={() => { setIsEditingAddress(true); setAddressError(null); }}
+                            className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-700 font-medium px-2 py-1 rounded hover:bg-indigo-50"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                            Edit
+                          </button>
+                        )}
+                      </div>
+
+                      {isEditingAddress ? (
+                        <div className="mt-3 space-y-3">
+                          <div>
+                            <label className="text-xs font-semibold text-gray-600">Address Line 1</label>
+                            <input
+                              type="text"
+                              value={addressDraft.address_line1}
+                              onChange={(e) => setAddressDraft((d) => ({ ...d, address_line1: e.target.value }))}
+                              placeholder="Door No, Building Name, Street"
+                              className="w-full mt-1 px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              disabled={addressSaving}
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-semibold text-gray-600">Address Line 2</label>
+                            <input
+                              type="text"
+                              value={addressDraft.address_line2}
+                              onChange={(e) => setAddressDraft((d) => ({ ...d, address_line2: e.target.value }))}
+                              placeholder="Locality, Area, Landmark"
+                              className="w-full mt-1 px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              disabled={addressSaving}
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-semibold text-gray-600">Address Line 3 (Optional)</label>
+                            <input
+                              type="text"
+                              value={addressDraft.address_line3}
+                              onChange={(e) => setAddressDraft((d) => ({ ...d, address_line3: e.target.value }))}
+                              placeholder="Village / Taluk / Additional info"
+                              className="w-full mt-1 px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              disabled={addressSaving}
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label className="text-xs font-semibold text-gray-600">District</label>
+                              <input
+                                type="text"
+                                value={addressDraft.district}
+                                onChange={(e) => setAddressDraft((d) => ({ ...d, district: e.target.value }))}
+                                placeholder="District"
+                                className="w-full mt-1 px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                disabled={addressSaving}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs font-semibold text-gray-600">Pincode</label>
+                              <input
+                                type="text"
+                                value={addressDraft.pincode}
+                                onChange={(e) => setAddressDraft((d) => ({ ...d, pincode: e.target.value }))}
+                                placeholder="6-digit Pincode"
+                                maxLength={10}
+                                className="w-full mt-1 px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                disabled={addressSaving}
+                              />
+                            </div>
+                          </div>
+
+                          {addressError && <div className="text-xs text-red-600">{addressError}</div>}
+
+                          <div className="flex items-center gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={handleSaveAddress}
+                              disabled={addressSaving}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-medium flex items-center gap-1.5 shadow-sm"
+                            >
+                              <Save className="w-3.5 h-3.5" />
+                              {addressSaving ? 'Saving...' : 'Save Address'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelEditingAddress}
+                              disabled={addressSaving}
+                              className="px-3 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-xs font-medium"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-3 space-y-1.5 text-sm text-gray-800">
+                          {((user as any)?.profile?.address_line1 || (user as any)?.profile?.district) ? (
+                            <>
+                              {(user as any)?.profile?.address_line1 && <div>{(user as any)?.profile?.address_line1}</div>}
+                              {(user as any)?.profile?.address_line2 && <div>{(user as any)?.profile?.address_line2}</div>}
+                              {(user as any)?.profile?.address_line3 && <div>{(user as any)?.profile?.address_line3}</div>}
+                              <div className="text-gray-600 font-medium">
+                                {[
+                                  (user as any)?.profile?.district,
+                                  (user as any)?.profile?.pincode ? `PIN: ${(user as any)?.profile?.pincode}` : ''
+                                ].filter(Boolean).join(', ')}
+                              </div>
+                            </>
+                          ) : (
+                            <div className="text-gray-400 italic text-sm">No address provided yet. Click edit to add address.</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
 
             {/* Change Password Card */}
             <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">

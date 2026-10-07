@@ -347,7 +347,17 @@ def ssa_assignment_file(request, exam_id, file_type):
     try:
         ssa_assignment = exam_assignment.ssa_assignment
     except AcV2SSAAssignment.DoesNotExist:
-        return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+        header = _course_header_from_section(exam_assignment.section)
+        assignment_type = str(exam_assignment.exam).replace(' ', '').replace('_', '').replace('-', '').upper()
+        return Response({
+            'assignment_available': False,
+            'exam_id': exam_assignment.id,
+            'assignment_type': assignment_type,
+            'course_code': header['course_code'],
+            'course_name': header['course_name'],
+            'faculty_name': header['faculty_name'],
+            'max_marks': exam_assignment.max_marks,
+        }, status=status.HTTP_200_OK)
 
     is_faculty = (exam_assignment.section.faculty_user == request.user or _has_admin_bypass_access(request.user))
     sp = _get_student_profile_for_request(request)
@@ -399,6 +409,7 @@ def ssa_student_assignments(request):
         sub = submissions.get(ssa.id)
 
         result.append({
+            'ta_id': ssa.exam_assignment.section.teaching_assignment_id,
             'exam_id': ssa.exam_assignment.id,
             'assignment_type': ssa.assignment_type,
             'course_code': header['course_code'],
@@ -430,6 +441,7 @@ def ssa_student_assignment_detail(request, exam_id):
     header = _course_header_from_section(exam_assignment.section)
 
     return Response({
+        'assignment_available': True,
         'exam_id': exam_assignment.id,
         'assignment_type': ssa_assignment.assignment_type,
         'course_code': header['course_code'],

@@ -46,8 +46,6 @@ export default function DeptList() {
   const [propagateSection, setPropagateSection] = useState(false);
   const [propagateSectionTargets, setPropagateSecTargets] = useState<number[]>([]);
   const [propagatingSec, setPropagatingSec] = useState(false);
-  const [qpTypes, setQpTypes] = useState<QPType[]>([]);
-  const [classTypes, setClassTypes] = useState<ClassTypeItem[]>([]);
   const [adminClassTypes, setAdminClassTypes] = useState<ClassTypeItem[]>([]);
   const [adminQpTypes, setAdminQpTypes] = useState<QPType[]>([]);
   const uniqueRegs = rows && rows.length ? Array.from(new Set(rows.map(r => r.regulation))) : [];
@@ -79,22 +77,7 @@ export default function DeptList() {
       .finally(() => setLoading(false));
   }, [currentDept, selectedReg, selectedSem, selectedBatch]);
 
-  useEffect(() => {
-    fetchWithAuth('/api/curriculum/qp-types/')
-      .then(res => res.ok ? res.json() : [])
-      .then(data => setQpTypes(Array.isArray(data) ? data : []))
-      .catch(() => setQpTypes([]));
-  }, []);
-
-  // Fetch class types from API
-  useEffect(() => {
-    fetchWithAuth('/api/curriculum/class-types/')
-      .then(res => res.ok ? res.json() : [])
-      .then(data => setClassTypes(Array.isArray(data) ? data : []))
-      .catch(() => setClassTypes([]));
-  }, []);
-
-  // Fetch admin-created active class types from Academic v2 (ClassTypeEditorPage source)
+  // Fetch admin-created active class types from Academic v2 (Academic 2.1 source)
   useEffect(() => {
     fetchWithAuth('/api/academic-v2/class-types/')
       .then(res => res.ok ? res.json() : [])
@@ -163,35 +146,59 @@ export default function DeptList() {
     }
   }
 
+  // Helper: check if class type or QP type is missing/undefined
+  // Helper: check if class type is a valid Academic 2.1 class type
+  const isValidAdminClassType = (code: string | null | undefined) => {
+    if (!code || !String(code).trim()) return false;
+    const norm = String(code).toUpperCase().trim();
+    return adminClassTypes.some(ct =>
+      ct.code?.toUpperCase() === norm ||
+      ct.name?.toUpperCase() === norm ||
+      ct.short_code?.toUpperCase() === norm
+    );
+  };
+
+  // Helper: check if class is validly selected but QP type is missing
+  const isClassSelectedMissingQp = (item: { class_type?: string | null; question_paper_type?: string | null }) => {
+    return isValidAdminClassType(item.class_type) && (!item.question_paper_type || !String(item.question_paper_type).trim());
+  };
+
+  // Helper: check if class type or QP type is missing/undefined/not mapped to Academic 2.1
+  const isRowIncomplete = (item: { class_type?: string | null; question_paper_type?: string | null }) => {
+    if (!isValidAdminClassType(item.class_type)) return true;
+    if (!item.question_paper_type || !String(item.question_paper_type).trim()) return true;
+    return false;
+  };
+
+  // Helper: get row background class (milky red if class_type or qp_type is undefined/invalid, with animated pulse if class selected but QP missing)
+  const getRowBgClass = (
+    item: { class_type?: string | null; question_paper_type?: string | null; editable?: boolean; is_cross_department?: boolean },
+    isEditing: boolean = false
+  ) => {
+    const missingQp = isClassSelectedMissingQp(item);
+    if (missingQp) {
+      return isEditing
+        ? 'bg-amber-50/90 border-l-4 border-amber-500 animate-pulse ring-1 ring-amber-300'
+        : 'bg-amber-50/80 hover:bg-amber-100/80 border-l-4 border-amber-500 animate-pulse transition-all';
+    }
+    const incomplete = isRowIncomplete(item);
+    if (incomplete) {
+      return isEditing ? 'bg-red-50/90 border-l-4 border-red-400' : 'bg-red-50/70 hover:bg-red-100/60 border-l-4 border-red-400 transition-colors';
+    }
+    if (item.is_cross_department) {
+      return 'bg-blue-50/30 hover:bg-blue-50/50 transition-colors';
+    }
+    if (item.editable) {
+      return 'bg-slate-50 hover:bg-gray-50 transition-colors';
+    }
+    return 'hover:bg-gray-50 transition-colors';
+  };
+
   // Helper: render class type <option> elements - only active class types from Academic 2.1 (ClassTypeEditorPage)
   const renderClassTypeOptions = (currentValue?: string) => {
-    const optionsMap = new Map<string, { code: string; label: string }>();
-
-    // 1. Add active class types from Academic 2.1
-    adminClassTypes.forEach(ct => {
-      if (ct.code) {
-        const key = ct.code.toUpperCase();
-        optionsMap.set(key, { code: ct.code, label: ct.label || ct.code });
-      }
-    });
-
-    // 2. If currentValue is set on row/form but not in adminClassTypes, keep it so it's not lost
-    if (currentValue && !optionsMap.has(currentValue.toUpperCase())) {
-      const norm = currentValue.toUpperCase();
-      const constCt = CLASS_TYPES.find(c => c.value?.toUpperCase() === norm);
-      optionsMap.set(norm, { code: currentValue, label: constCt?.label || currentValue });
-    }
-
-    // 3. Fallback if adminClassTypes is empty
-    if (optionsMap.size === 0) {
-      CLASS_TYPES.forEach(ct => {
-        optionsMap.set(ct.value.toUpperCase(), { code: ct.value, label: ct.label });
-      });
-    }
-
-    return Array.from(optionsMap.values()).map(opt => (
-      <option key={opt.code} value={opt.code}>
-        {opt.label.toUpperCase() === opt.code.toUpperCase() ? opt.label : `${opt.label} (${opt.code})`}
+    return adminClassTypes.map(ct => (
+      <option key={ct.code || ct.id} value={ct.code}>
+        {ct.label.toUpperCase() === (ct.code || '').toUpperCase() ? ct.label : `${ct.label} (${ct.code})`}
       </option>
     ));
   };
@@ -217,7 +224,7 @@ export default function DeptList() {
 
   // Helper: get display label for a class type code
   const getClassTypeLabel = (code: string | null | undefined) => {
-    if (!code) return '-';
+    if (!code) return null;
     const norm = String(code).toUpperCase().trim();
     const adminCt = adminClassTypes.find(ct =>
       ct.code?.toUpperCase() === norm ||
@@ -225,9 +232,7 @@ export default function DeptList() {
       ct.short_code?.toUpperCase() === norm
     );
     if (adminCt) return adminCt.label;
-    const constCt = CLASS_TYPES.find(c => c.value?.toUpperCase() === norm);
-    if (constCt) return constCt.label;
-    return code;
+    return null; // Return null if not in Academic 2.1 so UI marks it as missing/undefined
   };
 
   // Helper: get display label for a QP type code
@@ -235,8 +240,6 @@ export default function DeptList() {
     if (!code) return '-';
     const adminQt = adminQpTypes.find(qt => qt.code === code);
     if (adminQt) return adminQt.label;
-    const qt = qpTypes.find(q => q.code === code);
-    if (qt) return qt.label;
     return code;
   };
 
@@ -245,15 +248,8 @@ export default function DeptList() {
     const filtered = classTypeCode ? getQpTypesForClassType(classTypeCode) : adminQpTypes;
     return (
       <>
-        {filtered.length > 0 && (
-          <optgroup label="Admin (Academic v2)" style={{ backgroundColor: '#FFF7ED' }}>
-            {filtered.map(qt => (
-              <option key={`adm-${qt.code}`} value={qt.code} style={{ backgroundColor: '#FFF7ED', color: '#9A3412' }}>{qt.label}</option>
-            ))}
-          </optgroup>
-        )}
-        {qpTypes.map(qt => (
-          <option key={qt.code} value={qt.code}>{qt.label}</option>
+        {filtered.map(qt => (
+          <option key={`adm-${qt.code}`} value={qt.code}>{qt.label}</option>
         ))}
       </>
     );
@@ -324,17 +320,28 @@ export default function DeptList() {
   }, [rows]);
 
   // derive elective options from department rows
-  const electives = rows.filter(r => r.is_elective && (!currentDept || r.department.id === currentDept) && (!selectedReg || r.regulation === selectedReg) && (!selectedSem || r.semester === selectedSem));
+  const electives = rows.filter(r =>
+    r.is_elective &&
+    (!currentDept || r.department.id === currentDept) &&
+    (!selectedReg || r.regulation === selectedReg) &&
+    (!selectedSem || r.semester === selectedSem) &&
+    (!selectedBatch || (r.batch?.id ?? r.batch_id) === selectedBatch)
+  );
 
   const [electiveSubjects, setElectiveSubjects] = useState<any[]>([]);
   const [departmentGroups, setDepartmentGroups] = useState<any[]>([]);
 
   useEffect(() => {
     // load elective subjects for current filters
-    fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined })
+    fetchElectives({
+      department_id: currentDept ?? undefined,
+      regulation: selectedReg ?? undefined,
+      semester: selectedSem ?? undefined,
+      batch_id: selectedBatch ?? undefined,
+    })
       .then(setElectiveSubjects)
       .catch(() => setElectiveSubjects([]));
-  }, [currentDept, selectedReg, selectedSem, rows]);
+  }, [currentDept, selectedReg, selectedSem, selectedBatch, rows]);
 
   useEffect(() => {
     // Fetch department groups
@@ -391,7 +398,7 @@ export default function DeptList() {
       const fresh = await fetchDeptRows({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined, batch_id: selectedBatch ?? undefined });
       setRows(fresh);
       // refresh elective subjects for UI
-      const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined });
+      const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined, batch_id: selectedBatch ?? undefined });
       setElectiveSubjects(es);
       setAddModalOpen(false);
       alert('Elective subject added');
@@ -420,7 +427,7 @@ export default function DeptList() {
       // refresh data
       const fresh = await fetchDeptRows({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined, batch_id: selectedBatch ?? undefined });
       setRows(fresh);
-      const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined });
+      const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined, batch_id: selectedBatch ?? undefined });
       setElectiveSubjects(es);
       setEditElectiveOpen(false);
       alert('Elective updated');
@@ -712,7 +719,7 @@ export default function DeptList() {
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {rows.filter(r => (!currentDept || r.department.id === currentDept) && (!selectedReg || r.regulation === selectedReg) && (!selectedSem || r.semester === selectedSem)).map(r => (
-              <tr key={r.id} className={`hover:bg-gray-50 transition-colors ${r.editable ? 'bg-slate-50' : ''}`}>
+              <tr key={r.id} className={getRowBgClass(r, editingRow === r.id || (editAll && r.editable))}>
                 {(editingRow === r.id || (editAll && r.editable)) ? (
                   <>
                     <td className="px-3 py-2 whitespace-nowrap"><input value={r.course_code || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, course_code: e.target.value } : row))} className="w-full min-w-[160px] px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
@@ -751,11 +758,18 @@ export default function DeptList() {
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <select
-                        value={r.class_type || 'THEORY'}
-                        onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, class_type: e.target.value } : row))}
-                        className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
+                        value={r.class_type || ''}
+                        onChange={e => {
+                          const newCt = e.target.value;
+                          const availQp = getQpTypesForClassType(newCt);
+                          const currentQpValid = availQp.some(q => q.code === r.question_paper_type);
+                          const nextQp = currentQpValid ? r.question_paper_type : (availQp[0]?.code || '');
+                          setRows(rs => rs.map(row => row.id === r.id ? { ...row, class_type: newCt, question_paper_type: nextQp } : row));
+                        }}
+                        className={`w-full px-2 py-1 border rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input ${!r.class_type ? 'border-red-400 bg-red-50 text-red-700' : 'border-gray-300'}`}
                         style={{ minWidth: 90 }}
                       >
+                        <option value="">— Select Class Type —</option>
                         {renderClassTypeOptions(r.class_type)}
                       </select>
                     </td>
@@ -773,15 +787,15 @@ export default function DeptList() {
                     <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_hours || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, total_hours: Number(e.target.value) } : row))} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       {!r.class_type ? (
-                        <span className="text-xs text-gray-500">Select class type first</span>
+                        <span className="text-xs text-red-500 font-medium">Select class type first</span>
                       ) : (
                       <select
                         value={r.question_paper_type || ''}
                         onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, question_paper_type: e.target.value } : row))}
-                        className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
+                        className={`w-full px-2 py-1 border rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input ${!r.question_paper_type ? 'border-red-400 bg-red-50 text-red-700' : 'border-gray-300'}`}
                         style={{ minWidth: 90 }}
                       >
-                        <option value="">— Select —</option>
+                        <option value="">— Select QP Type —</option>
                         {renderQpTypeOptions(r.class_type)}
                       </select>
                       )}
@@ -815,7 +829,38 @@ export default function DeptList() {
                     </td>
                     <td className="px-3 py-2.5 text-sm text-gray-900 font-medium">{r.course_name || '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.category || '-'}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{getClassTypeLabel(r.class_type)}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap">
+                      {adminClassTypes.length > 0 ? (
+                        <select
+                          value={isValidAdminClassType(r.class_type) ? (r.class_type || '') : ''}
+                          onChange={async (e) => {
+                            const newCt = e.target.value;
+                            const availQp = getQpTypesForClassType(newCt);
+                            const currentQpValid = availQp.some(q => q.code === r.question_paper_type);
+                            const nextQp = currentQpValid ? r.question_paper_type : (availQp[0]?.code || '');
+                            setRows(rs => rs.map(row => row.id === r.id ? { ...row, class_type: newCt, question_paper_type: nextQp } : row));
+                            try {
+                              await updateDeptRow(r.id, { class_type: newCt, question_paper_type: nextQp });
+                            } catch (err: any) {
+                              alert('Failed to save Class Type: ' + String(err));
+                            }
+                          }}
+                          className={`px-2 py-1 border rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${!isValidAdminClassType(r.class_type) ? 'border-red-400 bg-red-50 text-red-700 font-medium' : 'border-gray-300'}`}
+                          style={{ minWidth: 100 }}
+                        >
+                          <option value="">— Select Class Type —</option>
+                          {renderClassTypeOptions(r.class_type)}
+                        </select>
+                      ) : (
+                        getClassTypeLabel(r.class_type) ? (
+                          <span className="text-sm">{getClassTypeLabel(r.class_type)}</span>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-700 border border-red-200">
+                            Missing Class Type
+                          </span>
+                        )
+                      )}
+                    </td>
                     <td className="px-3 py-2.5 text-center whitespace-nowrap text-sm">{r.is_elective ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.l ?? 0}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.t ?? 0}</td>
@@ -827,26 +872,46 @@ export default function DeptList() {
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.total_mark ?? '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.total_hours ?? '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap">
-                      {(adminQpTypes.length > 0 || qpTypes.length > 0) ? (
-                        <select
-                          value={r.question_paper_type || ''}
-                          onChange={async (e) => {
-                            const val = e.target.value;
-                            setRows(rs => rs.map(row => row.id === r.id ? { ...row, question_paper_type: val } : row));
-                            try {
-                              await updateDeptRow(r.id, { question_paper_type: val });
-                            } catch (err: any) {
-                              alert('Failed to save QP Type: ' + String(err));
-                            }
-                          }}
-                          className="px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                          style={{ minWidth: 80 }}
-                        >
-                          <option value="">—</option>
-                          {renderQpTypeOptions()}
-                        </select>
+                      {adminQpTypes.length > 0 ? (
+                        <div className="flex items-center gap-1.5">
+                          <select
+                            value={r.question_paper_type || ''}
+                            onChange={async (e) => {
+                              const val = e.target.value;
+                              setRows(rs => rs.map(row => row.id === r.id ? { ...row, question_paper_type: val } : row));
+                              try {
+                                await updateDeptRow(r.id, { question_paper_type: val });
+                              } catch (err: any) {
+                                alert('Failed to save QP Type: ' + String(err));
+                              }
+                            }}
+                            className={`px-2 py-1 border rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all ${
+                              !r.question_paper_type
+                                ? (isValidAdminClassType(r.class_type)
+                                    ? 'border-amber-500 bg-amber-50 text-amber-900 font-semibold ring-2 ring-amber-400 ring-offset-1 animate-pulse'
+                                    : 'border-red-400 bg-red-50 text-red-700 font-medium')
+                                : 'border-gray-300'
+                            }`}
+                            style={{ minWidth: 80 }}
+                          >
+                            <option value="">— Select QP Type —</option>
+                            {renderQpTypeOptions(r.class_type)}
+                          </select>
+                          {isClassSelectedMissingQp(r) && (
+                            <span className="relative flex h-2.5 w-2.5" title="QP Type required for selected class">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
+                            </span>
+                          )}
+                        </div>
                       ) : (
-                        <span className="text-sm">{getQpTypeLabel(r.question_paper_type)}</span>
+                        r.question_paper_type ? (
+                          <span className="text-sm">{getQpTypeLabel(r.question_paper_type)}</span>
+                        ) : (
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${isClassSelectedMissingQp(r) ? 'bg-amber-100 text-amber-800 border border-amber-300 animate-pulse' : 'bg-red-100 text-red-700 border border-red-200'}`}>
+                            Missing QP Type
+                          </span>
+                        )
                       )}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
@@ -976,8 +1041,8 @@ export default function DeptList() {
                           <tr><td colSpan={16} className="px-3 py-4 text-gray-400 text-center">No subjects added yet.</td></tr>
                         ) : (
                           allOptions.map(o => (
-                            <tr key={o.id} className={`hover:bg-gray-50 transition-colors ${o.is_cross_department ? 'bg-blue-50/30' : ''}`}>
-                              <td className="px-3 py-2 whitespace-nowrap text-sm">{o.course_code || '-'}</td>
+                            <tr key={o.id} className={getRowBgClass(o, false)}>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm font-medium">{o.course_code || '-'}</td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm">{o.course_name || '-'}</td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm">
                                 {o.is_cross_department ? (
@@ -989,7 +1054,15 @@ export default function DeptList() {
                                 )}
                               </td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm">{o.category || '-'}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-sm">{getClassTypeLabel(o.class_type)}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">
+                                {o.class_type ? (
+                                  getClassTypeLabel(o.class_type)
+                                ) : (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-700 border border-red-200">
+                                    Missing Class Type
+                                  </span>
+                                )}
+                              </td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm">{o.l ?? 0}</td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm">{o.t ?? 0}</td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm">{o.p ?? 0}</td>
@@ -999,7 +1072,15 @@ export default function DeptList() {
                               <td className="px-3 py-2 whitespace-nowrap text-sm">{o.external_mark ?? '-'}</td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm">{o.total_mark ?? '-'}</td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm">{o.total_hours ?? '-'}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-sm">{getQpTypeLabel(o.question_paper_type)}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm">
+                                {o.question_paper_type ? (
+                                  getQpTypeLabel(o.question_paper_type)
+                                ) : (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-700 border border-red-200">
+                                    Missing QP Type
+                                  </span>
+                                )}
+                              </td>
                               <td className="px-3 py-2 whitespace-nowrap">
                                 <div className="flex items-center gap-2">
                                   <span className="text-sm">{o.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</span>
@@ -1093,7 +1174,7 @@ export default function DeptList() {
                             </thead>
                             <tbody className="bg-white divide-y divide-gray-100">
                               {electives.map((o: any) => (
-                                <tr key={o.id} className="hover:bg-amber-50/50 transition-colors">
+                                <tr key={o.id} className={getRowBgClass(o, false)}>
                                   <td className="px-3 py-2 whitespace-nowrap text-sm font-medium">{o.course_code || '-'}</td>
                                   <td className="px-3 py-2 whitespace-nowrap text-sm">{o.course_name || '-'}</td>
                                   <td className="px-3 py-2 whitespace-nowrap text-sm">
@@ -1109,7 +1190,15 @@ export default function DeptList() {
                                     ) : '-'}
                                   </td>
                                   <td className="px-3 py-2 whitespace-nowrap text-sm">{o.category || '-'}</td>
-                                  <td className="px-3 py-2 whitespace-nowrap text-sm">{getClassTypeLabel(o.class_type)}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap text-sm">
+                                    {o.class_type ? (
+                                      getClassTypeLabel(o.class_type)
+                                    ) : (
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-700 border border-red-200">
+                                        Missing Class Type
+                                      </span>
+                                    )}
+                                  </td>
                                   <td className="px-3 py-2 whitespace-nowrap text-sm">{o.l ?? 0}</td>
                                   <td className="px-3 py-2 whitespace-nowrap text-sm">{o.t ?? 0}</td>
                                   <td className="px-3 py-2 whitespace-nowrap text-sm">{o.p ?? 0}</td>
@@ -1185,10 +1274,16 @@ export default function DeptList() {
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Class Type</label>
                 <select
-                  value={addForm.class_type}
-                  onChange={e => setAddForm(f => ({ ...f, class_type: e.target.value }))}
+                  value={addForm.class_type || ''}
+                  onChange={e => {
+                    const newCt = e.target.value;
+                    const availQp = getQpTypesForClassType(newCt);
+                    const nextQp = availQp.some(q => q.code === addForm.question_paper_type) ? addForm.question_paper_type : (availQp[0]?.code || '');
+                    setAddForm(f => ({ ...f, class_type: newCt, question_paper_type: nextQp }));
+                  }}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
+                  <option value="">— Select Class Type —</option>
                   {renderClassTypeOptions(addForm.class_type)}
                 </select>
               </div>
@@ -1291,7 +1386,7 @@ export default function DeptList() {
                   onChange={e => setAddForm(f => ({ ...f, question_paper_type: e.target.value }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
-                  <option value="">— Select —</option>
+                  <option value="">— Select QP Type —</option>
                   {renderQpTypeOptions(addForm.class_type)}
                 </select>
                 )}
@@ -1375,10 +1470,16 @@ export default function DeptList() {
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Class Type</label>
                 <select
-                  value={editElectiveForm.class_type || 'THEORY'}
-                  onChange={e => setEditElectiveForm((f:any) => ({ ...f, class_type: e.target.value }))}
+                  value={editElectiveForm.class_type || ''}
+                  onChange={e => {
+                    const newCt = e.target.value;
+                    const availQp = getQpTypesForClassType(newCt);
+                    const nextQp = availQp.some(q => q.code === editElectiveForm.question_paper_type) ? editElectiveForm.question_paper_type : (availQp[0]?.code || '');
+                    setEditElectiveForm((f:any) => ({ ...f, class_type: newCt, question_paper_type: nextQp }));
+                  }}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
+                  <option value="">— Select Class Type —</option>
                   {renderClassTypeOptions(editElectiveForm.class_type)}
                 </select>
               </div>
@@ -1473,14 +1574,18 @@ export default function DeptList() {
               </div>
               <div className="col-span-2">
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Question Paper Type</label>
+                {!editElectiveForm.class_type ? (
+                  <div className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-600 text-sm">Please select a class type first</div>
+                ) : (
                 <select
                   value={editElectiveForm.question_paper_type || ''}
                   onChange={e => setEditElectiveForm((f:any) => ({ ...f, question_paper_type: e.target.value }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
-                  <option value="">— Select —</option>
+                  <option value="">— Select QP Type —</option>
                   {renderQpTypeOptions(editElectiveForm.class_type)}
                 </select>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <input

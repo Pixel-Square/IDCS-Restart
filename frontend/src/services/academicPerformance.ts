@@ -196,14 +196,10 @@ export interface ClassAdvisorDeepDiveResponse {
 }
 
 export interface RangeAnalysisResponse {
-  total_students: number;
-  range_distribution: Array<{
-    label: string;
-    min: number;
-    max: number;
-    student_count: number;
-    percentage: number;
-  }>;
+  /** Array of objects shaped as: { name: "0-10", "Subject A": 5, "Subject B": 3, ... } */
+  chart_data: Array<Record<string, string | number>>;
+  /** Ordered list of unique subject names that appear as keys in chart_data */
+  subjects: string[];
 }
 
 export async function fetchPublishedDashboards(): Promise<{ user_context: UserContext; dashboards: DashboardDefinition[] }> {
@@ -381,12 +377,26 @@ export async function fetchClassAdvisorDeepDive(sectionId: string): Promise<Clas
   return response.json();
 }
 
-export async function fetchRangeAnalysis(ranges?: Array<{ min: number; max: number; label: string }>): Promise<RangeAnalysisResponse> {
-  const url = `${API_BASE}/api/academic-v2/performance/range-analysis/`;
+export async function fetchRangeAnalysis(filters: {
+  dept?: string;
+  year?: string;
+  sem?: string;
+  section?: string;
+  exam?: string;
+  ranges?: Array<{ min: number; max: number; label: string }>;
+}): Promise<RangeAnalysisResponse> {
+  const queryParams = new URLSearchParams();
+  if (filters.dept) queryParams.set('dept', filters.dept);
+  if (filters.year) queryParams.set('year', filters.year);
+  if (filters.sem) queryParams.set('sem', filters.sem);
+  if (filters.section) queryParams.set('section', filters.section);
+  if (filters.exam) queryParams.set('exam', filters.exam);
+
+  const url = `${API_BASE}/api/academic-v2/performance/range-analysis/?${queryParams.toString()}`;
   const response = await fetchWithAuth(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ranges }),
+    body: JSON.stringify({ ranges: filters.ranges }),
   });
   if (!response.ok) {
     throw new Error('Failed to fetch range analysis');

@@ -55,6 +55,7 @@ import {
   fetchDepartmentAnalysis,
   fetchSubjectAnalysis,
   downloadStudentReportPDF,
+  fetchRangeAnalysis,
 } from '../../services/academicPerformance';
 import type {
   SubjectAnalysisResponse,
@@ -67,6 +68,7 @@ import type {
   StudentAnalysisChartsResponse,
   DepartmentAnalysisResponse,
   FacultyAnalysisResponse,
+  RangeAnalysisResponse,
 } from '../../services/academicPerformance';
 import SubjectWiseAnalysis from './components/SubjectWiseAnalysis';
 import {
@@ -98,6 +100,8 @@ export default function AcademicPerformancePage() {
   const [data, setData] = useState<PerformanceAnalyticsResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string>('');
+  const [rangeData, setRangeData] = useState<RangeAnalysisResponse | null>(null);
+  const [rangeLoading, setRangeLoading] = useState<boolean>(false);
   const [hierarchyLevel, setHierarchyLevel] = useState<HierarchyLevel>(HierarchyLevel.COLLEGE);
   // Breadcrumb navigation path state
   const [breadcrumbPath, setBreadcrumbPath] = useState<BreadcrumbLevel[]>([
@@ -298,6 +302,7 @@ export default function AcademicPerformancePage() {
           setActiveTab('faculty');
         } else if (res.user_context?.is_student) {
           setActiveTab('student');
+          setActiveDashboardId('student_analysis');
         }
       }
     } catch (err: any) {
@@ -348,6 +353,40 @@ export default function AcademicPerformancePage() {
     }
     fetchAnalytics();
   }, [selectedYear, selectedSem, selectedSection, selectedExamType]);
+
+  // Fetch Range Analysis (multi-series) whenever the relevant filters change.
+  // Only relevant for non-student roles on the college overview.
+  const rangeReqIdRef = useRef(0);
+  useEffect(() => {
+    if (data?.user_context?.is_student) return;
+    const reqId = ++rangeReqIdRef.current;
+    setRangeLoading(true);
+    setRangeData(null);
+    const RANGES = [
+      { min: 0,  max: 10,  label: '0-10'   },
+      { min: 11, max: 20,  label: '11-20'  },
+      { min: 21, max: 30,  label: '21-30'  },
+      { min: 31, max: 40,  label: '31-40'  },
+      { min: 41, max: 50,  label: '41-50'  },
+      { min: 51, max: 60,  label: '51-60'  },
+      { min: 61, max: 70,  label: '61-70'  },
+      { min: 71, max: 80,  label: '71-80'  },
+      { min: 81, max: 90,  label: '81-90'  },
+      { min: 91, max: 100, label: '91-100' },
+    ];
+    fetchRangeAnalysis({
+      dept: selectedDept,
+      year: selectedYear,
+      sem: selectedSem,
+      section: selectedSection,
+      exam: selectedExamType,
+      ranges: RANGES,
+    })
+      .then(res => { if (reqId === rangeReqIdRef.current) setRangeData(res); })
+      .catch(err => console.error('Range analysis fetch failed:', err))
+      .finally(() => { if (reqId === rangeReqIdRef.current) setRangeLoading(false); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.user_context?.is_student, selectedDept, selectedYear, selectedSem, selectedSection, selectedExamType]);
 
   // Dynamic section & subject options come straight from backend
   const sectionOptions: string[] = React.useMemo(() => {
@@ -523,7 +562,7 @@ export default function AcademicPerformancePage() {
       else if (data.user_context.is_student) setActiveTab('student');
     }
     
-    setActiveDashboardId('overall_overview');
+    setActiveDashboardId(data?.user_context?.is_student ? 'student_analysis' : 'overall_overview');
     // Reset breadcrumb to only college level
     setBreadcrumbPath([{ id: 'college', label: 'College', type: 'COLLEGE' }]);
   };
@@ -1061,16 +1100,18 @@ return (
             </div>
 
             {/* Academic Year Filter */}
-            <select
-              value={selectedYear}
-              onChange={(e) => setSelectedYear(e.target.value)}
-              className="px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
-            >
-              <option value="">All Academic Years</option>
-              {(batchList || []).map((yr: string) => (
-                <option key={yr} value={yr}>{yr}</option>
-              ))}
-            </select>
+            {!data?.user_context?.is_student && (
+              <select
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(e.target.value)}
+                className="px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              >
+                <option value="">All Academic Years</option>
+                {(batchList || []).map((yr: string) => (
+                  <option key={yr} value={yr}>{yr}</option>
+                ))}
+              </select>
+            )}
 
             {/* Semester Filter */}
             <select
@@ -1087,46 +1128,50 @@ return (
             </select>
 
             {/* Department Filter (Locked for HOD) */}
-            <div className="relative flex items-center">
+            {!data?.user_context?.is_student && (
+              <div className="relative flex items-center">
+                <select
+                  value={selectedDept}
+                  disabled={data?.user_context?.lock_department}
+                  onChange={(e) => {
+                    setSelectedDept(e.target.value);
+                    setSelectedSection('');
+                    setSelectedSubject('');
+                  }}
+                  className={`px-3 py-1.5 text-xs font-semibold border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none ${
+                    data?.user_context?.lock_department
+                      ? 'bg-slate-100 border-slate-300 text-slate-500 font-medium cursor-not-allowed pr-8'
+                      : 'bg-slate-50 border-slate-300'
+                  }`}
+                >
+                  <option value="">All Departments</option>
+                  {(dynamicOptions?.departments || []).map((d: any) => (
+                    <option key={d.code} value={d.code}>
+                      {d.label || d.name}
+                    </option>
+                  ))}
+                </select>
+                {data?.user_context?.lock_department && (
+                  <Lock className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 pointer-events-none" />
+                )}
+              </div>
+            )}
+
+            {/* Section Filter — options are dynamic per department from the backend */}
+            {!data?.user_context?.is_student && (
               <select
-                value={selectedDept}
-                disabled={data?.user_context?.lock_department}
-                onChange={(e) => {
-                  setSelectedDept(e.target.value);
-                  setSelectedSection('');
-                  setSelectedSubject('');
-                }}
-                className={`px-3 py-1.5 text-xs font-semibold border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none ${
-                  data?.user_context?.lock_department
-                    ? 'bg-slate-100 border-slate-300 text-slate-500 font-medium cursor-not-allowed pr-8'
-                    : 'bg-slate-50 border-slate-300'
-                }`}
+                value={selectedSection}
+                onChange={(e) => setSelectedSection(e.target.value)}
+                className="px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
               >
-                <option value="">All Departments</option>
-                {(dynamicOptions?.departments || []).map((d: any) => (
-                  <option key={d.code} value={d.code}>
-                    {d.label || d.name}
+                <option value="">All Sections</option>
+                {(sectionOptions || []).map((sec) => (
+                  <option key={sec} value={sec}>
+                    Section {sec}
                   </option>
                 ))}
               </select>
-              {data?.user_context?.lock_department && (
-                <Lock className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 pointer-events-none" />
-              )}
-            </div>
-
-            {/* Section Filter — options are dynamic per department from the backend */}
-            <select
-              value={selectedSection}
-              onChange={(e) => setSelectedSection(e.target.value)}
-              className="px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
-            >
-              <option value="">All Sections</option>
-              {(sectionOptions || []).map((sec) => (
-                <option key={sec} value={sec}>
-                  Section {sec}
-                </option>
-              ))}
-            </select>
+            )}
 
             {/* Assessment Filter */}
             <select
@@ -1183,17 +1228,19 @@ return (
           <div className="relative z-10 flex items-center gap-2 overflow-x-auto overflow-y-visible pb-1 ap-scroll-x">
             <span className="text-xs font-bold text-slate-500 mr-1 whitespace-nowrap shrink-0">Active View:</span>
             <div className="flex gap-1.5 bg-slate-100 p-1 rounded-xl whitespace-nowrap shrink-0">
-              <button
-                type="button"
-                onClick={() => handleSelectDashboard('overall_overview')}
-                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                  activeDashboardId === 'overall_overview'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
-                }`}
-              >
-                Overall Academic/Attendance Analysis
-              </button>
+              {!data?.user_context?.is_student && (
+                <button
+                  type="button"
+                  onClick={() => handleSelectDashboard('overall_overview')}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                    activeDashboardId === 'overall_overview'
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+                  }`}
+                >
+                  Overall Academic/Attendance Analysis
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => handleSelectDashboard('student_analysis')}
@@ -1205,17 +1252,19 @@ return (
               >
                 Individual Student Analysis
               </button>
-              <button
-                type="button"
-                onClick={() => handleSelectDashboard('faculty_analysis')}
-                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                  activeDashboardId === 'faculty_analysis'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
-                }`}
-              >
-                Faculty-Wise Analysis
-              </button>
+              {!data?.user_context?.is_student && (
+                <button
+                  type="button"
+                  onClick={() => handleSelectDashboard('faculty_analysis')}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                    activeDashboardId === 'faculty_analysis'
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+                  }`}
+                >
+                  Faculty-Wise Analysis
+                </button>
+              )}
               {data?.user_context?.is_advisor && (
                 <button
                   type="button"
@@ -1229,18 +1278,20 @@ return (
                   Class Advisor Deep-Dive
                 </button>
               )}
-              <button
-                type="button"
-                onClick={() => handleSelectDashboard('comparison_view')}
-                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
-                  activeDashboardId === 'comparison_view'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
-                }`}
-              >
-                Comparison View
-              </button>
-              {publishedDashboards
+              {!data?.user_context?.is_student && (
+                <button
+                  type="button"
+                  onClick={() => handleSelectDashboard('comparison_view')}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                    activeDashboardId === 'comparison_view'
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+                  }`}
+                >
+                  Comparison View
+                </button>
+              )}
+              {!data?.user_context?.is_student && publishedDashboards
                 .filter(d => !REMOVED_DASHBOARD_NAMES.has(d.name))
                 .map(d => (
                 <button
@@ -1506,8 +1557,104 @@ return (
           </div>
         )}
 
+        {/* ─── Range Analysis: Multi-Series Line Chart ───────────────────────── */}
+        {(activeTab === 'principal' || activeTab === 'hod') && (
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm animate-in fade-in-50">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <LineIcon className="w-5 h-5 text-indigo-500" />
+                  Mark Range Distribution — Subject-wise
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Curve chart showing how many students fall in each 10-point mark range, per subject
+                </p>
+              </div>
+              {rangeLoading && (
+                <div className="flex items-center gap-1.5 text-xs text-slate-400 font-medium">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Loading…
+                </div>
+              )}
+            </div>
 
-        {/* View Mode: Faculty-Wise comparison table (drills into Faculty Analysis) */}
+            {!rangeLoading && rangeData && rangeData.chart_data.length > 0 && rangeData.subjects.length > 0 ? (
+              <>
+                {/* Colour palette — cycles for up to 12 subjects */}
+                {(() => {
+                  const COLORS = [
+                    '#6366F1','#10B981','#F59E0B','#3B82F6','#EF4444',
+                    '#8B5CF6','#14B8A6','#F97316','#06B6D4','#EC4899',
+                    '#84CC16','#A78BFA',
+                  ];
+                  const subjects = rangeData.subjects.slice(0, 12);
+                  return (
+                    <ResponsiveContainer width="100%" height={320} minWidth={0}>
+                      <LineChart
+                        data={rangeData.chart_data}
+                        margin={{ top: 10, right: 30, left: 0, bottom: 10 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                        <XAxis
+                          dataKey="name"
+                          tick={{ fontSize: 11, fill: '#64748B' }}
+                          label={{ value: 'Mark Range (0–100)', position: 'insideBottom', offset: -5, fill: '#94A3B8', fontSize: 11 }}
+                          height={48}
+                        />
+                        <YAxis
+                          tick={{ fontSize: 11, fill: '#64748B' }}
+                          label={{ value: 'Student Count', angle: -90, position: 'insideLeft', offset: 12, fill: '#94A3B8', fontSize: 11 }}
+                          allowDecimals={false}
+                          width={48}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            borderRadius: '12px',
+                            border: 'none',
+                            boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                            fontSize: 12,
+                          }}
+                          formatter={(value: any, name: string) => [value, name]}
+                          labelFormatter={(lbl: string) => `Range: ${lbl}`}
+                        />
+                        <Legend
+                          wrapperStyle={{ fontSize: 11, paddingTop: 12 }}
+                          formatter={(value: string) =>
+                            value.length > 30 ? value.slice(0, 28) + '…' : value
+                          }
+                        />
+                        {subjects.map((subj, idx) => (
+                          <Line
+                            key={subj}
+                            type="monotone"
+                            dataKey={subj}
+                            name={subj}
+                            stroke={COLORS[idx % COLORS.length]}
+                            strokeWidth={2.5}
+                            dot={{ r: 4, fill: COLORS[idx % COLORS.length], strokeWidth: 0 }}
+                            activeDot={{ r: 6 }}
+                          />
+                        ))}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  );
+                })()}
+
+                {rangeData.subjects.length > 12 && (
+                  <p className="text-xs text-slate-400 text-center mt-2">
+                    Showing top 12 of {rangeData.subjects.length} subjects. Apply a Department or Section filter to narrow the view.
+                  </p>
+                )}
+              </>
+            ) : !rangeLoading ? (
+              <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+                <LineIcon className="w-10 h-10 mb-3 opacity-40" />
+                <p className="text-sm font-medium">No range data available for the current filters.</p>
+                <p className="text-xs mt-1">Try adjusting Academic Year, Semester or Assessment filters.</p>
+              </div>
+            ) : null}
+          </div>
+        )}
+
         {(activeTab === 'faculty' || activeTab === 'hod') && (
           <div className="space-y-6 animate-in fade-in-50">
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">

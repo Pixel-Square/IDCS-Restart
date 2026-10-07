@@ -296,13 +296,19 @@ def _user_is_iqac_admin(user) -> bool:
         role_names = {r.name.upper() for r in user.roles.all()}
     except Exception:
         role_names = set()
-    if 'IQAC' in role_names:
+    if bool(role_names & {'IQAC', 'HAA', 'IQAC_HEAD', 'OBE_MASTER'}):
         return True
+    try:
+        if user.groups.filter(name__in=['IQAC', 'HAA']).exists():
+            return True
+    except Exception:
+        pass
     try:
         perms = {str(p or '').lower() for p in (get_user_permissions(user) or [])}
     except Exception:
         perms = set()
-    return 'obe.master.manage' in perms
+    return bool(perms & {'obe.master.manage', 'academics.assign_teaching', 'academics.view_all_sections'})
+
 
 
 def _build_mark_upload_workbook(*, rows):
@@ -2159,7 +2165,7 @@ class SectionAdvisorViewSet(viewsets.ModelViewSet):
         perms = get_user_permissions(user)
         # users with explicit permission may view advisor assignments
         # but visibility should be limited to departments the user is effective for
-        if user.is_superuser:
+        if user.is_superuser or _user_is_iqac_admin(user) or ('academics.view_all_sections' in perms) or ('academics.view_all_departments' in perms):
             qs = self.queryset
         else:
             staff_profile = getattr(user, 'staff_profile', None)
@@ -2214,7 +2220,7 @@ class SectionAdvisorViewSet(viewsets.ModelViewSet):
         user = self.request.user
         # require explicit assign permission (or fallback to model add perm)
         perms = get_user_permissions(user)
-        if not (('academics.assign_advisor' in perms) or user.has_perm('academics.add_sectionadvisor')):
+        if not (('academics.assign_advisor' in perms) or user.has_perm('academics.add_sectionadvisor') or _user_is_iqac_admin(user) or user.is_superuser):
             raise PermissionDenied('You do not have permission to assign advisors.')
         # serializer.validate already checks HOD membership and dept match
         serializer.save()
@@ -7951,11 +7957,43 @@ class AdvisorMyStudentsView(APIView):
                             'id': st.pk,
                             'reg_no': st.reg_no,
                             'user': getattr(st, 'user', None),
+                            'username': getattr(st.user, 'username', '') if getattr(st, 'user', None) else '',
+                            'name': f"{getattr(st.user, 'first_name', '')} {getattr(st.user, 'last_name', '')}".strip() or getattr(st.user, 'username', None),
+                            'first_name': getattr(st.user, 'first_name', '') if getattr(st, 'user', None) else '',
+                            'last_name': getattr(st.user, 'last_name', '') if getattr(st, 'user', None) else '',
+                            'email': getattr(st.user, 'email', '') if getattr(st, 'user', None) else '',
+                            'status': getattr(st, 'status', 'ACTIVE').lower(),
                             'section_id': getattr(st, 'section_id', None),
                             'section_name': str(getattr(st, 'section', '')),
                             'has_mentor': (st.pk in mentor_map),
                             'mentor_id': mentor_map.get(st.pk, {}).get('mentor_id'),
                             'mentor_name': mentor_map.get(st.pk, {}).get('mentor_name'),
+                            'is_photo_verified': bool(getattr(st, 'is_photo_verified', False)),
+                            'mobile_number': getattr(st, 'mobile_number', '') or (getattr(st.user, 'mobile_no', '') if getattr(st, 'user', None) else '') or '',
+                            'address_line1': getattr(st, 'address_line1', '') or '',
+                            'address_line2': getattr(st, 'address_line2', '') or '',
+                            'address_line3': getattr(st, 'address_line3', '') or '',
+                            'district': getattr(st, 'district', '') or '',
+                            'pincode': getattr(st, 'pincode', '') or '',
+                            'father_name': getattr(st, 'father_name', '') or '',
+                            'mother_name': getattr(st, 'mother_name', '') or '',
+                            'father_mobile': getattr(st, 'father_mobile', '') or '',
+                            'mother_mobile': getattr(st, 'mother_mobile', '') or '',
+                            'dob': st.dob.strftime('%Y-%m-%d') if getattr(st, 'dob', None) else '',
+                            'dob_display': st.dob.strftime('%d-%m-%Y') if getattr(st, 'dob', None) else '',
+                            'blood_group': getattr(st, 'blood_group', '') or '',
+                            'mode_of_transportation': getattr(st.mode_of_transportation, 'name', '') if getattr(st, 'mode_of_transportation', None) else '',
+                            'mode_of_transportation_id': getattr(st, 'mode_of_transportation_id', None),
+                            'boarding_point': getattr(st, 'boarding_point', '') or '',
+                            'profile_image': (
+                                getattr(st.profile_image, 'url', None)
+                                if getattr(st, 'profile_image', None)
+                                else (
+                                    f"/media/{str(getattr(st.user, 'profile_image', '')).lstrip('/')}"
+                                    if getattr(st, 'user', None) and getattr(st.user, 'profile_image', '')
+                                    else None
+                                )
+                            ),
                         }
                         for st in studs
                     ], many=True)
@@ -8072,11 +8110,42 @@ class MentorMyMenteesView(APIView):
                         'id': st.pk,
                         'reg_no': st.reg_no,
                         'user': getattr(st, 'user', None),
+                        'username': getattr(st.user, 'username', '') if getattr(st, 'user', None) else '',
+                        'name': f"{getattr(st.user, 'first_name', '')} {getattr(st.user, 'last_name', '')}".strip() or getattr(st.user, 'username', None),
+                        'first_name': getattr(st.user, 'first_name', '') if getattr(st, 'user', None) else '',
+                        'last_name': getattr(st.user, 'last_name', '') if getattr(st, 'user', None) else '',
+                        'email': getattr(st.user, 'email', '') if getattr(st, 'user', None) else '',
+                        'status': getattr(st, 'status', 'ACTIVE').lower(),
                         'section_id': sec.id,
                         'section_name': sec.name,
                         'has_mentor': True,
                         'mentor_id': staff_profile.id,
                         'mentor_name': user.username,
+                        'is_photo_verified': bool(getattr(st, 'is_photo_verified', False)),
+                        'mobile_number': getattr(st, 'mobile_number', '') or (getattr(st.user, 'mobile_no', '') if getattr(st, 'user', None) else '') or '',
+                        'address_line1': getattr(st, 'address_line1', '') or '',
+                        'address_line2': getattr(st, 'address_line2', '') or '',
+                        'address_line3': getattr(st, 'address_line3', '') or '',
+                        'district': getattr(st, 'district', '') or '',
+                        'father_name': getattr(st, 'father_name', '') or '',
+                        'mother_name': getattr(st, 'mother_name', '') or '',
+                        'father_mobile': getattr(st, 'father_mobile', '') or '',
+                        'mother_mobile': getattr(st, 'mother_mobile', '') or '',
+                        'dob': st.dob.strftime('%Y-%m-%d') if getattr(st, 'dob', None) else '',
+                        'dob_display': st.dob.strftime('%d-%m-%Y') if getattr(st, 'dob', None) else '',
+                        'blood_group': getattr(st, 'blood_group', '') or '',
+                        'mode_of_transportation': getattr(st.mode_of_transportation, 'name', '') if getattr(st, 'mode_of_transportation', None) else '',
+                        'mode_of_transportation_id': getattr(st, 'mode_of_transportation_id', None),
+                        'boarding_point': getattr(st, 'boarding_point', '') or '',
+                        'profile_image': (
+                            getattr(st.profile_image, 'url', None)
+                            if getattr(st, 'profile_image', None)
+                            else (
+                                f"/media/{str(getattr(st.user, 'profile_image', '')).lstrip('/')}"
+                                if getattr(st, 'user', None) and getattr(st.user, 'profile_image', '')
+                                else None
+                            )
+                        ),
                     }
                     for st in studs
                 ], many=True)
@@ -9319,6 +9388,32 @@ class DepartmentStudentsView(APIView):
                     'home_department_short_name': getattr(home_dept_obj, 'short_name', None) if home_dept_obj else None,
                     'batch': getattr(batch, 'name', None),
                     'is_shared_section': is_shared,
+                    'is_photo_verified': bool(getattr(st, 'is_photo_verified', False)),
+                    'mobile_number': getattr(st, 'mobile_number', '') or (getattr(user_obj, 'mobile_no', '') if user_obj else '') or '',
+                    'address_line1': getattr(st, 'address_line1', '') or '',
+                    'address_line2': getattr(st, 'address_line2', '') or '',
+                    'address_line3': getattr(st, 'address_line3', '') or '',
+                    'district': getattr(st, 'district', '') or '',
+                    'pincode': getattr(st, 'pincode', '') or '',
+                    'father_name': getattr(st, 'father_name', '') or '',
+                    'mother_name': getattr(st, 'mother_name', '') or '',
+                    'father_mobile': getattr(st, 'father_mobile', '') or '',
+                    'mother_mobile': getattr(st, 'mother_mobile', '') or '',
+                    'dob': st.dob.strftime('%Y-%m-%d') if getattr(st, 'dob', None) else '',
+                    'dob_display': st.dob.strftime('%d-%m-%Y') if getattr(st, 'dob', None) else '',
+                    'blood_group': getattr(st, 'blood_group', '') or '',
+                    'mode_of_transportation': getattr(st.mode_of_transportation, 'name', '') if getattr(st, 'mode_of_transportation', None) else '',
+                    'mode_of_transportation_id': getattr(st, 'mode_of_transportation_id', None),
+                    'boarding_point': getattr(st, 'boarding_point', '') or '',
+                    'profile_image': (
+                        getattr(st.profile_image, 'url', None)
+                        if getattr(st, 'profile_image', None)
+                        else (
+                            f"/media/{str(getattr(user_obj, 'profile_image', '')).lstrip('/')}"
+                            if user_obj and getattr(user_obj, 'profile_image', '')
+                            else None
+                        )
+                    ),
                 })
 
             return Response({
@@ -9432,6 +9527,32 @@ class AllStudentsView(APIView):
                     'department_code': getattr(dept, 'code', None) if dept else None,
                     'department_name': getattr(dept, 'name', None) if dept else None,
                     'batch': getattr(batch, 'name', None),
+                    'is_photo_verified': bool(getattr(st, 'is_photo_verified', False)),
+                    'mobile_number': getattr(st, 'mobile_number', '') or (getattr(user_obj, 'mobile_no', '') if user_obj else '') or '',
+                    'address_line1': getattr(st, 'address_line1', '') or '',
+                    'address_line2': getattr(st, 'address_line2', '') or '',
+                    'address_line3': getattr(st, 'address_line3', '') or '',
+                    'district': getattr(st, 'district', '') or '',
+                    'pincode': getattr(st, 'pincode', '') or '',
+                    'father_name': getattr(st, 'father_name', '') or '',
+                    'mother_name': getattr(st, 'mother_name', '') or '',
+                    'father_mobile': getattr(st, 'father_mobile', '') or '',
+                    'mother_mobile': getattr(st, 'mother_mobile', '') or '',
+                    'dob': st.dob.strftime('%Y-%m-%d') if getattr(st, 'dob', None) else '',
+                    'dob_display': st.dob.strftime('%d-%m-%Y') if getattr(st, 'dob', None) else '',
+                    'blood_group': getattr(st, 'blood_group', '') or '',
+                    'mode_of_transportation': getattr(st.mode_of_transportation, 'name', '') if getattr(st, 'mode_of_transportation', None) else '',
+                    'mode_of_transportation_id': getattr(st, 'mode_of_transportation_id', None),
+                    'boarding_point': getattr(st, 'boarding_point', '') or '',
+                    'profile_image': (
+                        getattr(st.profile_image, 'url', None)
+                        if getattr(st, 'profile_image', None)
+                        else (
+                            f"/media/{str(getattr(user_obj, 'profile_image', '')).lstrip('/')}"
+                            if user_obj and getattr(user_obj, 'profile_image', '')
+                            else None
+                        )
+                    ),
                 })
 
             return Response({
@@ -9449,21 +9570,103 @@ class AllStudentsView(APIView):
 
 
 class StudentProfileUpdateView(APIView):
-    """Update editable student details (username/email/status/section)."""
+    """Retrieve and update editable student details (username/email/status/section/address/parent contacts/transport)."""
     permission_classes = (IsAuthenticated,)
+
+    def _check_allowed(self, user) -> bool:
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, 'is_superuser', False):
+            return True
+        perms = set(get_user_permissions(user) or [])
+        if perms.intersection({
+            'students.view_all_students',
+            'students.view_department_students',
+            'academics.view_my_students',
+            'academics.view_mentees',
+            'students.edit',
+            'students.view',
+        }):
+            return True
+        if hasattr(user, 'roles') and user.roles.filter(name__in=['ADVISOR', 'MENTOR', 'HOD', 'PRINCIPAL', 'IQAC', 'STAFF']).exists():
+            return True
+        if SectionAdvisor.objects.filter(advisor__user=user, is_active=True).exists():
+            return True
+        if MentorMentee.objects.filter(mentor__user=user, is_active=True).exists():
+            return True
+        return False
+
+    def get(self, request, student_id: int):
+        user = request.user
+        if not self._check_allowed(user):
+            return Response({'error': 'Permission denied'}, status=403)
+
+        student = StudentProfile.objects.select_related(
+            'user',
+            'section__batch__course__department',
+            'section__batch__department',
+            'home_department',
+            'mode_of_transportation',
+        ).filter(pk=student_id).first()
+        if not student:
+            return Response({'error': 'Student not found'}, status=404)
+
+        user_obj = student.user
+        section_obj = getattr(student, 'section', None)
+        batch = getattr(section_obj, 'batch', None) if section_obj else None
+        course = getattr(batch, 'course', None) if batch else None
+        dept = (getattr(course, 'department', None) if course else None) or (getattr(batch, 'department', None) if batch else None)
+        home_dept = getattr(student, 'home_department', None)
+        display_name = f"{getattr(user_obj, 'first_name', '')} {getattr(user_obj, 'last_name', '')}".strip() or user_obj.username
+
+        return Response({
+            'id': student.pk,
+            'reg_no': student.reg_no,
+            'name': display_name,
+            'username': user_obj.username,
+            'first_name': getattr(user_obj, 'first_name', '') or '',
+            'last_name': getattr(user_obj, 'last_name', '') or '',
+            'email': getattr(user_obj, 'email', '') or '',
+            'status': (student.status or 'ACTIVE').lower(),
+            'section_id': getattr(section_obj, 'id', None),
+            'section_name': getattr(section_obj, 'name', None),
+            'batch': getattr(batch, 'name', None),
+            'department_code': getattr(dept, 'code', None) if dept else None,
+            'department_short_name': (getattr(dept, 'short_name', None) or getattr(dept, 'code', None)) if dept else None,
+            'department_name': getattr(dept, 'name', None) if dept else None,
+            'home_department_code': getattr(home_dept, 'code', None) if home_dept else None,
+            'home_department_short_name': getattr(home_dept, 'short_name', None) if home_dept else None,
+            'is_photo_verified': bool(getattr(student, 'is_photo_verified', False)),
+            'mobile_number': getattr(student, 'mobile_number', '') or (getattr(user_obj, 'mobile_no', '') if user_obj else '') or '',
+            'profile_image': (
+                getattr(student.profile_image, 'url', None)
+                if getattr(student, 'profile_image', None)
+                else (
+                    f"/media/{str(getattr(user_obj, 'profile_image', '')).lstrip('/')}"
+                    if getattr(user_obj, 'profile_image', '')
+                    else None
+                )
+            ),
+            'address_line1': getattr(student, 'address_line1', '') or '',
+            'address_line2': getattr(student, 'address_line2', '') or '',
+            'address_line3': getattr(student, 'address_line3', '') or '',
+            'district': getattr(student, 'district', '') or '',
+            'pincode': getattr(student, 'pincode', '') or '',
+            'father_name': getattr(student, 'father_name', '') or '',
+            'mother_name': getattr(student, 'mother_name', '') or '',
+            'father_mobile': getattr(student, 'father_mobile', '') or '',
+            'mother_mobile': getattr(student, 'mother_mobile', '') or '',
+            'dob': student.dob.strftime('%Y-%m-%d') if getattr(student, 'dob', None) else '',
+            'dob_display': student.dob.strftime('%d-%m-%Y') if getattr(student, 'dob', None) else '',
+            'blood_group': getattr(student, 'blood_group', '') or '',
+            'mode_of_transportation': getattr(student.mode_of_transportation, 'name', '') if getattr(student, 'mode_of_transportation', None) else '',
+            'mode_of_transportation_id': getattr(student, 'mode_of_transportation_id', None),
+            'boarding_point': getattr(student, 'boarding_point', '') or '',
+        }, status=200)
 
     def patch(self, request, student_id: int):
         user = request.user
-        perms = set(get_user_permissions(user) or [])
-        allowed = user.is_superuser or bool(
-            perms.intersection({
-                'students.view_all_students',
-                'students.view_department_students',
-                'academics.view_my_students',
-                'academics.view_mentees',
-            })
-        )
-        if not allowed:
+        if not self._check_allowed(user):
             return Response({'error': 'Permission denied'}, status=403)
 
         student = StudentProfile.objects.select_related(
@@ -9529,6 +9732,100 @@ class StudentProfileUpdateView(APIView):
                     return Response({'error': 'Section not found'}, status=404)
                 student.section = section_obj
 
+        if 'is_photo_verified' in data:
+            val = data.get('is_photo_verified')
+            student.is_photo_verified = bool(val and str(val).lower() not in ('false', '0', 'no', 'null'))
+
+        if 'mobile_number' in data or 'mobile_no' in data or 'mobile' in data or 'phone_number' in data:
+            mob = str(data.get('mobile_number', data.get('mobile_no', data.get('mobile', data.get('phone_number', ''))))).strip()
+            student.mobile_number = mob
+            user_obj.mobile_no = mob
+            user_obj.save(update_fields=['mobile_no'])
+
+        if 'address_line1' in data:
+            student.address_line1 = str(data.get('address_line1') or '').strip()
+        if 'address_line2' in data:
+            student.address_line2 = str(data.get('address_line2') or '').strip()
+        if 'address_line3' in data:
+            student.address_line3 = str(data.get('address_line3') or '').strip()
+        if 'district' in data:
+            student.district = str(data.get('district') or '').strip()
+        if 'pincode' in data:
+            student.pincode = str(data.get('pincode') or '').strip()
+        if 'father_name' in data:
+            student.father_name = str(data.get('father_name') or '').strip()
+        if 'mother_name' in data:
+            student.mother_name = str(data.get('mother_name') or '').strip()
+        if 'father_mobile' in data:
+            student.father_mobile = str(data.get('father_mobile') or '').strip()
+        if 'mother_mobile' in data:
+            student.mother_mobile = str(data.get('mother_mobile') or '').strip()
+        if 'dob' in data:
+            raw_dob = str(data.get('dob') or '').strip()
+            if raw_dob:
+                import datetime
+                parsed_date = None
+                for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y', '%Y/%m/%d'):
+                    try:
+                        parsed_date = datetime.datetime.strptime(raw_dob, fmt).date()
+                        break
+                    except ValueError:
+                        pass
+                student.dob = parsed_date
+            else:
+                student.dob = None
+        if 'blood_group' in data:
+            student.blood_group = str(data.get('blood_group') or '').strip()
+        if 'mode_of_transportation_id' in data or 'mode_of_transportation' in data:
+            mot_val = data.get('mode_of_transportation_id') or data.get('mode_of_transportation')
+            if mot_val:
+                from .models import ModeOfTransportation
+                if isinstance(mot_val, int) or (isinstance(mot_val, str) and str(mot_val).isdigit()):
+                    mot = ModeOfTransportation.objects.filter(pk=int(mot_val)).first()
+                else:
+                    mot = ModeOfTransportation.objects.filter(name__iexact=str(mot_val).strip()).first()
+                student.mode_of_transportation = mot
+            else:
+                student.mode_of_transportation = None
+        if 'boarding_point' in data:
+            student.boarding_point = str(data.get('boarding_point') or '').strip()
+
+        # Profile image upload handling (multipart file or base64 string)
+        profile_image_file = request.FILES.get('profile_image')
+        saved_image_name = None
+        if profile_image_file:
+            import os, uuid
+            from django.core.files.storage import default_storage
+            filename = str(getattr(profile_image_file, 'name', '') or '').strip()
+            ext = os.path.splitext(filename)[1].lower()
+            allowed_ext = {'.jpg', '.jpeg', '.png', '.webp'}
+            unique_name = f"profile_images/{uuid.uuid4().hex}{ext if ext in allowed_ext else '.jpg'}"
+            try:
+                saved_image_name = default_storage.save(unique_name, profile_image_file)
+                student.profile_image = saved_image_name
+                user_obj.profile_image = saved_image_name
+                user_obj.profile_image_updated = True
+                user_obj.save(update_fields=['profile_image', 'profile_image_updated'])
+            except Exception as e:
+                logging.getLogger(__name__).exception('Failed to save student profile_image file: %s', e)
+        elif 'profile_image' in data and isinstance(data.get('profile_image'), str) and data.get('profile_image').strip():
+            raw_img = data.get('profile_image').strip()
+            if raw_img.startswith('data:') and ';base64,' in raw_img:
+                import base64, uuid
+                from django.core.files.base import ContentFile
+                from django.core.files.storage import default_storage
+                try:
+                    _, b64part = raw_img.split(';base64,', 1)
+                    decoded = base64.b64decode(b64part)
+                    unique_name = f"profile_images/{uuid.uuid4().hex}.jpg"
+                    saved_image_name = default_storage.save(unique_name, ContentFile(decoded))
+                    student.profile_image = saved_image_name
+                    user_obj.profile_image = saved_image_name
+                    user_obj.profile_image_updated = True
+                    user_obj.save(update_fields=['profile_image', 'profile_image_updated'])
+                except Exception as e:
+                    logging.getLogger(__name__).exception('Failed to save base64 student profile_image: %s', e)
+
         try:
             student.save()
         except Exception as exc:
@@ -9561,6 +9858,32 @@ class StudentProfileUpdateView(APIView):
             'department_name': getattr(dept, 'name', None) if dept else None,
             'home_department_code': getattr(home_dept, 'code', None) if home_dept else None,
             'home_department_short_name': getattr(home_dept, 'short_name', None) if home_dept else None,
+            'is_photo_verified': bool(getattr(student, 'is_photo_verified', False)),
+            'mobile_number': getattr(student, 'mobile_number', '') or (getattr(user_obj, 'mobile_no', '') if user_obj else '') or '',
+            'profile_image': (
+                getattr(student.profile_image, 'url', None)
+                if getattr(student, 'profile_image', None)
+                else (
+                    f"/media/{str(getattr(user_obj, 'profile_image', '')).lstrip('/')}"
+                    if getattr(user_obj, 'profile_image', '')
+                    else None
+                )
+            ),
+            'address_line1': getattr(student, 'address_line1', '') or '',
+            'address_line2': getattr(student, 'address_line2', '') or '',
+            'address_line3': getattr(student, 'address_line3', '') or '',
+            'district': getattr(student, 'district', '') or '',
+            'pincode': getattr(student, 'pincode', '') or '',
+            'father_name': getattr(student, 'father_name', '') or '',
+            'mother_name': getattr(student, 'mother_name', '') or '',
+            'father_mobile': getattr(student, 'father_mobile', '') or '',
+            'mother_mobile': getattr(student, 'mother_mobile', '') or '',
+            'dob': student.dob.strftime('%Y-%m-%d') if getattr(student, 'dob', None) else '',
+            'dob_display': student.dob.strftime('%d-%m-%Y') if getattr(student, 'dob', None) else '',
+            'blood_group': getattr(student, 'blood_group', '') or '',
+            'mode_of_transportation': getattr(student.mode_of_transportation, 'name', '') if getattr(student, 'mode_of_transportation', None) else '',
+            'mode_of_transportation_id': getattr(student, 'mode_of_transportation_id', None),
+            'boarding_point': getattr(student, 'boarding_point', '') or '',
         }, status=200)
 
 
@@ -11231,3 +11554,70 @@ class TransitionLogListView(APIView):
             for l in logs
         ]
         return Response(data)
+
+
+class ModeOfTransportationListView(APIView):
+    """List available active modes of transportation for student profile."""
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        from .models import ModeOfTransportation
+        modes = ModeOfTransportation.objects.filter(is_active=True).order_by('id')
+        data = [{'id': m.id, 'name': m.name} for m in modes]
+        return Response(data)
+
+
+class StudentProfileCompletionConfigView(APIView):
+    """Get or update student profile completion requirements configuration."""
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        from .models import StudentProfileCompletionConfig
+        config = StudentProfileCompletionConfig.get_config()
+        return Response({
+            'is_overall_compulsory': config.is_overall_compulsory,
+            'fields_config': config.fields_config,
+            'fields_metadata': StudentProfileCompletionConfig.get_fields_metadata(),
+            'updated_at': config.updated_at.isoformat() if config.updated_at else None,
+        })
+
+    def put(self, request):
+        return self._save_config(request)
+
+    def patch(self, request):
+        return self._save_config(request)
+
+    def post(self, request):
+        return self._save_config(request)
+
+    def _save_config(self, request):
+        user = request.user
+        user_roles = [r.name.upper() for r in user.roles.all()] if hasattr(user, 'roles') else []
+        is_iqac = user.is_superuser or 'IQAC' in user_roles or 'ADMIN' in user_roles or user.is_staff
+        if not is_iqac:
+            perms = get_user_permissions(user)
+            if not ('students.view_all_students' in perms or 'academics.view_iqac' in perms):
+                return Response({'detail': 'Only IQAC / Admin can configure profile completion settings.'}, status=403)
+
+        from .models import StudentProfileCompletionConfig
+        config = StudentProfileCompletionConfig.get_config()
+        data = request.data or {}
+
+        if 'is_overall_compulsory' in data:
+            config.is_overall_compulsory = bool(data.get('is_overall_compulsory'))
+
+        if 'fields_config' in data and isinstance(data.get('fields_config'), dict):
+            current = dict(config.fields_config or {})
+            for k, v in data.get('fields_config').items():
+                current[k] = bool(v)
+            config.fields_config = current
+
+        config.save()
+        return Response({
+            'ok': True,
+            'message': 'Completion settings saved successfully.',
+            'is_overall_compulsory': config.is_overall_compulsory,
+            'fields_config': config.fields_config,
+            'fields_metadata': StudentProfileCompletionConfig.get_fields_metadata(),
+            'updated_at': config.updated_at.isoformat() if config.updated_at else None,
+        })

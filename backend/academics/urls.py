@@ -50,6 +50,8 @@ from .views import (
     StudentProfileUpdateView,
     ShiftSemesterView,
     TransitionLogListView,
+    ModeOfTransportationListView,
+    StudentProfileCompletionConfigView,
 )
 from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView, AttendanceAssignmentRequestView, AttendanceAssignmentRequestActionView, AttendanceNotificationCountView, BulkAttendanceSectionsView, BulkAttendanceDownloadView, BulkAttendanceImportView, BulkAttendanceLockedSessionsView, BulkDailyAttendanceUnlockRequestView, OverallDailyAttendanceReportView
 from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudentsView, MentorMyMenteesView
@@ -204,4 +206,8 @@ urlpatterns = [
     # System Transitions (Semester Shift & Logs)
     path('shift-semester/', ShiftSemesterView.as_view(), name='shift-semester'),
     path('transition-logs/', TransitionLogListView.as_view(), name='transition-logs'),
+
+    # Student Profile Completion & Transportation
+    path('modes-of-transportation/', ModeOfTransportationListView.as_view(), name='modes-of-transportation'),
+    path('student-profile/completion-config/', StudentProfileCompletionConfigView.as_view(), name='student-profile-completion-config'),
 ]

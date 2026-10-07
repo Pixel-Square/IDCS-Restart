@@ -105,23 +105,21 @@ def _normalize_mobile_number(raw: str) -> str:
 def _set_verified_mobile_on_profile(user, mobile_number: str, verified_at):
     """Persist verified mobile number on the attached student/staff profile."""
     try:
-        sp = getattr(user, 'student_profile', None)
-    except ObjectDoesNotExist:
-        sp = None
-    if sp is not None:
-        sp.mobile_number = mobile_number
-        sp.mobile_number_verified_at = verified_at
-        sp.save(update_fields=['mobile_number', 'mobile_number_verified_at'])
-        return
-    try:
-        st = getattr(user, 'staff_profile', None)
-    except ObjectDoesNotExist:
-        st = None
-    if st is not None:
-        st.mobile_number = mobile_number
-        st.mobile_number_verified_at = verified_at
-        st.save(update_fields=['mobile_number', 'mobile_number_verified_at'])
-        return
+        from academics.models import StudentProfile, StaffProfile
+        sp = StudentProfile.objects.filter(user=user).first()
+        if sp is not None:
+            sp.mobile_number = mobile_number
+            sp.mobile_number_verified_at = verified_at
+            sp.save(update_fields=['mobile_number', 'mobile_number_verified_at'])
+            return
+        st = StaffProfile.objects.filter(user=user).first()
+        if st is not None:
+            st.mobile_number = mobile_number
+            st.mobile_number_verified_at = verified_at
+            st.save(update_fields=['mobile_number', 'mobile_number_verified_at'])
+            return
+    except Exception:
+        log.exception('Failed to set verified mobile on profile')
     # If no profile, still allow storing on User
 
 
@@ -644,7 +642,8 @@ class ProfileUpdateView(APIView):
             if User.objects.filter(username=new_username).exclude(pk=user.pk).exists():
                 return Response({'detail': 'Username already exists.'}, status=status.HTTP_400_BAD_REQUEST)
 
-            user.username = new_username
+        if 'mobile_no' in request.data or 'mobile_number' in request.data or 'phone_number' in request.data:
+            user.mobile_no = str(request.data.get('mobile_no', request.data.get('mobile_number', request.data.get('phone_number', '')))).strip()
             updated = True
 
         if profile_image is not None:
@@ -676,16 +675,15 @@ class ProfileUpdateView(APIView):
 
             old_value = ''
 
-            # Prefer saving to role profile image fields so admin + API stay aligned.
-            student_profile = getattr(user, 'student_profile', None)
-            staff_profile = getattr(user, 'staff_profile', None)
+            from academics.models import StudentProfile, StaffProfile
+            student_profile = StudentProfile.objects.filter(user=user).first()
+            staff_profile = StaffProfile.objects.filter(user=user).first()
             if student_profile is not None:
                 try:
                     old_value = str(getattr(student_profile.profile_image, 'name', '') or '').strip().lstrip('/')
                 except Exception:
                     old_value = ''
                 try:
-                    from academics.models import StudentProfile
                     StudentProfile.objects.filter(pk=student_profile.pk).update(profile_image=saved_name)
                 except Exception:
                     log.exception('Failed saving student_profile.profile_image (user_id=%s) saved_name=%s', getattr(user, 'id', None), saved_name)
@@ -696,7 +694,6 @@ class ProfileUpdateView(APIView):
                 except Exception:
                     old_value = ''
                 try:
-                    from academics.models import StaffProfile
                     StaffProfile.objects.filter(pk=staff_profile.pk).update(profile_image=saved_name)
                 except Exception:
                     log.exception('Failed saving staff_profile.profile_image (user_id=%s) saved_name=%s', getattr(user, 'id', None), saved_name)
@@ -721,6 +718,82 @@ class ProfileUpdateView(APIView):
             except Exception as e:
                 log.exception('Failed to save user after profile update')
                 return Response({'detail': 'Failed to update profile.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # Update student profile fields if applicable
+        from academics.models import StudentProfile
+        student_profile = StudentProfile.objects.filter(user=user).first()
+        if student_profile is not None:
+            student_profile_changed = False
+            if 'mobile_number' in request.data or 'mobile_no' in request.data or 'phone_number' in request.data:
+                student_profile.mobile_number = str(request.data.get('mobile_number', request.data.get('mobile_no', request.data.get('phone_number', '')))).strip()
+                student_profile_changed = True
+            if 'address_line1' in request.data:
+                student_profile.address_line1 = str(request.data.get('address_line1') or '').strip()
+                student_profile_changed = True
+            if 'address_line2' in request.data:
+                student_profile.address_line2 = str(request.data.get('address_line2') or '').strip()
+                student_profile_changed = True
+            if 'address_line3' in request.data:
+                student_profile.address_line3 = str(request.data.get('address_line3') or '').strip()
+                student_profile_changed = True
+            if 'district' in request.data:
+                student_profile.district = str(request.data.get('district') or '').strip()
+                student_profile_changed = True
+            if 'pincode' in request.data:
+                student_profile.pincode = str(request.data.get('pincode') or '').strip()
+                student_profile_changed = True
+            if 'father_name' in request.data:
+                student_profile.father_name = str(request.data.get('father_name') or '').strip()
+                student_profile_changed = True
+            if 'mother_name' in request.data:
+                student_profile.mother_name = str(request.data.get('mother_name') or '').strip()
+                student_profile_changed = True
+            if 'father_mobile' in request.data:
+                student_profile.father_mobile = str(request.data.get('father_mobile') or '').strip()
+                student_profile_changed = True
+            if 'mother_mobile' in request.data:
+                student_profile.mother_mobile = str(request.data.get('mother_mobile') or '').strip()
+                student_profile_changed = True
+            if 'dob' in request.data:
+                raw_dob = str(request.data.get('dob') or '').strip()
+                if raw_dob:
+                    import datetime
+                    parsed_date = None
+                    for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y', '%Y/%m/%d'):
+                        try:
+                            parsed_date = datetime.datetime.strptime(raw_dob, fmt).date()
+                            break
+                        except ValueError:
+                            pass
+                    student_profile.dob = parsed_date
+                else:
+                    student_profile.dob = None
+                student_profile_changed = True
+            if 'blood_group' in request.data:
+                student_profile.blood_group = str(request.data.get('blood_group') or '').strip()
+                student_profile_changed = True
+            if 'mode_of_transportation_id' in request.data or 'mode_of_transportation' in request.data:
+                mot_val = request.data.get('mode_of_transportation_id') or request.data.get('mode_of_transportation')
+                if mot_val:
+                    from academics.models import ModeOfTransportation
+                    if isinstance(mot_val, int) or (isinstance(mot_val, str) and str(mot_val).isdigit()):
+                        mot = ModeOfTransportation.objects.filter(pk=int(mot_val)).first()
+                    else:
+                        mot = ModeOfTransportation.objects.filter(name__iexact=str(mot_val).strip()).first()
+                    student_profile.mode_of_transportation = mot
+                else:
+                    student_profile.mode_of_transportation = None
+                student_profile_changed = True
+            if 'boarding_point' in request.data:
+                student_profile.boarding_point = str(request.data.get('boarding_point') or '').strip()
+                student_profile_changed = True
+
+            if student_profile_changed:
+                try:
+                    student_profile.save()
+                except Exception as e:
+                    log.exception('Failed to save student profile fields')
+                    return Response({'detail': 'Failed to save student profile details.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         try:
             # Return updated user data

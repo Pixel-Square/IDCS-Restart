@@ -30,6 +30,9 @@ class DepartmentAnalysisView(APIView):
 
     def get(self, request):
         scope = get_performance_scope(request.user)
+        if scope.get("is_student"):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Students are not allowed to access department data.")
         dept = request.query_params.get("dept", "").strip()
         year = request.query_params.get("year", "").strip()
         sem_raw = request.query_params.get("sem", "").strip()

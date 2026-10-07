@@ -5,6 +5,7 @@ from .views import (
     AuditAssignmentDetailView,
     AuditAssignmentListView,
     AuditATRView,
+    AuditATRAllowEditView,
     AuditConsolidatedView,
     AuditCycleListView,
     AuditDepartmentsView,
@@ -52,6 +53,7 @@ urlpatterns = [
     path('assignments/<int:pk>/scores/', AuditScoreSaveView.as_view(), name='audit-score-save'),
     path('assignments/<int:pk>/report/', AuditReportView.as_view(), name='audit-report'),
     path('assignments/<int:pk>/atr/', AuditATRView.as_view(), name='audit-atr'),
+    path('assignments/<int:pk>/atr/allow-edit/', AuditATRAllowEditView.as_view(), name='audit-atr-allow-edit'),
 
     # Consolidated review (IQAC)
     path('consolidated/', AuditConsolidatedView.as_view(), name='audit-consolidated'),

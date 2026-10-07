@@ -502,6 +502,21 @@ STUDENT_STATUS_CHOICES = (
 )
 
 
+class ModeOfTransportation(models.Model):
+    name = models.CharField(max_length=64, unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Mode of Transportation'
+        verbose_name_plural = 'Modes of Transportation'
+        ordering = ['id']
+
+    def __str__(self):
+        return self.name
+
+
 class StudentProfile(models.Model):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -537,6 +552,35 @@ class StudentProfile(models.Model):
     mobile_number = models.CharField(max_length=32, blank=True, default='')
     mobile_number_verified_at = models.DateTimeField(null=True, blank=True)
     profile_image = models.ImageField(upload_to='profile_images/', null=True, blank=True)
+    is_photo_verified = models.BooleanField(default=False, help_text='Profile photo verified by advisor/staff')
+
+    # Address Details
+    address_line1 = models.CharField(max_length=255, blank=True, default='', help_text='Permanent address line 1')
+    address_line2 = models.CharField(max_length=255, blank=True, default='', help_text='Permanent address line 2')
+    address_line3 = models.CharField(max_length=255, blank=True, default='', help_text='Permanent address line 3')
+    district = models.CharField(max_length=128, blank=True, default='', help_text='District')
+    pincode = models.CharField(max_length=20, blank=True, default='', help_text='Postal Pincode')
+
+    # Parent / Guardian Details (Names & Contacts)
+    father_name = models.CharField(max_length=150, blank=True, default='', help_text="Father's full name")
+    mother_name = models.CharField(max_length=150, blank=True, default='', help_text="Mother's full name")
+    father_mobile = models.CharField(max_length=20, blank=True, default='', help_text="Father's mobile number")
+    mother_mobile = models.CharField(max_length=20, blank=True, default='', help_text="Mother's mobile number")
+
+    # Personal Details (DOB & Blood Group)
+    dob = models.DateField(null=True, blank=True, help_text='Date of Birth (YYYY-MM-DD)')
+    blood_group = models.CharField(max_length=16, blank=True, default='', help_text='Blood Group (e.g. A+, B+, etc.)')
+
+    # Mode of Transportation & Boarding Point
+    mode_of_transportation = models.ForeignKey(
+        ModeOfTransportation,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='students',
+        help_text='Mode of Transportation'
+    )
+    boarding_point = models.CharField(max_length=255, blank=True, default='', help_text='Boarding point for College Bus')
 
     # RFID UID assigned via IDCSScan hardware scanner
     rfid_uid = models.CharField(max_length=32, blank=True, default='', db_index=True,
@@ -1873,3 +1917,137 @@ class ExtStaffFormSettings(models.Model):
             {"field": "ifsc_code", "label": "IFSC Code", "type": "text"},
             {"field": "passbook_proof", "label": "Passbook Proof (Scanned Copy)", "type": "file"},
         ]
+
+
+class StudentProfileCompletionConfig(models.Model):
+    """Configuration for student profile completion requirements."""
+    is_overall_compulsory = models.BooleanField(
+        default=True,
+        help_text="Master switch for student profile completion requirement"
+    )
+    fields_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Map of field keys to boolean indicating whether the field is compulsory."
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Student Profile Completion Config'
+        verbose_name_plural = 'Student Profile Completion Configs'
+
+    @classmethod
+    def get_default_fields(cls):
+        return {
+            'father_name': True,
+            'mother_name': True,
+            'dob': True,
+            'blood_group': True,
+            'address_line1': True,
+            'address_line2': True,
+            'address_line3': False,
+            'district': True,
+            'pincode': True,
+            'father_mobile': True,
+            'mother_mobile': True,
+            'mode_of_transportation': True,
+        }
+
+    @classmethod
+    def get_fields_metadata(cls):
+        return [
+            {
+                'key': 'father_name',
+                'label': "Father's Name",
+                'group': 'Parent Details',
+                'description': "Full name of father",
+            },
+            {
+                'key': 'mother_name',
+                'label': "Mother's Name",
+                'group': 'Parent Details',
+                'description': "Full name of mother",
+            },
+            {
+                'key': 'dob',
+                'label': 'Date of Birth',
+                'group': 'Personal Details',
+                'description': 'Date of birth (DD-MM-YYYY)',
+            },
+            {
+                'key': 'blood_group',
+                'label': 'Blood Group',
+                'group': 'Personal Details',
+                'description': 'Student blood group (e.g. A+, B+, O+, etc.)',
+            },
+            {
+                'key': 'address_line1',
+                'label': 'Address Line 1',
+                'group': 'Address Details',
+                'description': 'Street address, building, flat or door number',
+            },
+            {
+                'key': 'address_line2',
+                'label': 'Address Line 2',
+                'group': 'Address Details',
+                'description': 'Area, locality, road or street name',
+            },
+            {
+                'key': 'address_line3',
+                'label': 'Address Line 3',
+                'group': 'Address Details',
+                'description': 'Village, taluk, or landmark (optional)',
+            },
+            {
+                'key': 'district',
+                'label': 'District',
+                'group': 'Address Details',
+                'description': 'District name',
+            },
+            {
+                'key': 'pincode',
+                'label': 'Pincode',
+                'group': 'Address Details',
+                'description': '6-digit Postal PIN Code',
+            },
+            {
+                'key': 'father_mobile',
+                'label': "Parent/Guardian Number 1 (Compulsory)",
+                'group': 'Parent / Guardian Contact',
+                'description': "Primary 10-digit mobile number of parent or guardian",
+            },
+            {
+                'key': 'mother_mobile',
+                'label': "Parent Mobile Number 2",
+                'group': 'Parent / Guardian Contact',
+                'description': "Secondary 10-digit mobile number of parent or guardian",
+            },
+            {
+                'key': 'mode_of_transportation',
+                'label': 'Mode of Transportation',
+                'group': 'Transportation',
+                'description': 'College Bus, Hosteller, or DayScholar (BLUE)',
+            },
+        ]
+
+    @classmethod
+    def get_config(cls):
+        defaults = {
+            'is_overall_compulsory': True,
+            'fields_config': cls.get_default_fields(),
+        }
+        obj, _ = cls.objects.get_or_create(id=1, defaults=defaults)
+        changed = False
+        default_fields = cls.get_default_fields()
+        if not isinstance(obj.fields_config, dict):
+            obj.fields_config = default_fields
+            changed = True
+        else:
+            for k, v in default_fields.items():
+                if k not in obj.fields_config:
+                    obj.fields_config[k] = v
+                    changed = True
+        if changed:
+            obj.save(update_fields=['fields_config'])
+        return obj
+

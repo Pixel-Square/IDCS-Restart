@@ -339,6 +339,21 @@ class MeSerializer(serializers.Serializer):
                     'name': getattr(department, 'name', None),
                 } if department else None,
                 'status': sp.status,
+                'address_line1': getattr(sp, 'address_line1', '') or '',
+                'address_line2': getattr(sp, 'address_line2', '') or '',
+                'address_line3': getattr(sp, 'address_line3', '') or '',
+                'district': getattr(sp, 'district', '') or '',
+                'pincode': getattr(sp, 'pincode', '') or '',
+                'father_name': getattr(sp, 'father_name', '') or '',
+                'mother_name': getattr(sp, 'mother_name', '') or '',
+                'father_mobile': getattr(sp, 'father_mobile', '') or '',
+                'mother_mobile': getattr(sp, 'mother_mobile', '') or '',
+                'dob': sp.dob.strftime('%Y-%m-%d') if getattr(sp, 'dob', None) else '',
+                'dob_display': sp.dob.strftime('%d-%m-%Y') if getattr(sp, 'dob', None) else '',
+                'blood_group': getattr(sp, 'blood_group', '') or '',
+                'mode_of_transportation': getattr(sp.mode_of_transportation, 'name', '') if getattr(sp, 'mode_of_transportation', None) else '',
+                'mode_of_transportation_id': getattr(sp, 'mode_of_transportation_id', None),
+                'boarding_point': getattr(sp, 'boarding_point', '') or '',
             }
         st = self._safe_related_profile(obj, 'staff_profile')
         if st is not None:

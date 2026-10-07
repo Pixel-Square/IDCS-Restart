@@ -75,6 +75,24 @@ export default function SSAAssignmentPage() {
     );
   }
 
+  if (data.assignment_available === false) {
+    return (
+      <MyMarksLayout activeTab="courses" title={`SSA Assignment — ${data.assignment_type}`} subtitle={`${data.course_code} - ${data.course_name}`} showBack>
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+            <div>
+              <h2 className="font-semibold">SSA has not been assigned yet</h2>
+              <p className="mt-1 text-sm text-amber-800">
+                The staff member has not assigned this SSA submission. Please check again after it is published.
+              </p>
+            </div>
+          </div>
+        </div>
+      </MyMarksLayout>
+    );
+  }
+
   // API returns a flat object — map fields explicitly
   const assignment = {
     assignment_type: data.assignment_type,

@@ -59,7 +59,7 @@ export default function CourseListPage() {
   const [courses, setCourses] = useState<CourseItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [ssaAssignments, setSsaAssignments] = useState<{ exam_id: string; assignment_type: string; course_code: string; submission_status: string }[]>([]);
+  const [ssaAssignments, setSsaAssignments] = useState<{ ta_id: number; exam_id: string; assignment_type: string; course_code: string; submission_status: string }[]>([]);
 
   useEffect(() => {
     let mounted = true;
@@ -140,9 +140,8 @@ export default function CourseListPage() {
       ) : (
         <div className="space-y-3">
           {courses.map((course) => (
-            <button
+            <div
               key={course.ta_id}
-              type="button"
               onClick={() => navigate(`/academic-v2/student/course/${course.ta_id}`)}
               className="group w-full rounded-3xl border border-gray-200 bg-white p-5 shadow-sm transition hover:border-indigo-200 hover:shadow-md"
             >
@@ -206,13 +205,17 @@ export default function CourseListPage() {
                 <div className="text-sm text-gray-500">
                   {course.exams_entered} exam{course.exams_entered === 1 ? '' : 's'} · {course.obtained_weight.toFixed(1)}/{course.max_weight.toFixed(1)} wt
                 </div>
-                <div className="inline-flex w-full items-center justify-center rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition group-hover:bg-indigo-700 sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => navigate(`/academic-v2/student/course/${course.ta_id}`)}
+                  className="inline-flex w-full items-center justify-center rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition group-hover:bg-indigo-700 sm:w-auto"
+                >
                   View Marks
                   <ChevronRight className="ml-2 h-4 w-4" />
-                </div>
+                </button>
                 {/* SSA Assignment buttons */}
                 {ssaAssignments
-                  .filter((ssa) => ssa.course_code === course.course_code && ssa.submission_status !== 'EVALUATED')
+                  .filter((ssa) => ssa.ta_id === course.ta_id && ssa.submission_status !== 'EVALUATED')
                   .map((ssa) => (
                     <button
                       key={ssa.exam_id}
@@ -229,7 +232,7 @@ export default function CourseListPage() {
                   ))
                 }
               </div>
-            </button>
+            </div>
           ))}
         </div>
       )}

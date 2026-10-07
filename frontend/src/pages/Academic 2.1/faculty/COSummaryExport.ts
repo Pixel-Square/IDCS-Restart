@@ -23,6 +23,7 @@ export interface ExportCOExam {
   cia_weight?: number;
   cia_weight_per_co?: boolean;
   exam_max_marks?: number;
+  exam_co_max_map?: Record<string, number>;
   covered_cos: number[];
   weight_per_co: number;
   max_per_co: number;
@@ -116,6 +117,8 @@ function getCellVal(
 
   if (view === 'raw') {
     if (type === 'exam_split') {
+      const coRaw = (em as any)?.exam_co_raw?.[String(co)] ?? (em as any)?.exam_co_raw?.[co] ?? (em as any)?.[`exam_co${co}`] ?? (em as any)?.[`exam_CO${co}`];
+      if (typeof coRaw === 'number') return coRaw > 0 ? fmt(coRaw) : '0.00';
       const n = examCOs(ex, co_count).length || 1;
       const raw = (em.exam as number) ?? 0;
       return raw > 0 ? fmt(Math.round((raw / n) * 100) / 100) : '';
@@ -210,7 +213,7 @@ export function exportCOSummaryToExcel(
         const effectiveW = ex.cia_weight
           ? (perCo ? ex.cia_weight : Math.round((ex.cia_weight / n) * 100) / 100)
           : 0;
-        const maxSplit = ex.exam_max_marks ? Math.round((ex.exam_max_marks / n) * 100) / 100 : 0;
+        const maxSplit = ex.exam_co_max_map?.[String(co)] ?? ex.exam_co_max_map?.[co] ?? (ex.exam_max_marks ? Math.round((ex.exam_max_marks / n) * 100) / 100 : 0);
         const sub = isW
           ? (effectiveW > 0 ? (perCo ? `E× wt:${effectiveW}` : `E wt:${effectiveW}`) : 'E wt: NOT SET')
           : `E /${maxSplit || '?'}`;
@@ -475,7 +478,7 @@ export async function exportCOSummaryToPDF(
       const perCo = !!ex.cia_weight_per_co;
       for (const co of ciaCos) {
         const effectiveW = ex.cia_weight ? (perCo ? ex.cia_weight : Math.round((ex.cia_weight / n) * 100) / 100) : 0;
-        const maxSplit = ex.exam_max_marks ? Math.round((ex.exam_max_marks / n) * 100) / 100 : 0;
+        const maxSplit = ex.exam_co_max_map?.[String(co)] ?? ex.exam_co_max_map?.[co] ?? (ex.exam_max_marks ? Math.round((ex.exam_max_marks / n) * 100) / 100 : 0);
         const sub = isW ? (effectiveW > 0 ? `E${perCo ? '×' : ''}w:${effectiveW}` : 'E:N/S') : `E/${maxSplit || '?'}`;
         cols.push({ examId: ex.id, examIdx: ei, label: `CO${co}`, sub, co, type: 'exam_split', isCqi: true });
       }

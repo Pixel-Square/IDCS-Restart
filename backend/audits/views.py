@@ -800,6 +800,7 @@ class AuditATRView(APIView):
             'assignment': AuditAssignmentSerializer(assignment).data,
             'atr_questions': rows,
             'below_60_count': len(rows),
+            'is_iqac': user_is_iqac(request.user),
         })
 
     def post(self, request, pk):
@@ -833,6 +834,42 @@ class AuditATRView(APIView):
                 saved += 1
 
         return Response({'saved': saved, 'submit': submit})
+
+class AuditATRAllowEditView(APIView):
+    """Provide edit access back to HOD by resetting ATR status to PENDING."""
+    permission_classes = (IsAuthenticated, IsIQACOrSuperuser)
+
+    def post(self, request, pk):
+        assignment = get_object_or_404(
+            AuditDepartmentAssignment.objects.select_related('department'),
+            pk=pk,
+        )
+        if not user_is_iqac(request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Only IQAC can provide edit access.')
+
+        updated = assignment.atrs.update(status='PENDING', submitted_at=None)
+
+        from accounts.models import UserNotification
+        from academics.models import DepartmentRole
+        
+        hod_roles = DepartmentRole.objects.filter(
+            department=assignment.department,
+            role__in=('HOD', 'AHOD'),
+            is_active=True
+        ).select_related('staff__user')
+        
+        users_to_notify = [role.staff.user for role in hod_roles if role.staff and role.staff.user]
+        
+        for u in set(users_to_notify):
+            UserNotification.objects.create(
+                user=u,
+                title="ATR Edit Access Granted",
+                message=f"You have been granted edit access for the Action Taken Report (ATR) for {assignment.cycle}.",
+                link="/audits?tab=atr"
+            )
+
+        return Response({'detail': 'Edit access granted.', 'updated': updated})
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -44,6 +44,7 @@ import AdvisorAssignments from './pages/hod/AdvisorAssignments';
 import TeachingAssignmentsPage from './pages/hod/TeachingAssignments';
 import ObeEditRequestsPage from './pages/hod/ObeEditRequestsPage';
 import StudentsPage from './pages/staff/Students';
+import StudentCompletionPage from './pages/iqac/StudentCompletionPage';
 import StudentTimetable from './pages/student/TimetableView';
 import StaffTimetable from './pages/staff/TimetableView';
 import AssignedSubjectsPage from './pages/staff/AssignedSubjects';
@@ -58,6 +59,7 @@ import AnnouncementsPage from './pages/announcements/AnnouncementsPage';
 import QueriesPage from './pages/queries/QueriesPage';
 import FeedbackPage from './pages/feedback/FeedbackPage';
 import StaffsPage from './pages/StaffsPage';
+import MasterTeachingAssignmentPage from './pages/iqac/MasterTeachingAssignmentPage';
 import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarRedirect';
 import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
 import { AcademicCalendarAdminPage } from './pages/academicCalendar/admin';
@@ -555,6 +557,10 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["academics.assign_teaching"]} element={<TeachingAssignmentsPage />} />}
                 />
                 <Route
+                  path="/iqac/master-teaching-assignment"
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC", "ADMIN"]} element={<MasterTeachingAssignmentPage />} />}
+                />
+                <Route
                   path="/iqac/timetable"
                   element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["timetable.manage_templates"]} element={<TimetableAdminPage />} />}
                 />
@@ -737,6 +743,14 @@ export default function App() {
 
                   path="/staff/students"
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["students.view_students"]} element={<StudentsPage user={user} />} />}
+                />
+                <Route
+                  path="/iqac/students/completion"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC', 'ADMIN', 'Superuser']} element={<StudentCompletionPage />} />}
+                />
+                <Route
+                  path="/staff/students/completion"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC', 'ADMIN', 'Superuser']} element={<StudentCompletionPage />} />}
                 />
                 {/* Staff PBAS route removed */}
                 <Route

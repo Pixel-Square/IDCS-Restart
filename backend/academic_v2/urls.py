@@ -233,6 +233,7 @@ from .academic_performance_views import (
     ComparisonPerformanceAnalyticsView,
     StudentCurriculumMarksView,
     StudentAnalysisChartsView,
+    SectionReportDetailView,
 )
 from department_analysis_view import DepartmentAnalysisView
 from .subject_analysis_views import SubjectWiseAnalysisView
@@ -245,6 +246,7 @@ urlpatterns += [
     path('performance/student-compare/', StudentCompareView.as_view(), name='academic-performance-student-compare'),
     path('performance/faculty-wise/', FacultyWiseAnalyticsView.as_view(), name='academic-performance-faculty-wise'),
     path('performance/class-advisor/<str:section_id>/', ClassAdvisorDeepDiveView.as_view(), name='academic-performance-class-advisor'),
+    path('performance/section-report/<int:section_id>/', SectionReportDetailView.as_view(), name='academic-performance-section-report'),
     path('performance/range-analysis/', RangeAnalysisView.as_view(), name='academic-performance-range-analysis'),
     path('performance/comparison-analytics/', ComparisonPerformanceAnalyticsView.as_view(), name='academic-performance-comparison-analytics'),
     path('performance/student-curriculum-marks/', StudentCurriculumMarksView.as_view(), name='academic-performance-student-curriculum-marks'),
@@ -256,6 +258,11 @@ urlpatterns += [
 ]
 
 from .ssa_views import (
+    ssa_assignment_detail,
+    ssa_assignment_finalize,
+    ssa_assignment_submissions,
+    ssa_assignment_topic_template,
+    ssa_assignment_file,
     ssa_student_assignments,
     ssa_student_assignment_detail,
     ssa_student_submit,
@@ -264,6 +271,13 @@ from .ssa_views import (
 )
 
 urlpatterns += [
+    # Faculty SSA endpoints
+    path('ssa/assignment/<uuid:exam_id>/', ssa_assignment_detail, name='ssa-assignment-detail'),
+    path('ssa/assignment/<uuid:exam_id>/finalize/', ssa_assignment_finalize, name='ssa-assignment-finalize'),
+    path('ssa/assignment/<uuid:exam_id>/submissions/', ssa_assignment_submissions, name='ssa-assignment-submissions'),
+    path('ssa/assignment/<uuid:exam_id>/topic-template/', ssa_assignment_topic_template, name='ssa-assignment-topic-template'),
+    path('ssa/assignment/<uuid:exam_id>/file/<str:file_type>/', ssa_assignment_file, name='ssa-assignment-file'),
+
     # Student SSA endpoints
     path('ssa/student/assignments/', ssa_student_assignments, name='ssa-student-assignments'),
     path('ssa/student/assignment/<uuid:exam_id>/', ssa_student_assignment_detail, name='ssa-student-assignment-detail'),

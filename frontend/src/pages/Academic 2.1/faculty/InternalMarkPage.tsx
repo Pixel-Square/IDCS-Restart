@@ -72,6 +72,7 @@ interface COExam {
   cia_weight?: number;
   cia_weight_per_co?: boolean;  // true = each covered CO gets the full cia_weight (no split)
   exam_max_marks?: number;
+  exam_co_max_map?: Record<string, number>;
   covered_cos: number[];
   weight_per_co: number;
   max_per_co: number;
@@ -1039,7 +1040,7 @@ function COSummaryTab({
         const effectiveW = ex.cia_weight
           ? (perCo ? ex.cia_weight : Math.round((ex.cia_weight / n) * 100) / 100)
           : 0;
-        const maxSplit = ex.exam_max_marks ? Math.round((ex.exam_max_marks / n) * 100) / 100 : 0;
+        const maxSplit = ex.exam_co_max_map?.[String(co)] ?? ex.exam_co_max_map?.[co] ?? (ex.exam_max_marks ? Math.round((ex.exam_max_marks / n) * 100) / 100 : 0);
         const sub = view === 'weighted'
           ? (effectiveW > 0
               ? (perCo ? `E× wt:${effectiveW}` : `E wt:${effectiveW}`)
@@ -1122,10 +1123,13 @@ function COSummaryTab({
         return em ? (em.total as number) ?? '' : '';
       }
       if (col.isExamSplit) {
-        // Exam split column (raw) - divide total exam mark equally across covered COs
+        // Exam split column (raw) - use per-CO exam raw mark from backend
         const ex = exams[col.examIdx];
         const em = s.exam_marks[ex.id];
-        if (!em || em.exam === undefined) return '';
+        if (!em) return '';
+        const coRaw = (em as any).exam_co_raw?.[String(col.co)] ?? (em as any).exam_co_raw?.[col.co] ?? em[`exam_co${col.co}`] ?? em[`exam_CO${col.co}`];
+        if (coRaw !== undefined && coRaw !== null && coRaw !== '') return coRaw;
+        if (em.exam === undefined) return '';
         const n = ex.covered_cos.length || 1;
         const raw = (em.exam as number) ?? 0;
         return Math.round((raw / n) * 100) / 100;

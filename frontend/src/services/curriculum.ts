@@ -229,11 +229,12 @@ export async function fetchQpTypes(): Promise<QuestionPaperTypeItem[]> {
   return Array.isArray(data) ? data : (data.results || []);
 }
 
-export async function fetchElectives(params?: { department_id?: number; regulation?: string; semester?: number }) {
+export async function fetchElectives(params?: { department_id?: number; regulation?: string; semester?: number; batch_id?: number }) {
   const qs = new URLSearchParams();
   if (params?.department_id) qs.set('department_id', String(params.department_id));
   if (params?.regulation) qs.set('regulation', params.regulation);
   if (params?.semester) qs.set('semester', String(params.semester));
+  if (params?.batch_id) qs.set('batch_id', String(params.batch_id));
   qs.set('page_size', '0'); // Disable pagination to get all results
   const url = `/api/curriculum/elective/?${qs.toString()}`;
   const res = await fetchWithAuth(url);

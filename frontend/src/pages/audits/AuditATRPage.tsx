@@ -4,7 +4,7 @@ import {
   AlertCircle, CheckCircle2, ChevronLeft, Download, FileText, Loader2, PenLine, Save, Send,
 } from 'lucide-react'
 import {
-  AuditAssignment, AuditATRRow, fetchAuditAssignments, fetchAuditATR, fetchAuditReport, saveAuditATR,
+  AuditAssignment, AuditATRRow, fetchAuditAssignments, fetchAuditATR, fetchAuditReport, saveAuditATR, allowEditAuditATR,
 } from '../../services/audits'
 import { downloadAuditReportPdf } from '../../utils/auditReportPdf'
 
@@ -15,6 +15,7 @@ export default function AuditATRPage({ embedded = false }: { embedded?: boolean 
   const [atrRows, setAtrRows] = useState<AuditATRRow[]>([])
   const [assignment, setAssignment] = useState<AuditAssignment | null>(null)
   const [drafts, setDrafts] = useState<Record<number, string>>({})
+  const [isIqac, setIsIqac] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
@@ -51,6 +52,7 @@ export default function AuditATRPage({ embedded = false }: { embedded?: boolean 
       if (data) {
         setAtrRows(data.atr_questions)
         setAssignment(data.assignment)
+        setIsIqac(!!data.is_iqac)
         const next: Record<number, string> = {}
         for (const r of data.atr_questions) next[r.question_id] = r.action_taken || ''
         setDrafts(next)
@@ -106,6 +108,24 @@ export default function AuditATRPage({ embedded = false }: { embedded?: boolean 
       downloadAuditReportPdf(report)
     } catch (e: any) {
       alert(e?.message || 'Could not download the PDF.')
+    }
+  }
+
+  const handleAllowEdit = async () => {
+    if (!selectedId) return
+    if (!window.confirm('Are you sure you want to provide edit access back to the HOD? This will change the status to PENDING.')) return
+    try {
+      await allowEditAuditATR(selectedId)
+      const data = await fetchAuditATR(selectedId)
+      if (data) {
+        setAtrRows(data.atr_questions)
+        const next: Record<number, string> = {}
+        for (const r of data.atr_questions) next[r.question_id] = r.action_taken || ''
+        setDrafts(next)
+      }
+      alert('Edit access provided successfully.')
+    } catch (e: any) {
+      alert(e?.message || 'Failed to provide edit access')
     }
   }
 
@@ -223,6 +243,14 @@ export default function AuditATRPage({ embedded = false }: { embedded?: boolean 
               <div className="flex-1 text-sm text-green-800 min-w-[200px]">
                 <span className="font-semibold">ATR submitted.</span> The full audit report (marks + ATR) is ready to download.
               </div>
+              {isIqac && (
+                <button
+                  onClick={handleAllowEdit}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-yellow-600 text-white rounded-lg text-sm hover:bg-yellow-700 transition-colors mr-2"
+                >
+                  <PenLine size={16} /> Provide Edit Access
+                </button>
+              )}
               <button
                 onClick={downloadPdf}
                 className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition-colors"

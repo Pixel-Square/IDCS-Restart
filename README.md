@@ -14,6 +14,7 @@ Backend:
 cd backend
 python -m venv .venv
 .\.venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 copy .env.sample .env
 # configure DATABASE_URL or DB_* for Supabase/postgres

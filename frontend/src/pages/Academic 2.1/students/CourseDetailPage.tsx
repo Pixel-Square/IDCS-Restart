@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { AlertCircle, CheckCircle2, Clock3, Loader2, XCircle } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 import RequirementsPage from '../../settings/RequirementsPage';
@@ -25,6 +25,7 @@ type ExamEntry = {
   has_payload: boolean;
   is_absent: boolean;
   published_at: string | null;
+  is_ssa: boolean;
 };
 
 type CycleData = {
@@ -123,6 +124,7 @@ function ExamStatus({ exam }: { exam: ExamEntry }) {
 /* ── Main ───────────────────────────────────────────────────── */
 export default function CourseDetailPage() {
   const { courseId } = useParams<{ courseId: string }>();
+  const navigate = useNavigate();
   const [config, setConfig] = useState<MyMarksConfig | null>(null);
   const [detail, setDetail] = useState<CourseDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -392,6 +394,15 @@ export default function CourseDetailPage() {
                                   <span className="rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
                                     {exam.qp_type}
                                   </span>
+                                )}
+                                {exam.is_ssa && (
+                                  <button
+                                    type="button"
+                                    onClick={() => navigate(`/academic-v2/student/ssa/${exam.exam_id}`)}
+                                    className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700"
+                                  >
+                                    SSA Submission
+                                  </button>
                                 )}
                               </div>
                             </div>

@@ -231,36 +231,56 @@ class CurriculumDepartmentViewSet(viewsets.ModelViewSet):
             role_names = set()
         if user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists() or bool(role_names & {'IQAC', 'HAA', 'IQAC_HEAD', 'OBE_MASTER'}):
             logger.debug('get_queryset: user is superuser or IQAC/HAA; user=%s groups=%s roles=%s', user.username, [g.name for g in user.groups.all()], role_names)
-            return qs
+            base_qs = qs
+        else:
+            perms = get_user_permissions(user)
+            logger.debug('get_queryset: user=%s computed dept_ids=%r perms=%s', getattr(user, 'username', None), dept_ids, perms)
+            wide_perms = {'curriculum_master_edit', 'curriculum_master_publish', 'CURRICULUM_MASTER_EDIT', 'CURRICULUM_MASTER_PUBLISH', 'obe.master.manage'}
+            if perms & wide_perms:
+                logger.debug('get_queryset: user has wide_perms, returning all; user=%s', user.username)
+                base_qs = qs
+            else:
+                teaching_perms = {
+                    'academics.assign_teaching',
+                    'academics.view_elective_teaching',
+                    'academics.assign_elective_teaching',
+                }
+                if perms & teaching_perms or role_names & {'HOD', 'AHOD'}:
+                    logger.debug('get_queryset: teaching-assignment user, returning all rows; user=%s perms=%s roles=%s', user.username, perms, role_names)
+                    base_qs = qs
+                elif dept_ids:
+                    logger.debug('get_queryset: restricting to departments=%s for user=%s', dept_ids, user.username)
+                    base_qs = qs.filter(department_id__in=dept_ids)
+                else:
+                    logger.debug('get_queryset: no department found, returning none for user=%s', user.username)
+                    return qs.none()
 
-        perms = get_user_permissions(user)
-        logger.debug('get_queryset: user=%s computed dept_ids=%r perms=%s', getattr(user, 'username', None), dept_ids, perms)
-        wide_perms = {'curriculum_master_edit', 'curriculum_master_publish', 'CURRICULUM_MASTER_EDIT', 'CURRICULUM_MASTER_PUBLISH', 'obe.master.manage'}
-        if perms & wide_perms:
-            logger.debug('get_queryset: user has wide_perms, returning all; user=%s', user.username)
-            return qs
+        # Apply query parameter filters if present
+        req = self.request
+        dept_id = req.query_params.get('department_id')
+        regulation = req.query_params.get('regulation')
+        semester = req.query_params.get('semester')
+        batch_id = req.query_params.get('batch_id')
 
-        teaching_perms = {
-            'academics.assign_teaching',
-            'academics.view_elective_teaching',
-            'academics.assign_elective_teaching',
-        }
-        try:
-            role_names = {r.name.upper() for r in user.roles.all()}
-        except Exception:
-            role_names = set()
-        if perms & teaching_perms or role_names & {'HOD', 'AHOD'}:
-            logger.debug('get_queryset: teaching-assignment user, returning all rows; user=%s perms=%s roles=%s', user.username, perms, role_names)
-            return qs
+        if dept_id:
+            try:
+                base_qs = base_qs.filter(department_id=int(dept_id))
+            except Exception:
+                pass
+        if regulation:
+            base_qs = base_qs.filter(regulation=regulation)
+        if semester:
+            try:
+                base_qs = base_qs.filter(semester=int(semester))
+            except Exception:
+                pass
+        if batch_id:
+            try:
+                base_qs = base_qs.filter(Q(batch_id=int(batch_id)) | Q(batch__isnull=True))
+            except Exception:
+                pass
 
-        # If we found a department for the user, restrict to it
-        if dept_ids:
-            logger.debug('get_queryset: restricting to departments=%s for user=%s', dept_ids, user.username)
-            return qs.filter(department_id__in=dept_ids)
-
-        # otherwise no rows
-        logger.debug('get_queryset: no department found, returning none for user=%s', user.username)
-        return qs.none()
+        return base_qs.order_by('semester', 'course_code')
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
@@ -352,6 +372,8 @@ class ElectiveSubjectViewSet(viewsets.ModelViewSet):
         regulation = req.query_params.get('regulation')
         semester = req.query_params.get('semester')
 
+        batch_id = req.query_params.get('batch_id')
+
         if dept_id:
             try:
                 dept_id_int = int(dept_id)
@@ -363,9 +385,11 @@ class ElectiveSubjectViewSet(viewsets.ModelViewSet):
 
                 # Filter electives that either:
                 # 1. Belong directly to this department, OR
-                # 2. Have a department_group that this department is mapped to
+                # 2. Have a parent belonging to this department, OR
+                # 3. Have a department_group that this department is mapped to
                 qs = qs.filter(
                     Q(department_id=dept_id_int) |
+                    Q(parent__department_id=dept_id_int) |
                     Q(department_group_id__in=list(group_ids))
                 )
             except Exception as e:
@@ -377,6 +401,11 @@ class ElectiveSubjectViewSet(viewsets.ModelViewSet):
         if semester:
             try:
                 qs = qs.filter(semester__number=int(semester))
+            except Exception:
+                pass
+        if batch_id:
+            try:
+                qs = qs.filter(Q(batch_id=int(batch_id)) | Q(batch__isnull=True))
             except Exception:
                 pass
         return qs.order_by('semester', 'course_code')

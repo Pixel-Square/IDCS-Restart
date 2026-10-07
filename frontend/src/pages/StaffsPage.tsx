@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react'
-import { Users, Building2, AlertCircle, Edit, UserPlus, Filter, List, Plus, Trash2, Upload, Download } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Users, Building2, AlertCircle, Edit, UserPlus, Filter, List, Plus, Trash2, Upload, Download, GraduationCap } from 'lucide-react'
 import fetchWithAuth from '../services/fetchAuth'
 import StaffFormModal from '../components/StaffFormModal'
 import StaffImportModal from '../components/StaffImportModal'
@@ -639,33 +640,43 @@ export default function StaffsPage() {
                 <p className="text-sm text-gray-600">View staff members by department</p>
               </div>
             </div>
-            {(canEdit || canImport) && (
-              <div className="flex items-center gap-2">
-                {canEdit && (
-                  <button
-                    onClick={() => {
-                      setShuffleModalOpen(true)
-                      setShufflePassword('')
-                      setShuffleError(null)
-                    }}
-                    className="flex items-center space-x-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
-                    title="Shuffle internal IDs"
-                  >
-                    <span className="text-sm font-medium">Shuffle ID</span>
-                  </button>
-                )}
-                {canImport && (
-                  <button
-                    onClick={() => setIsImportModalOpen(true)}
-                    className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
-                    title="Import Staff from Excel/CSV"
-                  >
-                    <Upload className="h-4 w-4" />
-                    <span className="text-sm font-medium">Import Staff</span>
-                  </button>
-                )}
-              </div>
-            )}
+            <div className="flex items-center gap-2">
+              <Link
+                to="/iqac/master-teaching-assignment"
+                className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-all shadow-sm font-medium text-sm"
+                title="Open Master Teaching Assignment (Section & Course Faculty Allocation)"
+              >
+                <GraduationCap className="h-4 w-4" />
+                <span>Master Teaching Assignment</span>
+              </Link>
+              {(canEdit || canImport) && (
+                <>
+                  {canEdit && (
+                    <button
+                      onClick={() => {
+                        setShuffleModalOpen(true)
+                        setShufflePassword('')
+                        setShuffleError(null)
+                      }}
+                      className="flex items-center space-x-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
+                      title="Shuffle internal IDs"
+                    >
+                      <span className="text-sm font-medium">Shuffle ID</span>
+                    </button>
+                  )}
+                  {canImport && (
+                    <button
+                      onClick={() => setIsImportModalOpen(true)}
+                      className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                      title="Import Staff from Excel/CSV"
+                    >
+                      <Upload className="h-4 w-4" />
+                      <span className="text-sm font-medium">Import Staff</span>
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
 

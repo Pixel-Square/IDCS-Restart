@@ -229,6 +229,7 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
       loc.pathname.startsWith('/staffs') ||
       loc.pathname.startsWith('/hod/advisors') ||
       loc.pathname.startsWith('/advisor/teaching') ||
+      loc.pathname.startsWith('/iqac/master-teaching-assignment') ||
       loc.pathname.startsWith('/hod/staff-attendance') ||
       loc.pathname.startsWith('/faculty/attendance')
     ) {
@@ -845,7 +846,9 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
                   loc.pathname.startsWith('/staffs') ||
                   loc.pathname.startsWith('/hod/advisors') ||
                   loc.pathname.startsWith('/advisor/teaching') ||
-                  loc.pathname.startsWith('/hod/staff-attendance')
+                  loc.pathname.startsWith('/iqac/master-teaching-assignment') ||
+                  loc.pathname.startsWith('/hod/staff-attendance') ||
+                  loc.pathname.startsWith('/faculty/attendance')
                 ));
               const groupOpen = isHodGroup
                 ? Boolean(expanded.hod_event_management)
@@ -970,6 +973,13 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
                           <li>
                             <Link to="/staffs" className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/staffs') ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
                               <Users className="w-4 h-4" /> <span>Faculties</span>
+                            </Link>
+                          </li>
+                        )}
+                        {isIqac && (
+                          <li>
+                            <Link to="/iqac/master-teaching-assignment" className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/iqac/master-teaching-assignment') ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                              <GraduationCap className="w-4 h-4" /> <span>Master Teaching Assignment</span>
                             </Link>
                           </li>
                         )}

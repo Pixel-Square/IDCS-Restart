@@ -1202,6 +1202,8 @@ class FacultyWiseAnalyticsView(APIView):
         try:
             auth_ctx = resolve_user_auth_context(request.user)
             scope = get_performance_scope(request.user)
+            if scope.get("is_student"):
+                raise PermissionDenied("Students are not allowed to access faculty analytics.")
             p = request.query_params
             dept_code = clamp_department_param(scope, p.get("dept", "").strip())
             req_batch = p.get("year", "").strip()
@@ -1526,7 +1528,108 @@ class ClassAdvisorDeepDiveView(APIView):
 class RangeAnalysisView(APIView):
     permission_classes = [permissions.AllowAny]
     def post(self, request):
-        return Response({}, status=status.HTTP_200_OK)
+        try:
+            auth_ctx = resolve_user_auth_context(request.user)
+            scope = get_performance_scope(request.user)
+            p = request.query_params
+            dept_code = clamp_department_param(scope, p.get("dept", "").strip())
+            req_batch = p.get("year", "").strip()
+            req_sem = p.get("sem", "").strip()
+            req_sec = p.get("section", "").strip()
+            req_exam = (p.get("exam", "").strip() or "All Assessments")
+            
+            ranges = request.data.get("ranges", [
+                {"min": 0, "max": 10, "label": "0-10"},
+                {"min": 11, "max": 20, "label": "11-20"},
+                {"min": 21, "max": 30, "label": "21-30"},
+                {"min": 31, "max": 40, "label": "31-40"},
+                {"min": 41, "max": 50, "label": "41-50"},
+                {"min": 51, "max": 60, "label": "51-60"},
+                {"min": 61, "max": 70, "label": "61-70"},
+                {"min": 71, "max": 80, "label": "71-80"},
+                {"min": 81, "max": 90, "label": "81-90"},
+                {"min": 91, "max": 100, "label": "91-100"},
+            ])
+
+            from OBE.models import (
+                Cia1Mark, Cia2Mark, Ssa1Mark, Ssa2Mark, Review1Mark, Review2Mark,
+                Formative1Mark, Formative2Mark, ModelExamMark, LabExamMark, FinalInternalMark,
+            )
+            assessment_registry = [
+                ("CIA 1", Cia1Mark, "mark"),
+                ("CIA 2", Cia2Mark, "mark"),
+                ("SSA 1", Ssa1Mark, "mark"),
+                ("SSA 2", Ssa2Mark, "mark"),
+                ("Review 1", Review1Mark, "mark"),
+                ("Review 2", Review2Mark, "mark"),
+                ("Formative 1", Formative1Mark, "total"),
+                ("Formative 2", Formative2Mark, "total"),
+                ("Model Exam", ModelExamMark, "total_mark"),
+                ("Lab Exam", LabExamMark, "total_mark"),
+                ("Final Internal", FinalInternalMark, "final_mark"),
+            ]
+            
+            registry_by_name = {name: (M, f) for name, M, f in assessment_registry}
+            selected_name = req_exam if req_exam in registry_by_name else None
+            scan = [(selected_name, *registry_by_name[selected_name])] if selected_name else assessment_registry
+
+            # Build marks Q
+            _mkq = allowed_mark_student_q(scope)
+            base_q = _mkq if _mkq is not None else Q()
+            if dept_code:
+                base_q &= get_mark_dept_q(dept_code)
+            if req_batch:
+                base_q &= (Q(student__batch=req_batch) | Q(student__section__batch__name=req_batch))
+            if req_sec:
+                base_q &= Q(student__section__name__iexact=req_sec)
+            if req_sem:
+                try:
+                    base_q &= Q(student__section__semester__number=int(req_sem))
+                except Exception:
+                    pass
+
+            # Dict to store mark counts per subject per range
+            subject_distributions = {} # { subject_id: { range_label: count } }
+            subject_info = {} # { subject_id: name/code }
+            
+            for _name, M, _field in scan:
+                qs = M.objects.filter(base_q).exclude(**{_field + "__isnull": True}).select_related("subject")
+                ref = qs.aggregate(m=Max(_field))["m"]
+                if not ref or float(ref) <= 0:
+                    continue
+                ref = float(ref)
+                
+                for sid, val, subj_id, subj_code, subj_name in qs.values_list("student_id", _field, "subject_id", "subject__code", "subject__name"):
+                    if not subj_id:
+                        continue
+                    pct = (float(val) / ref) * 100.0
+                    
+                    if subj_id not in subject_distributions:
+                        subject_distributions[subj_id] = { r["label"]: 0 for r in ranges }
+                        subject_info[subj_id] = subj_name or subj_code or str(subj_id)
+                        
+                    for r in ranges:
+                        # Upper bound inclusion
+                        if r["min"] <= pct <= r["max"]:
+                            subject_distributions[subj_id][r["label"]] += 1
+                            break
+
+            # Convert to chart format
+            # We want an array of objects, one for each range label, and each subject as a key with its count
+            chart_data = []
+            for r in ranges:
+                row = { "name": r["label"] }
+                for subj_id, dist in subject_distributions.items():
+                    subj_label = subject_info[subj_id]
+                    row[subj_label] = dist[r["label"]]
+                chart_data.append(row)
+                
+            return Response({
+                "chart_data": chart_data,
+                "subjects": list(set(subject_info.values()))
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 def parse_multi_param(param_val):
@@ -1543,6 +1646,8 @@ class ComparisonPerformanceAnalyticsView(APIView):
             auth_ctx = resolve_user_auth_context(request.user)
             # Server-side scope: authorized dataset first, then user filters.
             scope = get_performance_scope(request.user)
+            if scope.get("is_student"):
+                raise PermissionDenied("Students are not allowed to access comparison data.")
             params = request.query_params
 
             # Read multi-select arrays
@@ -2161,7 +2266,7 @@ class StudentReportPDFView(APIView):
         sem_lbl = str(student.section.semester.number) if (student.section and student.section.semester) else 'N/A'
         ay_lbl = student.batch or (student.section.batch.name if (student.section and student.section.batch) else 'N/A')
         full_name = student.user.get_full_name() or student.user.username
-git status --short        reg_no = student.reg_no or str(student.id)
+        reg_no = student.reg_no or str(student.id)
 
         info_data = [
             ['Student Name:', full_name, 'Register No:', reg_no],
@@ -2286,5 +2391,352 @@ git status --short        reg_no = student.reg_no or str(student.id)
         filename = f"Academic_Performance_{reg_token}.pdf"
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
+
+
+class SectionReportDetailView(APIView):
+    """
+    Comprehensive Section Performance Report & Bell Graph Analytics.
+    Provides:
+    1. Section metadata & Active Advisor details (read-only).
+    2. Curriculum courses list with assigned teaching faculty (read-only).
+    3. Overall section bell graph distribution across all courses.
+    4. Cycle-wise bell graph distribution for each assessment cycle.
+    5. Individual exam assignment bell graphs.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, section_id):
+        from django.shortcuts import get_object_or_404
+        from academics.models import Section, SectionAdvisor, TeachingAssignment, StudentSectionAssignment
+        from academic_v2.models import AcV2Section, AcV2ExamAssignment, AcV2StudentMark, AcV2Cycle
+        from curriculum.models import CurriculumDepartment
+
+        sec = get_object_or_404(Section, id=section_id)
+
+        # 1. Section basic info
+        dept_obj = getattr(sec, 'department', None) or getattr(getattr(sec, 'batch', None), 'department', None)
+        dept_name = getattr(dept_obj, 'name', '—') if dept_obj else '—'
+        dept_code = getattr(dept_obj, 'code', '—') if dept_obj else '—'
+        batch_name = getattr(getattr(sec, 'batch', None), 'name', '—')
+        reg_code = getattr(getattr(sec, 'batch_regulation', None), 'code', None) or getattr(getattr(sec, 'batch', None), 'regulation', '—') or '—'
+        student_count = StudentSectionAssignment.objects.filter(section=sec, end_date__isnull=True).count()
+        sem_number = sec.semester.number if sec.semester else None
+
+        section_info = {
+            'id': sec.id,
+            'name': sec.name,
+            'department_id': getattr(sec, 'department_id', None) or (dept_obj.id if dept_obj else None),
+            'department_name': str(dept_name or '—'),
+            'department_code': str(dept_code or '—'),
+            'semester': sem_number,
+            'batch_name': str(batch_name),
+            'regulation': str(reg_code),
+            'total_students': student_count,
+        }
+
+        # 2. Advisor details
+        advisor_mapping = SectionAdvisor.objects.filter(section=sec, is_active=True).select_related('advisor__user', 'advisor__department').first()
+        advisor_info = None
+        if advisor_mapping and advisor_mapping.advisor:
+            adv_staff = advisor_mapping.advisor
+            user = adv_staff.user
+            full_name = f"{getattr(user, 'first_name', '')} {getattr(user, 'last_name', '')}".strip() or getattr(user, 'username', adv_staff.staff_id)
+            advisor_info = {
+                'id': adv_staff.id,
+                'staff_id': adv_staff.staff_id,
+                'name': full_name,
+                'email': getattr(user, 'email', ''),
+                'department': getattr(getattr(adv_staff, 'department', None), 'code', '') or getattr(getattr(adv_staff, 'department', None), 'name', ''),
+            }
+
+        # 3. Teaching Assignments & Courses (strictly for the active semester)
+        from academics.models import Semester
+        sem_number = sec.semester.number if sec.semester else None
+        active_semester_id = sec.semester_id
+
+        if not active_semester_id and sem_number:
+            sem_match = Semester.objects.filter(number=sem_number).first()
+            if sem_match:
+                active_semester_id = sem_match.id
+
+        # Query all active teaching assignments for the section
+        tas = TeachingAssignment.objects.filter(section=sec, is_active=True).select_related(
+            'curriculum_row', 'curriculum_row__semester', 'staff__user', 'staff__department', 'academic_year'
+        )
+
+        ta_by_course = {}
+        for ta in tas:
+            cr = ta.curriculum_row
+            if not cr:
+                continue
+            # Strictly ensure curriculum row belongs to the section's active semester
+            cr_sem_id = cr.semester_id
+            cr_sem_num = getattr(getattr(cr, 'semester', None), 'number', None)
+            if active_semester_id and cr_sem_id and cr_sem_id != active_semester_id:
+                if not (sem_number and cr_sem_num == sem_number):
+                    continue
+            elif sem_number and cr_sem_num and cr_sem_num != sem_number:
+                continue
+
+            cr_id = cr.id
+            ta_by_course.setdefault(cr_id, []).append(ta)
+
+        batch = getattr(sec, 'batch', None)
+        course = getattr(batch, 'course', None) if batch else None
+        dept_id = None
+        if course and getattr(course, 'department_id', None):
+            dept_id = course.department_id
+        elif batch and getattr(batch, 'department_id', None):
+            dept_id = batch.department_id
+        elif getattr(sec, 'managing_department_id', None):
+            dept_id = sec.managing_department_id
+
+        # Fetch curriculum rows strictly for the section's active semester
+        cr_qs = CurriculumDepartment.objects.none()
+        if active_semester_id:
+            cr_qs = CurriculumDepartment.objects.filter(semester_id=active_semester_id)
+        elif sem_number:
+            cr_qs = CurriculumDepartment.objects.filter(semester__number=sem_number)
+
+        if dept_id:
+            cr_qs = cr_qs.filter(department_id=dept_id)
+        if reg_code and reg_code != '—':
+            cr_qs = cr_qs.filter(regulation=reg_code)
+
+        curriculum_courses = []
+        seen_cr_ids = set()
+
+        for cr_id, ta_list in ta_by_course.items():
+            first_ta = ta_list[0]
+            cr = first_ta.curriculum_row
+            seen_cr_ids.add(cr_id)
+            course_code = (cr.course_code if cr else '') or ''
+            course_name = (cr.course_name if cr else '') or 'Unnamed Course'
+
+            assigned_staff = []
+            for t in ta_list:
+                if t.staff:
+                    u = t.staff.user
+                    st_name = f"{getattr(u, 'first_name', '')} {getattr(u, 'last_name', '')}".strip() or t.staff.staff_id
+                    st_dept = getattr(getattr(t.staff, 'department', None), 'code', '')
+                    assigned_staff.append({
+                        'id': t.staff.id,
+                        'staff_id': t.staff.staff_id,
+                        'name': st_name,
+                        'department': st_dept,
+                    })
+
+            curriculum_courses.append({
+                'course_id': cr_id,
+                'course_code': course_code,
+                'course_name': course_name,
+                'category': getattr(cr, 'category', 'Core') or 'Core',
+                'class_type': getattr(cr, 'class_type', 'THEORY') or 'THEORY',
+                'qp_type': getattr(cr, 'question_paper_type', '') or '',
+                'credits': f"{getattr(cr, 'l', 0)}-{getattr(cr, 't', 0)}-{getattr(cr, 'p', 0)}-{getattr(cr, 's', 0)} ({getattr(cr, 'c', 0)})" if cr else '—',
+                'assigned_staff': assigned_staff,
+                'ta_ids': [t.id for t in ta_list],
+            })
+
+        for cr in cr_qs:
+            if cr.id not in seen_cr_ids:
+                seen_cr_ids.add(cr.id)
+                curriculum_courses.append({
+                    'course_id': cr.id,
+                    'course_code': cr.course_code or '—',
+                    'course_name': cr.course_name or '—',
+                    'category': cr.category or 'Core',
+                    'class_type': cr.class_type or 'THEORY',
+                    'qp_type': cr.question_paper_type or '',
+                    'credits': f"{cr.l or 0}-{cr.t or 0}-{cr.p or 0}-{cr.s or 0} ({cr.c or 0})",
+                    'assigned_staff': [],
+                    'ta_ids': [],
+                })
+
+        curriculum_courses.sort(key=lambda c: c['course_code'])
+
+        # 4. Gather Marks and compute Bell Curves
+        BELL_RANGES = [
+            {'label': '0–9',    'min': 0,  'max': 9},
+            {'label': '10–19',  'min': 10, 'max': 19},
+            {'label': '20–29',  'min': 20, 'max': 29},
+            {'label': '30–39',  'min': 30, 'max': 39},
+            {'label': '40–44',  'min': 40, 'max': 44},
+            {'label': '45–49',  'min': 45, 'max': 49},
+            {'label': '50–54',  'min': 50, 'max': 54},
+            {'label': '55–59',  'min': 55, 'max': 59},
+            {'label': '60–69',  'min': 60, 'max': 69},
+            {'label': '70–79',  'min': 70, 'max': 79},
+            {'label': '80–89',  'min': 80, 'max': 89},
+            {'label': '90–100', 'min': 90, 'max': 100},
+        ]
+
+        def compute_distribution(scores):
+            valid = [float(s) for s in scores if s is not None and not (isinstance(s, float) and (s < 0 or s > 100))]
+            counts = {r['label']: 0 for r in BELL_RANGES}
+            for v in valid:
+                for r in BELL_RANGES:
+                    if r['min'] <= v <= r['max']:
+                        counts[r['label']] += 1
+                        break
+            tot = len(valid)
+            return {
+                'range_counts': [{'label': r['label'], 'count': counts[r['label']]} for r in BELL_RANGES],
+                'total_students': tot,
+                'class_average': round(sum(valid) / tot, 1) if tot > 0 else 0.0,
+                'highest': round(max(valid), 1) if tot > 0 else 0.0,
+                'lowest': round(min(valid), 1) if tot > 0 else 0.0,
+                'pass_rate': round((sum(1 for v in valid if v >= 50) / tot) * 100, 1) if tot > 0 else 0.0,
+            }
+
+        cycle_keys = ['Cycle 1', 'Cycle 2', 'Model Exam']
+        cycles_db = list(AcV2Cycle.objects.filter(is_active=True).order_by('order').values_list('name', flat=True))
+        if cycles_db:
+            # deduplicate while preserving order
+            seen_c = set()
+            clean_cycles = []
+            for c_name in cycles_db:
+                if c_name not in seen_c:
+                    seen_c.add(c_name)
+                    clean_cycles.append(c_name)
+            if clean_cycles:
+                cycle_keys = clean_cycles
+
+        course_overall_map = {}
+        course_cycle_map = {c: {} for c in cycle_keys}
+        exam_bell_graphs = []
+
+        all_section_student_scores = []
+
+        for c in curriculum_courses:
+            c_code = c['course_code']
+            c_name = c['course_name']
+            ta_ids = c['ta_ids']
+
+            ac_sections = AcV2Section.objects.filter(teaching_assignment_id__in=ta_ids)
+            exam_assignments = list(AcV2ExamAssignment.objects.filter(section__in=ac_sections))
+
+            student_exam_scores = {}
+            cycle_student_scores = {ck: {} for ck in cycle_keys}
+
+            for ea in exam_assignments:
+                ea_name = (ea.exam_display_name or ea.exam or '').upper()
+                target_cycle = cycle_keys[0]
+                if any(k in ea_name for k in ['CYCLE 2', 'CIA 2', 'FORMATIVE 2', 'SSA 2', 'REVIEW 2']):
+                    target_cycle = 'Cycle 2' if 'Cycle 2' in cycle_keys else cycle_keys[min(1, len(cycle_keys)-1)]
+                elif any(k in ea_name for k in ['MODEL', 'CYCLE 3', 'REVIEW 3']):
+                    target_cycle = 'Model Exam' if 'Model Exam' in cycle_keys else ('Model' if 'Model' in cycle_keys else cycle_keys[-1])
+                elif any(k in ea_name for k in ['END SEM', 'SEMESTER']):
+                    target_cycle = 'End Semester' if 'End Semester' in cycle_keys else cycle_keys[-1]
+                else:
+                    target_cycle = 'Cycle 1' if 'Cycle 1' in cycle_keys else cycle_keys[0]
+
+                marks = AcV2StudentMark.objects.filter(exam_assignment=ea)
+                exam_student_scores = []
+                max_m = float(ea.max_marks or 100)
+                if max_m <= 0:
+                    max_m = 100.0
+
+                for sm in marks:
+                    if sm.is_absent or sm.total_mark is None:
+                        continue
+                    pct = max(0.0, min(100.0, (float(sm.total_mark) / max_m) * 100.0))
+                    exam_student_scores.append(pct)
+                    student_exam_scores.setdefault(sm.student_id, []).append(pct)
+                    if target_cycle in cycle_student_scores:
+                        cycle_student_scores[target_cycle].setdefault(sm.student_id, []).append(pct)
+
+                if exam_student_scores:
+                    dist = compute_distribution(exam_student_scores)
+                    exam_bell_graphs.append({
+                        'exam_id': str(ea.id),
+                        'course_id': c['course_id'],
+                        'course_code': c_code,
+                        'course_name': c_name,
+                        'exam_name': ea.exam,
+                        'display_name': ea.exam_display_name or ea.exam,
+                        'cycle_name': target_cycle,
+                        'max_marks': float(ea.max_marks),
+                        'weight': float(ea.weight),
+                        'assigned_staff': c['assigned_staff'],
+                        'distribution': dist['range_counts'],
+                        'total_students': dist['total_students'],
+                        'class_average': dist['class_average'],
+                        'highest': dist['highest'],
+                        'lowest': dist['lowest'],
+                        'pass_rate': dist['pass_rate'],
+                    })
+
+            course_student_averages = []
+            for s_id, pcts in student_exam_scores.items():
+                if pcts:
+                    avg_score = sum(pcts) / len(pcts)
+                    course_student_averages.append(avg_score)
+                    all_section_student_scores.append(avg_score)
+
+            course_overall_map[c_code] = {
+                'course_id': c['course_id'],
+                'course_code': c_code,
+                'course_name': c_name,
+                'assigned_staff': c['assigned_staff'],
+                **compute_distribution(course_student_averages)
+            }
+
+            for ck in cycle_keys:
+                c_scores = []
+                for s_id, pcts in cycle_student_scores.get(ck, {}).items():
+                    if pcts:
+                        c_scores.append(sum(pcts) / len(pcts))
+                course_cycle_map[ck][c_code] = {
+                    'course_id': c['course_id'],
+                    'course_code': c_code,
+                    'course_name': c_name,
+                    'assigned_staff': c['assigned_staff'],
+                    **compute_distribution(c_scores)
+                }
+
+        section_overall_dist = compute_distribution(all_section_student_scores)
+
+        overall_chart_data = []
+        for r_idx, r in enumerate(BELL_RANGES):
+            row = {'range': r['label']}
+            for c in curriculum_courses:
+                code = c['course_code']
+                dist_obj = course_overall_map.get(code)
+                val = dist_obj['range_counts'][r_idx]['count'] if dist_obj else 0
+                row[code] = val
+            overall_chart_data.append(row)
+
+        cycle_charts_data = {}
+        for ck in cycle_keys:
+            cycle_chart = []
+            for r_idx, r in enumerate(BELL_RANGES):
+                row = {'range': r['label']}
+                for c in curriculum_courses:
+                    code = c['course_code']
+                    dist_obj = course_cycle_map.get(ck, {}).get(code)
+                    val = dist_obj['range_counts'][r_idx]['count'] if dist_obj else 0
+                    row[code] = val
+                cycle_chart.append(row)
+            cycle_charts_data[ck] = cycle_chart
+
+        return Response({
+            'section': section_info,
+            'advisor': advisor_info,
+            'courses': curriculum_courses,
+            'bell_ranges': [r['label'] for r in BELL_RANGES],
+            'cycles': cycle_keys,
+            'overall': {
+                'chart_data': overall_chart_data,
+                'stats': section_overall_dist,
+                'course_stats': list(course_overall_map.values()),
+            },
+            'cycle_wise': {
+                'charts_data': cycle_charts_data,
+                'course_stats': course_cycle_map,
+            },
+            'exam_assignments': exam_bell_graphs,
+        })
+
 
 

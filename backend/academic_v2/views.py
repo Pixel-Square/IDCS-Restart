@@ -2176,6 +2176,7 @@ def student_my_course_detail(request, ta_id: int):
             'exam_id': str(ea.id),
             'exam': ea.exam,
             'exam_display': ea.exam_display_name or ea.exam,
+            'is_ssa': str(ea.exam).replace(' ', '').replace('_', '').replace('-', '').upper() in ('SSA1', 'SSA2'),
             'qp_type': ea.qp_type or '',
             'max_marks': round(max_marks, 2),
             'weight': round(weight, 2),
@@ -7720,6 +7721,27 @@ def faculty_course_co_summary(request, ta_id):
                     for co in co_list:
                         co_max_map[co] = co_max_map.get(co, 0) + split_max
 
+            # Build per-CO exam max maps (split max for raw columns and un-split total max for weight calculation)
+            exam_co_max_map = {}
+            exam_co_total_max = {}
+            if cia_enabled:
+                if exam_q_indices:
+                    for idx in exam_q_indices:
+                        q_cos = _extract_co_list(qp_cos[idx]) if idx < len(qp_cos) else []
+                        q_max = float(qp_marks[idx] or 0) if idx < len(qp_marks) else 0.0
+                        if not q_cos:
+                            q_cos = [int(c) for c in covered_cos if 1 <= int(c) <= co_count]
+                        if q_cos and q_max > 0:
+                            split_m = q_max / len(q_cos)
+                            for co in q_cos:
+                                exam_co_max_map[co] = exam_co_max_map.get(co, 0.0) + split_m
+                                exam_co_total_max[co] = exam_co_total_max.get(co, 0.0) + q_max
+                elif exam_max_marks > 0 and covered_cos:
+                    split_m = exam_max_marks / len(covered_cos)
+                    for co in covered_cos:
+                        exam_co_max_map[co] = split_m
+                        exam_co_total_max[co] = exam_max_marks
+
 
 
         # weight_per_co: for even split fallback when no per-CO weights defined
@@ -7820,6 +7842,7 @@ def faculty_course_co_summary(request, ta_id):
             'cia_weight': cia_weight,  # Weight for Exam component from Mark Manager
             'cia_weight_per_co': cia_weight_per_co,
             'exam_max_marks': exam_max_marks,
+            'exam_co_max_map': {str(k): round(v, 2) for k, v in exam_co_max_map.items()} if cia_enabled else {},
             'covered_cos': covered_cos,
             'weight_per_co': weight_per_co,
             'max_per_co': max_per_co,
@@ -7837,6 +7860,8 @@ def faculty_course_co_summary(request, ta_id):
             '_exam_q_index': exam_q_index,
             '_exam_q_indices': exam_q_indices,
             '_qp_marks': qp_marks if isinstance(qp_marks, list) else [],
+            '_exam_co_total_max': exam_co_total_max,
+            '_exam_co_max_map': exam_co_max_map,
         }
         if ea_kind == 'cqi' and isinstance(cqi_sub, dict):
             internal['_cqi_sub'] = cqi_sub
@@ -8078,17 +8103,39 @@ def faculty_course_co_summary(request, ta_id):
                 # Exam split (only when Mark Manager Exam is enabled)
                 if einfo.get('cia_enabled'):
                     raw_exam = 0.0
+                    exam_co_raw = {c: 0.0 for c in range(1, co_count + 1)}
                     exam_indices = einfo.get('_exam_q_indices') or []
-                    if isinstance(exam_indices, list) and exam_indices:
+                    if not exam_indices and isinstance(einfo.get('_exam_q_index'), int) and einfo['_exam_q_index'] >= 0:
+                        exam_indices = [einfo['_exam_q_index']]
+
+                    if exam_indices:
                         for idx in exam_indices:
                             v = qmarks.get(_qkey(idx), 0) or 0
-                            if isinstance(v, (int, float)):
-                                raw_exam += float(v)
-                    elif isinstance(einfo.get('_exam_q_index'), int) and einfo['_exam_q_index'] >= 0:
-                        v = qmarks.get(_qkey(einfo['_exam_q_index']), 0) or 0
-                        if isinstance(v, (int, float)):
-                            raw_exam = float(v)
+                            v_num = float(v) if isinstance(v, (int, float)) else 0.0
+                            raw_exam += v_num
+                            q_cos = _extract_cos(qp_cos_local[idx]) if idx < len(qp_cos_local) else []
+                            if not q_cos:
+                                q_cos = [int(c) for c in (einfo.get('cia_cos') or einfo.get('covered_cos') or []) if 1 <= int(c) <= co_count]
+                            if v_num > 0 and q_cos:
+                                share = v_num / len(q_cos)
+                                for c in q_cos:
+                                    if 1 <= c <= co_count:
+                                        exam_co_raw[c] += share
+                    else:
+                        v = sm.total_mark if sm else 0
+                        v_num = float(v or 0)
+                        raw_exam = v_num
+                        cia_cos_list = [int(c) for c in (einfo.get('cia_cos') or einfo.get('covered_cos') or []) if 1 <= int(c) <= co_count]
+                        if cia_cos_list:
+                            share = v_num / len(cia_cos_list)
+                            for c in cia_cos_list:
+                                exam_co_raw[c] += share
+
                     exam_entry['exam'] = round(raw_exam, 2)
+                    exam_entry['exam_co_raw'] = {str(c): round(exam_co_raw[c], 2) for c in range(1, co_count + 1)}
+                    for c in range(1, co_count + 1):
+                        exam_entry[f'exam_co{c}'] = round(exam_co_raw[c], 2)
+                        exam_entry[f'exam_CO{c}'] = round(exam_co_raw[c], 2)
                     exam_raw_for_split = float(raw_exam or 0)
 
                     covered = einfo.get('covered_cos') or []
@@ -8097,6 +8144,10 @@ def faculty_course_co_summary(request, ta_id):
                     # Ensure the key exists for UI columns when configured
                     if einfo.get('cia_enabled'):
                         exam_entry['exam'] = 0
+                        exam_entry['exam_co_raw'] = {str(c): 0.0 for c in range(1, co_count + 1)}
+                        for c in range(1, co_count + 1):
+                            exam_entry[f'exam_co{c}'] = 0.0
+                            exam_entry[f'exam_CO{c}'] = 0.0
 
                 # What we show in the table (direct-only)
                 direct_raw = co_totals_direct
@@ -8138,6 +8189,10 @@ def faculty_course_co_summary(request, ta_id):
                 # If Mark Manager Exam is enabled, still expose exam key for UI
                 if einfo.get('cia_enabled'):
                     exam_entry['exam'] = 0
+                    exam_entry['exam_co_raw'] = {str(c): 0.0 for c in range(1, co_count + 1)}
+                    for c in range(1, co_count + 1):
+                        exam_entry[f'exam_co{c}'] = 0.0
+                        exam_entry[f'exam_CO{c}'] = 0.0
                 # Fallback for non-QP single-mark exams: distribute total_mark evenly
                 # across covered COs so they appear in CO Summary instead of showing 0.
                 if sm and not sm.is_absent and sm.total_mark is not None and not einfo.get('_qp_cos'):
@@ -8239,47 +8294,67 @@ def faculty_course_co_summary(request, ta_id):
                     exam_indices = einfo.get('_exam_q_indices') or []
                     if not exam_indices and isinstance(einfo.get('_exam_q_index'), int) and einfo['_exam_q_index'] >= 0:
                         exam_indices = [einfo['_exam_q_index']]
+                    exam_co_total_max = einfo.get('_exam_co_total_max') or {}
 
                     # Initialize all COs to 0.0 for this exam's purple weighted_marks
                     for c in range(1, co_count + 1):
                         wm_key = f"{einfo['id']}_exam_CO{c}"
                         student_entry['weighted_marks'][wm_key] = 0.0
 
-                    if exam_weight_local > 0 and exam_indices:
-                        for idx in exam_indices:
-                            v = qmarks.get(_qkey(idx), 0) or 0
-                            v_num = float(v) if isinstance(v, (int, float)) else 0.0
-                            q_max = float(qp_marks_local[idx] or 0) if idx < len(qp_marks_local) else 0.0
-                            if q_max <= 0:
-                                q_max = float(exam_max_marks_local or 50.0)
-                            q_cos = _extract_cos(qp_cos_local[idx]) if idx < len(qp_cos_local) else []
-                            if not q_cos:
-                                q_cos = [int(c) for c in (einfo.get('cia_cos') or einfo.get('covered_cos') or []) if 1 <= int(c) <= co_count]
-                            if not q_cos:
-                                continue
+                    if exam_weight_local > 0:
+                        covered = einfo.get('covered_cos') or list(range(1, co_count + 1))
+                        num_covered = len([c for c in covered if 1 <= int(c) <= co_count]) or 1
 
-                            # Weight share for this specific exam question
-                            if exam_max_marks_local > 0:
-                                q_wt = (q_max / exam_max_marks_local) * exam_weight_local
-                            else:
-                                q_wt = exam_weight_local / len(exam_indices)
-
+                        # Target exam weight per CO
+                        target_wt_map = {}
+                        for c in range(1, co_count + 1):
                             if per_co_local:
-                                share_raw = v_num
-                                share_max = q_max
-                                share_wt = q_wt
+                                target_wt_map[c] = exam_weight_local
                             else:
-                                share_raw = v_num / len(q_cos)
-                                share_max = q_max / len(q_cos)
-                                share_wt = q_wt / len(q_cos)
+                                target_wt_map[c] = exam_weight_local / num_covered
 
-                            if share_max > 0 and share_wt > 0:
+                        if exam_indices:
+                            co_exam_weighted = {c: 0.0 for c in range(1, co_count + 1)}
+                            for idx in exam_indices:
+                                v = qmarks.get(_qkey(idx), 0) or 0
+                                v_num = float(v) if isinstance(v, (int, float)) else 0.0
+                                if v_num <= 0:
+                                    continue
+                                q_cos = _extract_cos(qp_cos_local[idx]) if idx < len(qp_cos_local) else []
+                                if not q_cos:
+                                    q_cos = [int(c) for c in (einfo.get('cia_cos') or einfo.get('covered_cos') or []) if 1 <= int(c) <= co_count]
+                                if not q_cos:
+                                    continue
+
                                 for c in q_cos:
                                     if 1 <= c <= co_count:
-                                        add_w = round((share_raw / share_max) * share_wt, 2)
+                                        co_max_for_c = float(exam_co_total_max.get(c, 0.0))
+                                        if co_max_for_c <= 0:
+                                            co_max_for_c = float(qp_marks_local[idx] or 0) if idx < len(qp_marks_local) else 0.0
+                                        if co_max_for_c <= 0:
+                                            co_max_for_c = exam_max_marks_local or 50.0
+
+                                        w_c = target_wt_map.get(c, 0.0)
+                                        if co_max_for_c > 0 and w_c > 0:
+                                            co_exam_weighted[c] += (v_num / co_max_for_c) * w_c
+
+                            for c in range(1, co_count + 1):
+                                if co_exam_weighted[c] > 0:
+                                    add_w = round(co_exam_weighted[c], 2)
+                                    student_entry['co_totals'][c - 1] += add_w
+                                    wm_key = f"{einfo['id']}_exam_CO{c}"
+                                    student_entry['weighted_marks'][wm_key] = add_w
+                        else:
+                            # Fallback for single exam without question breakdown
+                            v_num = float(sm.total_mark or 0) if sm else 0.0
+                            if v_num > 0 and exam_max_marks_local > 0:
+                                for c in range(1, co_count + 1):
+                                    if c in covered:
+                                        w_c = target_wt_map.get(c, 0.0)
+                                        add_w = round((v_num / exam_max_marks_local) * w_c, 2)
                                         student_entry['co_totals'][c - 1] += add_w
                                         wm_key = f"{einfo['id']}_exam_CO{c}"
-                                        student_entry['weighted_marks'][wm_key] = round(student_entry['weighted_marks'].get(wm_key, 0.0) + add_w, 2)
+                                        student_entry['weighted_marks'][wm_key] = add_w
 
         # Apply CQI exam(s) after non-CQI totals are known.
         if pending_cqi:

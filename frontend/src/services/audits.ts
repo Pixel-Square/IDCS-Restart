@@ -203,6 +203,9 @@ export const fetchAuditATR = (assignId: number) =>
 export const saveAuditATR = (assignId: number, data: any) =>
   req(`${BASE}/assignments/${assignId}/atr/`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) });
 
+export const allowEditAuditATR = (assignId: number) =>
+  req(`${BASE}/assignments/${assignId}/atr/allow-edit/`, { method: 'POST' });
+
 export const fetchAuditConsolidated = (cycle?: string): Promise<AuditConsolidated[]> => {
   const url = cycle ? `${BASE}/consolidated/?cycle=${encodeURIComponent(cycle)}` : `${BASE}/consolidated/`;
   return req(url).then((d) => d?.results ?? d ?? []);

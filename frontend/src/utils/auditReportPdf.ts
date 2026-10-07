@@ -1,6 +1,8 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-
+import newBannerSrc from '../assets/new_banner.png';
+import krLogoSrc from '../assets/krlogo.png';
+import idcsLogoSrc from '../assets/idcs-logo.png';
 // ─── Types matching backend build_question_rows() output ──────────────────────
 
 export interface AuditReportQuestion {
@@ -93,40 +95,111 @@ function qAtrStatus(q: AuditReportQuestion): string {
   return (q.atr_status || '').trim() || '—';
 }
 
-function addHeader(doc: jsPDF, title: string, subtitle: string) {
-  const pageW = doc.internal.pageSize.getWidth();
+async function toBase64(src: string): Promise<string> {
+  const res = await fetch(src);
+  const blob = await res.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
 
-  // Top color bar
-  doc.setFillColor(30, 64, 175); // blue-800
-  doc.rect(0, 0, pageW, 16, 'F');
+async function imgSize(b64: string): Promise<{ w: number; h: number }> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    img.onerror = () => resolve({ w: 1, h: 1 });
+    img.src = b64;
+  });
+}
 
-  // Title
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.setTextColor(255, 255, 255);
-  doc.text('Academic Audit Report', pageW / 2, 10, { align: 'center' });
+/** Preload header assets and return a synchronous addHeader function */
+async function createHeaderBuilder() {
+  const [b64NewBanner, b64Kr, b64Idcs] = await Promise.all([
+    toBase64(newBannerSrc).catch(() => ''),
+    toBase64(krLogoSrc).catch(() => ''),
+    toBase64(idcsLogoSrc).catch(() => ''),
+  ]);
 
-  // Subtitle row
-  doc.setFillColor(239, 246, 255); // blue-50
-  doc.rect(0, 16, pageW, 10, 'F');
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.setTextColor(30, 64, 175);
-  doc.text(title, 14, 22);
-  doc.text(subtitle, pageW - 14, 22, { align: 'right' });
+  const HEADER_H = 26;
+  const logoH2 = 18;
+  const logoW2 = 22;
 
-  doc.setTextColor(0, 0, 0);
-  return 30; // y cursor after header
+  let bw = 1, bh = 1, kw = 1, kh = 1, iw = 1, ih = 1;
+  if (b64NewBanner) { const s = await imgSize(b64NewBanner); bw = s.w; bh = s.h; }
+  if (b64Kr) { const s = await imgSize(b64Kr); kw = s.w; kh = s.h; }
+  if (b64Idcs) { const s = await imgSize(b64Idcs); iw = s.w; ih = s.h; }
+
+  return function addHeader(doc: jsPDF, title: string, subtitle: string, isConsolidated: boolean = false) {
+    const pageW = doc.internal.pageSize.getWidth();
+    const margin = 10;
+    const ML = margin;
+    const MR = margin;
+    const UW = pageW - ML - MR;
+    let curY = 10;
+
+    if (b64NewBanner) {
+      const bannerAR = bw / bh;
+      const bannerDrawW = Math.min(UW * 0.90, bannerAR * HEADER_H);
+      doc.addImage(b64NewBanner, 'PNG', ML, curY, bannerDrawW, HEADER_H);
+    }
+    
+    const logoGap2 = 4;
+    const logosBlockW = logoW2 * 2 + logoGap2;
+    const logosX = pageW - MR - logosBlockW;
+    
+    if (b64Kr) {
+      const kDrawH = Math.min(logoH2, (kh / kw) * logoW2);
+      const kDrawY = curY + (HEADER_H - kDrawH) / 2;
+      doc.addImage(b64Kr, 'PNG', logosX, kDrawY, logoW2, kDrawH);
+    }
+    if (b64Idcs) {
+      const iDrawH = Math.min(logoH2, (ih / iw) * logoW2);
+      const iDrawY = curY + (HEADER_H - iDrawH) / 2;
+      doc.addImage(b64Idcs, 'PNG', logosX + logoW2 + logoGap2, iDrawY, logoW2, iDrawH);
+    }
+    
+    curY += HEADER_H + 2;
+    doc.setDrawColor(30, 58, 95);
+    doc.setLineWidth(0.6);
+    doc.line(ML, curY, pageW - MR, curY);
+    curY += 4;
+
+    const contentW = pageW - margin * 2;
+    
+    doc.setFillColor(239, 246, 255);
+    doc.rect(margin, curY, contentW, isConsolidated ? 9 : 10, 'F');
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(isConsolidated ? 8 : 9);
+    doc.setTextColor(30, 64, 175);
+    
+    if (isConsolidated) {
+      doc.text(title, margin + 4, curY + 6);
+      if (subtitle) doc.text(subtitle, pageW - margin - 4, curY + 6, { align: 'right' });
+      curY += 13;
+    } else {
+      doc.text(title, margin + 4, curY + 6);
+      doc.text(subtitle, pageW - margin - 4, curY + 6, { align: 'right' });
+      curY += 14;
+    }
+
+    doc.setTextColor(0, 0, 0);
+    return curY;
+  };
 }
 
 // ─── Individual Audit Report PDF ──────────────────────────────────────────────
 
-export function downloadAuditReportPdf(report: AuditReportData): void {
+export async function downloadAuditReportPdf(report: AuditReportData): Promise<void> {
   const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
   const pageW = doc.internal.pageSize.getWidth();
 
   const deptLabel = `${report.department?.code ?? ''} – ${report.department?.name ?? ''}`;
   const cycleLabel = report.cycle_label || `Cycle ${report.cycle}`;
+
+  const addHeader = await createHeaderBuilder();
 
   let y = addHeader(doc, deptLabel, cycleLabel);
 
@@ -181,12 +254,10 @@ export function downloadAuditReportPdf(report: AuditReportData): void {
 
   const rows: any[] = questions.map((q) => {
     const marksVal = q.marks !== undefined && q.marks !== null ? String(q.marks) : '—';
-    const maxVal = q.max_marks !== undefined && q.max_marks !== null ? String(q.max_marks) : '—';
     const below = q.below_60 === true;
     return [
       { content: String(q.sl_no ?? q.question_id ?? ''), styles: { halign: 'center' as const } },
-      { content: qText(q), styles: { cellWidth: 'wrap' as const } },
-      { content: maxVal, styles: { halign: 'center' as const } },
+      { content: qText(q) },
       {
         content: marksVal,
         styles: {
@@ -201,16 +272,15 @@ export function downloadAuditReportPdf(report: AuditReportData): void {
 
   autoTable(doc, {
     startY: y,
-    head: [['S.No', 'Details / Parameter', 'Max', 'Marks', 'Auditor\'s Comment']],
+    head: [['S.No', 'Details / Parameter', 'Marks/10', 'Auditor\'s Comment']],
     body: rows,
     styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
     headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' },
     columnStyles: {
-      0: { cellWidth: 12 },
-      1: { cellWidth: 75 },
-      2: { cellWidth: 14, halign: 'center' },
-      3: { cellWidth: 14, halign: 'center' },
-      4: { cellWidth: 55 },
+      0: { cellWidth: 12, halign: 'center' },
+      1: { cellWidth: 70 },
+      2: { cellWidth: 15, halign: 'center' },
+      3: { cellWidth: 70 },
     },
     margin: { left: 14, right: 14 },
     didDrawPage: () => {
@@ -245,11 +315,11 @@ export function downloadAuditReportPdf(report: AuditReportData): void {
       styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
       headStyles: { fillColor: [5, 150, 105], textColor: 255, fontStyle: 'bold' },
       columnStyles: {
-        0: { cellWidth: 12 },
+        0: { cellWidth: 12, halign: 'center' },
         1: { cellWidth: 60 },
-        2: { cellWidth: 14, halign: 'center' },
+        2: { cellWidth: 15, halign: 'center' },
         3: { cellWidth: 70 },
-        4: { cellWidth: 24, halign: 'center' },
+        4: { cellWidth: 25, halign: 'center' },
       },
       margin: { left: 14, right: 14 },
     });
@@ -264,7 +334,7 @@ export function downloadAuditReportPdf(report: AuditReportData): void {
     doc.text(
       `Generated on ${new Date().toLocaleString('en-IN')} · Page ${i} of ${pageCount}`,
       pageW / 2,
-      doc.internal.pageSize.getHeight() - 5,
+      doc.internal.pageSize.getHeight() - 10,
       { align: 'center' },
     );
   }
@@ -275,29 +345,14 @@ export function downloadAuditReportPdf(report: AuditReportData): void {
 
 // ─── Consolidated Audit PDF ───────────────────────────────────────────────────
 
-export function downloadConsolidatedAuditPdf(consolidated: any[]): void {
+export async function downloadConsolidatedAuditPdf(consolidated: any[]): Promise<void> {
   if (!consolidated || consolidated.length === 0) return;
 
   const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'landscape' });
   const pageW = doc.internal.pageSize.getWidth();
 
-  // Header
-  doc.setFillColor(30, 64, 175);
-  doc.rect(0, 0, pageW, 16, 'F');
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.setTextColor(255, 255, 255);
-  doc.text('Academic Audit – Consolidated Report', pageW / 2, 10, { align: 'center' });
-
-  doc.setFillColor(239, 246, 255);
-  doc.rect(0, 16, pageW, 9, 'F');
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(30, 64, 175);
-  doc.text(`Generated on ${new Date().toLocaleString('en-IN')}`, 14, 22);
-  doc.setTextColor(0, 0, 0);
-
-  let y = 30;
+  const addHeader = await createHeaderBuilder();
+  let y = addHeader(doc, `Academic Audit – Consolidated Report`, `Generated on ${new Date().toLocaleString('en-IN')}`, true);
 
   consolidated.forEach((c, ci) => {
     // Backend returns { cycle_id, cycle, label, departments: [...] }
@@ -306,7 +361,7 @@ export function downloadConsolidatedAuditPdf(consolidated: any[]): void {
 
     if (ci > 0) {
       doc.addPage();
-      y = 30;
+      y = addHeader(doc, `Academic Audit – Consolidated Report`, `Generated on ${new Date().toLocaleString('en-IN')}`, true);
     }
 
     doc.setFont('helvetica', 'bold');
@@ -334,12 +389,12 @@ export function downloadConsolidatedAuditPdf(consolidated: any[]): void {
       headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' },
       columnStyles: {
         0: { cellWidth: 28 },
-        1: { cellWidth: 80 },
+        1: { cellWidth: 92 },
         2: { cellWidth: 25, halign: 'center' },
         3: { cellWidth: 25, halign: 'center' },
-        4: { cellWidth: 22, halign: 'center' },
+        4: { cellWidth: 24, halign: 'center' },
         5: { cellWidth: 35, halign: 'center' },
-        6: { cellWidth: 30, halign: 'center' },
+        6: { cellWidth: 40, halign: 'center' },
       },
       margin: { left: 14, right: 14 },
       didParseCell: (data) => {
@@ -365,7 +420,7 @@ export function downloadConsolidatedAuditPdf(consolidated: any[]): void {
     doc.text(
       `Page ${i} of ${pageCount}`,
       pageW / 2,
-      doc.internal.pageSize.getHeight() - 5,
+      doc.internal.pageSize.getHeight() - 10,
       { align: 'center' },
     );
   }
