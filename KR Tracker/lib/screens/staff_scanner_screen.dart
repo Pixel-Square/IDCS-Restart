@@ -5,6 +5,7 @@ import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import 'record_incident_screen.dart';
 import '../widgets/web_scanner_view.dart';
+import '../utils/platform_utils.dart';
 
 class StaffScannerScreen extends StatefulWidget {
   const StaffScannerScreen({super.key});
@@ -282,89 +283,12 @@ class _StaffScannerScreenState extends State<StaffScannerScreen>
     );
   }
 
-  Widget _buildStudentPhotoWidget(String? photoUrl, String name, String regNo) {
-    final candidateUrl = (photoUrl != null && photoUrl.isNotEmpty)
-        ? photoUrl
-        : AppState.instance.profileImageUrl;
-
-    if (candidateUrl != null &&
-        candidateUrl.isNotEmpty &&
-        (candidateUrl.startsWith('http://') || candidateUrl.startsWith('https://'))) {
-      return Image.network(
-        candidateUrl,
-        fit: BoxFit.cover,
-        loadingBuilder: (context, child, progress) {
-          if (progress == null) return child;
-          return Container(
-            color: const Color(0xFF1F2637),
-            child: const Center(
-              child: CircularProgressIndicator(
-                color: AppColors.accentCyan,
-                strokeWidth: 2.0,
-              ),
-            ),
-          );
-        },
-        errorBuilder: (context, error, stackTrace) {
-          final userPhoto = AppState.instance.profileImageUrl;
-          if (userPhoto != null && userPhoto.isNotEmpty && userPhoto != candidateUrl) {
-            return Image.network(
-              userPhoto,
-              fit: BoxFit.cover,
-              errorBuilder: (c, e, s) => _buildInitialsAvatar(name, regNo),
-            );
-          }
-          return _buildInitialsAvatar(name, regNo);
-        },
-      );
-    }
-
-    if (candidateUrl != null &&
-        candidateUrl.isNotEmpty &&
-        candidateUrl.startsWith('assets/') &&
-        !candidateUrl.contains('discipline_student.jpg')) {
-      return Image.asset(
-        candidateUrl,
-        fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) =>
-            _buildInitialsAvatar(name, regNo),
-      );
-    }
-
-    return _buildInitialsAvatar(name, regNo);
-  }
-
-  Widget _buildInitialsAvatar(String name, String regNo) {
-    final cleanName = name.trim();
-    final initials = cleanName.isNotEmpty
-        ? cleanName.split(' ').map((p) => p.isNotEmpty ? p[0] : '').take(2).join().toUpperCase()
-        : (regNo.length >= 2 ? regNo.substring(regNo.length - 2) : 'KR');
-
-    return Container(
-      width: double.infinity,
-      height: double.infinity,
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Color(0xFF2563EB),
-            Color(0xFF7C3AED),
-            Color(0xFFDB2777),
-          ],
-        ),
-      ),
-      child: Center(
-        child: Text(
-          initials,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 34,
-            fontWeight: FontWeight.w900,
-            letterSpacing: -1,
-          ),
-        ),
-      ),
+  Widget _buildStudentPhotoWidget(List<String> candidates, String name, String regNo) {
+    return buildPlatformAvatarImage(
+      candidateUrls: candidates,
+      name: name,
+      regNo: regNo,
+      size: 124,
     );
   }
 
@@ -375,11 +299,39 @@ class _StaffScannerScreenState extends State<StaffScannerScreen>
     final dept = student?['department']?.toString() ?? '';
     final regNo = student?['reg_no']?.toString() ?? _activeBarcode;
 
-    // Resolve photo URL exactly like Dashboard and Profile page
-    final String? photoUrl = () {
-      final state = AppState.instance;
+    // Resolve candidates matching Profile.tsx
+    final List<String> avatarCandidates = () {
+      final list = <String>[];
+      final rawStudentImg = student?['profile_image'] ??
+          student?['photo_url'] ??
+          student?['image'] ??
+          student?['photo'] ??
+          student?['avatar'];
 
-      // 1. If scanned barcode matches logged-in user, use state.profileImageUrl
+      // If student already has explicit avatar_candidates from fetchStudentByBarcode:
+      if (student?['avatar_candidates'] is List) {
+        for (final c in (student!['avatar_candidates'] as List)) {
+          if (c != null && c.toString().isNotEmpty) {
+            list.add(c.toString());
+          }
+        }
+      }
+
+      // Add candidates resolved via ApiService matching Profile.tsx
+      final apiCandidates = ApiService.resolveAvatarCandidates(rawStudentImg, regNo: regNo);
+      list.addAll(apiCandidates);
+
+      // Check offline storage for this student
+      if (regNo.isNotEmpty) {
+        final off = OfflineStorageService.instance.getStudent(regNo);
+        final offImg = off?['profile_image'] ?? off?['profile_image_url'] ?? off?['photo'];
+        if (offImg != null && offImg.toString().isNotEmpty) {
+          list.addAll(ApiService.resolveAvatarCandidates(offImg, regNo: regNo));
+        }
+      }
+
+      // If scanned barcode matches logged-in user:
+      final state = AppState.instance;
       if (state.profileImageUrl != null &&
           state.profileImageUrl!.isNotEmpty &&
           (regNo.isEmpty ||
@@ -387,39 +339,12 @@ class _StaffScannerScreenState extends State<StaffScannerScreen>
               regNo == state.userName ||
               state.studentId.contains(regNo) ||
               regNo.contains(state.studentId))) {
-        return state.profileImageUrl;
+        list.insert(0, state.profileImageUrl!);
       }
 
-      // 2. Query OfflineStorageService exactly like DashboardScreen:
-      if (regNo.isNotEmpty) {
-        final st = OfflineStorageService.instance.getStudent(regNo);
-        final raw = st?['profile_image'] ?? st?['profile_image_url'] ?? st?['photo'];
-        final formatted = ApiService.formatProfileImageUrl(raw);
-        if (formatted != null && formatted.isNotEmpty) {
-          return formatted;
-        }
-      }
-
-      // 3. Try the photo_url or raw profile_image from the student object
-      final rawStudentImg = student?['profile_image'] ??
-          student?['photo_url'] ??
-          student?['image'] ??
-          student?['photo'] ??
-          student?['avatar'];
-      final formattedStudent = ApiService.formatProfileImageUrl(rawStudentImg);
-      if (formattedStudent != null &&
-          formattedStudent.isNotEmpty &&
-          !formattedStudent.contains('discipline_student.jpg')) {
-        return formattedStudent;
-      }
-
-      // 4. Direct media folder lookup like ProfileScreen:
-      if (regNo.isNotEmpty) {
-        return 'https://db.krgi.co.in/media/profile_images/$regNo.jpg';
-      }
-
-      // 5. Fallback to state.profileImageUrl
-      return state.profileImageUrl;
+      // Deduplicate while preserving order
+      final seen = <String>{};
+      return list.where((url) => seen.add(url)).toList();
     }();
 
     return Scaffold(
@@ -629,7 +554,7 @@ class _StaffScannerScreenState extends State<StaffScannerScreen>
                                   ),
                                 )
                               : _buildStudentPhotoWidget(
-                                  photoUrl,
+                                  avatarCandidates,
                                   name,
                                   regNo,
                                 ),

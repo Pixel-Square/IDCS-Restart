@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'offline_storage_service.dart';
+import '../state/app_state.dart';
 
 class ApiService {
   static const String primaryUrl = 'https://db.krgi.co.in';
@@ -16,20 +17,66 @@ class ApiService {
     currentUser = null;
   }
 
+  /// Resolves avatar candidate URLs exactly like frontend/src/pages/profile/Profile.tsx
+  static List<String> resolveAvatarCandidates(dynamic rawImage, {String? regNo}) {
+    final candidates = <String>[];
+
+    // 1. If register number is known, check database-verified offline storage mapping
+    if (regNo != null && regNo.trim().isNotEmpty) {
+      final cleanReg = regNo.trim().toUpperCase();
+      final known = OfflineStorageService.knownStudentProfileImages[cleanReg];
+      if (known != null && known.isNotEmpty) {
+        candidates.add('https://db.krgi.co.in/media/$known');
+        candidates.add('/media/$known');
+        candidates.add('http://127.0.0.1:8000/media/$known');
+      }
+      final st = OfflineStorageService.instance.getStudent(cleanReg);
+      final stImg = st?['profile_image'] ?? st?['profile_image_url'] ?? st?['photo'];
+      if (stImg != null && stImg.toString().trim().isNotEmpty && !stImg.toString().contains('.jpg')) {
+        final stClean = stImg.toString().trim().replaceAll('\\', '/');
+        final cleanPath = stClean.startsWith('/') ? stClean.substring(1) : stClean;
+        final relPath = cleanPath.startsWith('media/') ? cleanPath : 'media/$cleanPath';
+        candidates.add('https://db.krgi.co.in/$relPath');
+        candidates.add('/$relPath');
+      }
+    }
+
+    // 2. Normalize rawImage if provided
+    if (rawImage != null) {
+      final raw = rawImage.toString().trim().replaceAll('\\', '/');
+      if (raw.isNotEmpty && !raw.contains('.jpg')) {
+        if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('data:') || raw.startsWith('blob:')) {
+          candidates.insert(0, raw);
+        } else {
+          final normalized = raw.startsWith('/') ? raw.substring(1) : raw;
+          final path = normalized.startsWith('media/') ? normalized.substring(6) : normalized;
+          // Exact Profile.tsx candidates:
+          // 1) /media/$path
+          // 2) ${getApiBase()}/media/$path
+          candidates.insert(0, 'https://db.krgi.co.in/media/$path');
+          candidates.add('/media/$path');
+          candidates.add('http://127.0.0.1:8000/media/$path');
+        }
+      }
+    }
+
+    // 3. Fallback to AppState profileImageUrl if matching logged-in user
+    final state = AppState.instance;
+    if (state.profileImageUrl != null && state.profileImageUrl!.isNotEmpty) {
+      if (regNo == null || regNo.isEmpty || regNo == state.studentId || regNo == state.userName) {
+        candidates.add(state.profileImageUrl!);
+      }
+    }
+
+    // Deduplicate preserving order
+    final seen = <String>{};
+    return candidates.where((c) => seen.add(c)).toList();
+  }
+
   /// Format backend profile image URL according to Profile.tsx backend media path
-  static String? formatProfileImageUrl(dynamic rawImage) {
-    if (rawImage == null) return null;
-    final path = rawImage.toString().trim().replaceAll('\\', '/');
-    if (path.isEmpty) return null;
-    if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:') || path.startsWith('blob:')) {
-      return path;
-    }
-    final cleanPath = path.startsWith('/') ? path.substring(1) : path;
-    final base = (baseUrl.isNotEmpty ? baseUrl : primaryUrl);
-    if (cleanPath.startsWith('media/')) {
-      return '$base/$cleanPath';
-    }
-    return '$base/media/$cleanPath';
+  static String? formatProfileImageUrl(dynamic rawImage, {String? regNo}) {
+    final list = resolveAvatarCandidates(rawImage, regNo: regNo);
+    return list.isNotEmpty ? list.first : null;
   }
 
   /// Authenticate strictly against real backend database users
@@ -265,11 +312,9 @@ class ApiService {
               userObj?['profile_image_url'] ??
               userObj?['photo'] ??
               userObj?['avatar'];
-          String? photoUrl = formatProfileImageUrl(rawPhoto);
-          if (photoUrl == null || photoUrl.isEmpty) {
-            final reg = s['reg_no'] ?? cleanCode;
-            photoUrl = '$baseUrl/media/profile_images/$reg.jpg';
-          }
+          final reg = (s['reg_no'] ?? cleanCode).toString().trim();
+          final candidates = resolveAvatarCandidates(rawPhoto, regNo: reg);
+          String? photoUrl = candidates.isNotEmpty ? candidates.first : null;
 
           return {
             'name': fullName.isNotEmpty ? fullName : username,
@@ -283,6 +328,9 @@ class ApiService {
             'section': s['section'] ?? '',
             'year': s['year'] ?? 'Registered Student',
             'photo_url': photoUrl,
+            'profile_image': rawPhoto ?? photoUrl,
+            'profile_image_url': photoUrl,
+            'avatar_candidates': candidates,
             'merit_score': 98.5,
             'gate_status': 'APPROVED',
             'pass_type': 'Live Campus Barcode',
@@ -304,21 +352,22 @@ class ApiService {
           offlineStudent['profile_image_url'] ??
           offlineStudent['photo'] ??
           offlineStudent['image'];
-      String? offlinePhotoUrl = formatProfileImageUrl(rawOfflineImg);
-      if (offlinePhotoUrl == null || offlinePhotoUrl.isEmpty) {
-        final reg = offlineStudent['reg_no'] ?? cleanCode;
-        offlinePhotoUrl = '$primaryUrl/media/profile_images/$reg.jpg';
-      }
+      final reg = (offlineStudent['reg_no'] ?? cleanCode).toString().trim();
+      final candidates = resolveAvatarCandidates(rawOfflineImg, regNo: reg);
+      final String? offlinePhotoUrl = candidates.isNotEmpty ? candidates.first : null;
 
       return {
         'name': offlineStudent['name'] ?? 'Student $cleanCode',
         'username': username.toString().startsWith('@') ? username : '@$username',
-        'reg_no': offlineStudent['reg_no'] ?? cleanCode,
+        'reg_no': reg,
         'department': offlineStudent['department'] ?? 'Department',
         'batch': offlineStudent['batch'] ?? '2024 (Sec A)',
         'section': offlineStudent['section'] ?? '',
         'year': 'Registered Student',
         'photo_url': offlinePhotoUrl,
+        'profile_image': rawOfflineImg ?? offlinePhotoUrl,
+        'profile_image_url': offlinePhotoUrl,
+        'avatar_candidates': candidates,
         'merit_score': 98.0,
         'gate_status': 'APPROVED',
         'pass_type': 'Offline Barcode Pass',
@@ -329,6 +378,8 @@ class ApiService {
     }
 
     // 3. Fallback formatted student record
+    final candidates = resolveAvatarCandidates(null, regNo: cleanCode);
+    final fallbackPhoto = candidates.isNotEmpty ? candidates.first : null;
     return {
       'name': 'Student $cleanCode',
       'username': '@$cleanCode',
@@ -341,7 +392,10 @@ class ApiService {
       'batch': '2024 (Sec A)',
       'section': 'Sec A',
       'year': 'Registered Student',
-      'photo_url': '$primaryUrl/media/profile_images/$cleanCode.jpg',
+      'photo_url': fallbackPhoto,
+      'profile_image': fallbackPhoto,
+      'profile_image_url': fallbackPhoto,
+      'avatar_candidates': candidates,
       'merit_score': 98.0,
       'gate_status': 'APPROVED',
       'pass_type': 'Cached Barcode Pass',

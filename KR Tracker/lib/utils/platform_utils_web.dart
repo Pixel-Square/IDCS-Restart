@@ -108,3 +108,155 @@ class _WebScannerWidgetState extends State<_WebScannerWidget> {
     );
   }
 }
+
+Widget buildPlatformAvatarImage({
+  required List<String> candidateUrls,
+  required String name,
+  required String regNo,
+  required double size,
+  BorderRadius? borderRadius,
+}) {
+  return _WebAvatarImage(
+    candidateUrls: candidateUrls,
+    name: name,
+    regNo: regNo,
+    size: size,
+    borderRadius: borderRadius,
+  );
+}
+
+class _WebAvatarImage extends StatefulWidget {
+  final List<String> candidateUrls;
+  final String name;
+  final String regNo;
+  final double size;
+  final BorderRadius? borderRadius;
+
+  const _WebAvatarImage({
+    required this.candidateUrls,
+    required this.name,
+    required this.regNo,
+    required this.size,
+    this.borderRadius,
+  });
+
+  @override
+  State<_WebAvatarImage> createState() => _WebAvatarImageState();
+}
+
+class _WebAvatarImageState extends State<_WebAvatarImage> {
+  static int _uniqueAvatarCounter = 0;
+  late final String _viewType;
+
+  @override
+  void initState() {
+    super.initState();
+    _uniqueAvatarCounter++;
+    _viewType = 'platform-avatar-view-$_uniqueAvatarCounter';
+
+    ui_web.platformViewRegistry.registerViewFactory(
+      _viewType,
+      (int viewId) {
+        final container = html.DivElement()
+          ..id = 'avatar-container-$viewId'
+          ..style.width = '100%'
+          ..style.height = '100%'
+          ..style.overflow = 'hidden'
+          ..style.display = 'flex'
+          ..style.alignItems = 'center'
+          ..style.justifyContent = 'center'
+          ..style.borderRadius = widget.borderRadius != null ? '16px' : '50%';
+
+        void loadCandidate(int index) {
+          container.children.clear();
+          if (index >= widget.candidateUrls.length) {
+            final initials = _getInitials(widget.name, widget.regNo);
+            final fallbackDiv = html.DivElement()
+              ..style.width = '100%'
+              ..style.height = '100%'
+              ..style.background = 'linear-gradient(135deg, #2563EB, #7C3AED, #DB2777)'
+              ..style.display = 'flex'
+              ..style.alignItems = 'center'
+              ..style.justifyContent = 'center'
+              ..style.color = '#FFFFFF'
+              ..style.fontWeight = '900'
+              ..style.fontSize = '${(widget.size * 0.28).clamp(14, 40)}px'
+              ..innerText = initials;
+            container.children.add(fallbackDiv);
+            return;
+          }
+
+          final url = widget.candidateUrls[index];
+          final img = html.ImageElement()
+            ..src = url
+            ..style.width = '100%'
+            ..style.height = '100%'
+            ..style.objectFit = 'cover';
+
+          img.onError.listen((_) {
+            loadCandidate(index + 1);
+          });
+
+          container.children.add(img);
+        }
+
+        loadCandidate(0);
+        return container;
+      },
+    );
+  }
+
+  static String _getInitials(String name, String regNo) {
+    final cleanName = name.trim();
+    if (cleanName.isNotEmpty) {
+      return cleanName.split(' ').map((p) => p.isNotEmpty ? p[0] : '').take(2).join().toUpperCase();
+    }
+    return regNo.length >= 2 ? regNo.substring(regNo.length - 2).toUpperCase() : 'KR';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.candidateUrls.isEmpty) {
+      return _buildInitialsFallback();
+    }
+    return SizedBox(
+      width: widget.size,
+      height: widget.size,
+      child: ClipRRect(
+        borderRadius: widget.borderRadius ?? BorderRadius.circular(widget.size / 2),
+        child: HtmlElementView(viewType: _viewType),
+      ),
+    );
+  }
+
+  Widget _buildInitialsFallback() {
+    final initials = _getInitials(widget.name, widget.regNo);
+    return Container(
+      width: widget.size,
+      height: widget.size,
+      decoration: BoxDecoration(
+        borderRadius: widget.borderRadius ?? BorderRadius.circular(widget.size / 2),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF2563EB),
+            Color(0xFF7C3AED),
+            Color(0xFFDB2777),
+          ],
+        ),
+      ),
+      child: Center(
+        child: Text(
+          initials,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: (widget.size * 0.28).clamp(14.0, 40.0),
+            fontWeight: FontWeight.w900,
+            letterSpacing: -1,
+          ),
+        ),
+      ),
+    );
+  }
+}

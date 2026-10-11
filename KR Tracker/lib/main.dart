@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'state/app_state.dart';
 import 'theme/app_theme.dart';
 import 'screens/splash_screen.dart';
-import 'navigation/main_navigation_shell.dart';
 import 'services/offline_storage_service.dart';
 
 import 'services/notification_service.dart';
@@ -46,9 +45,7 @@ class KRTrackApp extends StatelessWidget {
           themeMode: state.themeMode, // Default is ThemeMode.light
           theme: AppTheme.lightTheme,
           darkTheme: AppTheme.darkTheme,
-          home: (state.isAuthenticated || initialHasSession)
-              ? const MainNavigationShell()
-              : const SplashScreen(),
+          home: const SplashScreen(),
         );
       },
     );

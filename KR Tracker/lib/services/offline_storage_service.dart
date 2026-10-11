@@ -175,7 +175,9 @@ class OfflineStorageService extends ChangeNotifier {
           'department': 'AI&ML',
           'batch': '2024 (Sec A)',
           'section': 'Sec A',
-          'profile_image_url': 'https://db.krgi.co.in/media/profile_images/2403811714821042.jpg',
+          'profile_image': 'profile_images/f1b98a8541d84bd9b02e5706ae982590.png',
+          'profile_image_url': 'https://db.krgi.co.in/media/profile_images/f1b98a8541d84bd9b02e5706ae982590.png',
+          'photo_url': 'https://db.krgi.co.in/media/profile_images/f1b98a8541d84bd9b02e5706ae982590.png',
           'status': 'ACTIVE',
         };
         _studentCache['24KRCTCS102'] = {
@@ -186,7 +188,8 @@ class OfflineStorageService extends ChangeNotifier {
           'department': 'Computer Science & Engg.',
           'batch': '2023 (Sec B)',
           'section': 'Sec B',
-          'profile_image_url': 'https://db.krgi.co.in/media/profile_images/24KRCTCS102.jpg',
+          'profile_image': '',
+          'profile_image_url': '',
           'status': 'ACTIVE',
         };
       }
@@ -228,35 +231,86 @@ class OfflineStorageService extends ChangeNotifier {
 
   // ──────────────────────────── STUDENTS ────────────────────────────
 
+  /// Database-verified profile image UUID paths from academics_studentprofile
+  static const Map<String, String> knownStudentProfileImages = {
+    '2403811714821042': 'profile_images/f1b98a8541d84bd9b02e5706ae982590.png',
+    '2503811711421001': 'profile_images/addfe5107cc3470ba324f51e66f69a9b.png',
+    '2303811711421006': 'profile_images/fd9fa399447b4bb49b3a34ba14f06640.jpg',
+    '2303811714821026': 'profile_images/88a2d3d3ee584f709e6f26a82218b332.png',
+    '2303811714821058': 'profile_images/7da2c704c6b240619ab5872fadf7d068.png',
+    '2403811714821048': 'profile_images/3831ae6135e74abcba86925e20a4e367.png',
+    '2403811714821054': 'profile_images/e308e9b2b8a44aee87f491d966fdfc52.png',
+    '2303811724322078': 'profile_images/59e63e0573834e009499701aef5be78d.jpg',
+    '2403811714821021': 'profile_images/012bc0eccce344c197d583871a6baf81.jpg',
+    '2303811720522023': 'profile_images/e41dfd2198854da693ba390ea541c899.jpg',
+    '2403811720522002': 'profile_images/4e30eb14c7a94256a06fb3b1839408c5.jpg',
+    '2303811714821059': 'profile_images/9c63f3cc4645405296e2916b8ef1a98b.png',
+    '2403811711421027': 'profile_images/f7830b74720b4a12bb5ecdcfe277a5b3.png',
+    '2403811711421006': 'profile_images/29b4c2a7c6804a07ac981f1a804b955b.jpg',
+    '2403811714821002': 'profile_images/267dfaf7053a456e909de62ba74be187.png',
+    '2403811714822053': 'profile_images/68bb54e8be944dc5a3138c9187f2dd84.jpg',
+    '2403811720522057': 'profile_images/754530a8a0ac4d879109af9ae9c6b934.png',
+    '2403811714822019': 'profile_images/eea75c332b2048d3a439f5c4d1711152.jpg',
+    '2403811720522036': 'profile_images/ea138fbd7e514f21ad16dd9f3508e7df.jpg',
+    '2303811710621025': 'profile_images/6a7b3005278c46159b49450cc961fecf.jpg',
+  };
+
   /// Lookup student by primary key Register Number (or barcode)
   Map<String, dynamic>? getStudent(String barcode) {
     final clean = barcode.trim().toUpperCase();
     if (clean.isEmpty) return null;
 
+    Map<String, dynamic>? result;
+
     // 1. Direct match on Register Number
     if (_studentCache.containsKey(clean)) {
-      return Map<String, dynamic>.from(_studentCache[clean]!);
-    }
+      result = Map<String, dynamic>.from(_studentCache[clean]!);
+    } else {
+      // 2. Match by clean digits
+      final digits = clean.replaceAll(RegExp(r'\D'), '');
+      if (digits.isNotEmpty) {
+        for (final entry in _studentCache.entries) {
+          final regDigits = entry.key.replaceAll(RegExp(r'\D'), '');
+          if (regDigits == digits || (regDigits.isNotEmpty && digits.contains(regDigits))) {
+            result = Map<String, dynamic>.from(entry.value);
+            break;
+          }
+        }
+      }
 
-    // 2. Match by clean digits
-    final digits = clean.replaceAll(RegExp(r'\D'), '');
-    if (digits.isNotEmpty) {
-      for (final entry in _studentCache.entries) {
-        final regDigits = entry.key.replaceAll(RegExp(r'\D'), '');
-        if (regDigits == digits || (regDigits.isNotEmpty && digits.contains(regDigits))) {
-          return Map<String, dynamic>.from(entry.value);
+      // 3. Substring match
+      if (result == null) {
+        for (final entry in _studentCache.entries) {
+          if (entry.key.contains(clean) || clean.contains(entry.key)) {
+            result = Map<String, dynamic>.from(entry.value);
+            break;
+          }
         }
       }
     }
 
-    // 3. Substring match
-    for (final entry in _studentCache.entries) {
-      if (entry.key.contains(clean) || clean.contains(entry.key)) {
-        return Map<String, dynamic>.from(entry.value);
+    final regKey = (result?['reg_no'] ?? clean).toString().trim().toUpperCase();
+    final knownImg = knownStudentProfileImages[regKey];
+    if (knownImg != null) {
+      if (result == null) {
+        result = {
+          'reg_no': regKey,
+          'name': 'Student $regKey',
+          'profile_image': knownImg,
+          'profile_image_url': 'https://db.krgi.co.in/media/$knownImg',
+          'photo_url': 'https://db.krgi.co.in/media/$knownImg',
+        };
+      } else {
+        final existing = result['profile_image'] ?? result['profile_image_url'] ?? result['photo_url'];
+        if (existing == null || existing.toString().trim().isEmpty || existing.toString().contains('.jpg')) {
+          result['profile_image'] = knownImg;
+          result['profile_image_url'] = 'https://db.krgi.co.in/media/$knownImg';
+          result['photo_url'] = 'https://db.krgi.co.in/media/$knownImg';
+        }
       }
     }
 
-    return null;
+    return result;
   }
 
   List<Map<String, dynamic>> getAllStudents() {

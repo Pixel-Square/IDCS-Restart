@@ -854,13 +854,25 @@ class DisciplineStudentDirectoryView(APIView):
             dept_name = getattr(dept, 'short_name', None) or getattr(dept, 'code', None) or getattr(dept, 'name', '')
             batch_label = st.batch or (st.section.batch.name if st.section and st.section.batch else '')
 
+            img_val = ''
+            if getattr(st, 'profile_image', None):
+                try:
+                    img_val = st.profile_image.url
+                except Exception:
+                    img_val = str(st.profile_image)
+            if not img_val and u:
+                u_img = getattr(u, 'profile_image', '') or ''
+                if u_img:
+                    img_val = f"/media/{u_img}" if not str(u_img).startswith('http') and not str(u_img).startswith('/') else str(u_img)
+
             results.append({
                 'id': st.id,
                 'reg_no': st.reg_no,
                 'name': full_name or getattr(u, 'username', st.reg_no),
                 'username': getattr(u, 'username', ''),
                 'email': getattr(u, 'email', ''),
-                'profile_image_url': None,
+                'profile_image': img_val or '',
+                'profile_image_url': img_val or None,
                 'department': dept_name,
                 'batch': batch_label,
                 'section': getattr(st.section, 'name', '') if st.section else '',

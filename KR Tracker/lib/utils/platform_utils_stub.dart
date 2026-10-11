@@ -330,3 +330,126 @@ class _MobileDeviceScannerState extends State<_MobileDeviceScanner>
     );
   }
 }
+
+Widget buildPlatformAvatarImage({
+  required List<String> candidateUrls,
+  required String name,
+  required String regNo,
+  required double size,
+  BorderRadius? borderRadius,
+}) {
+  return _MobileAvatarImage(
+    candidateUrls: candidateUrls,
+    name: name,
+    regNo: regNo,
+    size: size,
+    borderRadius: borderRadius,
+  );
+}
+
+class _MobileAvatarImage extends StatefulWidget {
+  final List<String> candidateUrls;
+  final String name;
+  final String regNo;
+  final double size;
+  final BorderRadius? borderRadius;
+
+  const _MobileAvatarImage({
+    required this.candidateUrls,
+    required this.name,
+    required this.regNo,
+    required this.size,
+    this.borderRadius,
+  });
+
+  @override
+  State<_MobileAvatarImage> createState() => _MobileAvatarImageState();
+}
+
+class _MobileAvatarImageState extends State<_MobileAvatarImage> {
+  int _candidateIndex = 0;
+
+  String _getInitials() {
+    final cleanName = widget.name.trim();
+    if (cleanName.isNotEmpty) {
+      return cleanName.split(' ').map((p) => p.isNotEmpty ? p[0] : '').take(2).join().toUpperCase();
+    }
+    return widget.regNo.length >= 2 ? widget.regNo.substring(widget.regNo.length - 2).toUpperCase() : 'KR';
+  }
+
+  Widget _buildInitials() {
+    final initials = _getInitials();
+    return Container(
+      width: widget.size,
+      height: widget.size,
+      decoration: BoxDecoration(
+        borderRadius: widget.borderRadius ?? BorderRadius.circular(widget.size / 2),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF2563EB),
+            Color(0xFF7C3AED),
+            Color(0xFFDB2777),
+          ],
+        ),
+      ),
+      child: Center(
+        child: Text(
+          initials,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: (widget.size * 0.28).clamp(14.0, 40.0),
+            fontWeight: FontWeight.w900,
+            letterSpacing: -1,
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.candidateUrls.isEmpty || _candidateIndex >= widget.candidateUrls.length) {
+      return _buildInitials();
+    }
+
+    final rawUrl = widget.candidateUrls[_candidateIndex];
+    final url = rawUrl.startsWith('/') ? 'https://db.krgi.co.in$rawUrl' : rawUrl;
+
+    return ClipRRect(
+      borderRadius: widget.borderRadius ?? BorderRadius.circular(widget.size / 2),
+      child: SizedBox(
+        width: widget.size,
+        height: widget.size,
+        child: Image.network(
+          url,
+          fit: BoxFit.cover,
+          loadingBuilder: (context, child, progress) {
+            if (progress == null) return child;
+            return Container(
+              color: const Color(0xFF1F2637),
+              child: const Center(
+                child: CircularProgressIndicator(
+                  color: Color(0xFF06B6D4),
+                  strokeWidth: 2.0,
+                ),
+              ),
+            );
+          },
+          errorBuilder: (context, error, stackTrace) {
+            if (_candidateIndex + 1 < widget.candidateUrls.length) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) {
+                  setState(() => _candidateIndex++);
+                }
+              });
+              return Container(color: const Color(0xFF1F2637));
+            }
+            return _buildInitials();
+          },
+        ),
+      ),
+    );
+  }
+}

@@ -205,9 +205,12 @@ class _SplashScreenState extends State<SplashScreen>
 
     return Scaffold(
       backgroundColor: Colors.white,
-      body: AnimatedBuilder(
-        animation: _controller,
-        builder: (context, child) {
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _navigateToDestination,
+        child: AnimatedBuilder(
+          animation: _controller,
+          builder: (context, child) {
           return Opacity(
             opacity: _exitFade.value,
             child: Stack(
@@ -477,8 +480,9 @@ class _SplashScreenState extends State<SplashScreen>
           );
         },
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 /// Custom painter for Scene A: Intro glowing curved line drawing across canvas
