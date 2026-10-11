@@ -14,6 +14,7 @@ from .views import (
     DisciplineStudentDirectoryView,
     DisciplineStudentExportExcelWithBarcodesView,
     DisciplineStudentExportBarcodeImagesZipView,
+    DisciplineStudentAuthoritiesView,
 )
 
 urlpatterns = [
@@ -37,6 +38,7 @@ urlpatterns = [
 
     # Student Portal: Pending vs Completed Actions
     path('student-my-incidents/', DisciplineStudentIncidentsView.as_view(), name='discipline-student-my-incidents'),
+    path('student-authorities/', DisciplineStudentAuthoritiesView.as_view(), name='discipline-student-authorities'),
 
     # Real Student Directory with Barcode Data
     path('students/', DisciplineStudentDirectoryView.as_view(), name='discipline-students'),

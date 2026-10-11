@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { ModalPortal } from '../../../components/ModalPortal'
 import PBASSubmissionLogsTab from './PBASSubmissionLogsTab'
 import PBASUserActivityTab from './PBASUserActivityTab'
+import PBASDurationTab from './PBASDurationTab'
 import {
   PBASAudience,
   PBASFormField,
@@ -48,7 +49,7 @@ function draftToPayload(n: PBASNode): any {
 }
 
 export default function PBASAdminPage() {
-  const [activeMainTab, setActiveMainTab] = useState<'config' | 'logs' | 'activity'>('config')
+  const [activeMainTab, setActiveMainTab] = useState<'config' | 'logs' | 'activity' | 'duration'>('config')
   const [initialUserId, setInitialUserId] = useState<number | null>(null)
 
   useEffect(() => {
@@ -56,7 +57,7 @@ export default function PBASAdminPage() {
       const params = new URLSearchParams(window.location.search)
       const tab = params.get('tab')
       const uid = params.get('user_id')
-      if (tab === 'logs' || tab === 'activity' || tab === 'config') {
+      if (tab === 'logs' || tab === 'activity' || tab === 'config' || tab === 'duration') {
         setActiveMainTab(tab)
       }
       if (uid && !isNaN(Number(uid))) {
@@ -106,6 +107,7 @@ export default function PBASAdminPage() {
   const [configStaffCredit, setConfigStaffCredit] = useState<string>('')
   const [configStudentCredit, setConfigStudentCredit] = useState<string>('')
   const [configMentorCredit, setConfigMentorCredit] = useState<string>('')
+  const [configLimit, setConfigLimit] = useState<string>('')
 
   // Open Config Modal for a node
   const handleOpenConfigModal = (node: PBASNode) => {
@@ -114,6 +116,7 @@ export default function PBASAdminPage() {
     setConfigStaffCredit(node.pbas_credit != null ? String(node.pbas_credit) : '')
     setConfigStudentCredit(node.pbas_credit != null ? String(node.pbas_credit) : '')
     setConfigMentorCredit(node.mentor_credit != null ? String(node.mentor_credit) : '')
+    setConfigLimit(node.limit != null ? String(node.limit) : '')
     setIsConfigModalOpen(true)
   }
 
@@ -122,6 +125,8 @@ export default function PBASAdminPage() {
     const staffCr = configStaffCredit.trim() === '' ? null : parseInt(configStaffCredit, 10)
     const studentCr = configStudentCredit.trim() === '' ? null : parseInt(configStudentCredit, 10)
     const mentorCr = configMentorCredit.trim() === '' ? null : parseInt(configMentorCredit, 10)
+    const parsedLimit = configLimit.trim() === '' ? null : parseInt(configLimit, 10)
+    const effectiveLimit = (parsedLimit !== null && !isNaN(parsedLimit) && parsedLimit >= 0) ? Math.floor(parsedLimit) : null
 
     // For faculty view, pbas_credit is staffCr; for student view, pbas_credit is studentCr; for both, pbas_credit can hold staff/student credit
     const effectiveCredit = configAudience === 'student' ? studentCr : staffCr
@@ -131,6 +136,7 @@ export default function PBASAdminPage() {
       audience: configAudience,
       pbas_credit: effectiveCredit,
       mentor_credit: effectiveMentorCredit,
+      limit: effectiveLimit,
     })
 
     setIsConfigModalOpen(false)
@@ -566,9 +572,39 @@ export default function PBASAdminPage() {
             <span className="text-sm">👥</span>
             <span>User Activity</span>
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              setInitialUserId(null)
+              setActiveMainTab('duration')
+            }}
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-4 sm:px-5 py-2.5 rounded-lg text-xs sm:text-sm font-bold transition-all duration-200 ${
+              activeMainTab === 'duration'
+                ? 'bg-white text-indigo-700 shadow-sm border border-slate-200/70 scale-[1.01]'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+            }`}
+          >
+            <span className="text-sm">⏳</span>
+            <span>Duration</span>
+          </button>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {activeMainTab !== 'duration' && (
+            <button
+              type="button"
+              onClick={() => {
+                setInitialUserId(null)
+                setActiveMainTab('duration')
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 text-xs font-semibold shadow-xs transition-all active:scale-95"
+            >
+              <span>⏳ View Duration</span>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          )}
           {activeMainTab !== 'activity' && (
             <button
               type="button"
@@ -617,7 +653,9 @@ export default function PBASAdminPage() {
         </div>
       </div>
 
-      {activeMainTab === 'activity' ? (
+      {activeMainTab === 'duration' ? (
+        <PBASDurationTab />
+      ) : activeMainTab === 'activity' ? (
         <PBASUserActivityTab initialUserId={initialUserId} />
       ) : activeMainTab === 'logs' ? (
         <PBASSubmissionLogsTab />
@@ -1271,38 +1309,71 @@ export default function PBASAdminPage() {
                   </div>
                 </div>
 
-                {/* 2. Credits Section (Dynamic based on Audience selection) */}
+                {/* 2. Credits Configuration (Dynamic based on Audience selection) */}
                 <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide">
-                    2. Credits Configuration
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold text-slate-800 uppercase tracking-wide">
+                      2. Credits Configuration
+                    </label>
+                    <span className="text-[10px] font-bold text-slate-400">
+                      Enforced & reset per Duration cycle
+                    </span>
+                  </div>
 
                   {/* STAFF ONLY SELECTED */}
                   {configAudience === 'faculty' && (
-                    <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 space-y-2 animate-fadeIn">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-indigo-900">👨‍🏫 Staff PBAS Credit</span>
+                    <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 space-y-4 animate-fadeIn">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-indigo-900">👨‍🏫 Staff PBAS Credit (Per Submission)</span>
+                        </div>
+                        <p className="text-xs text-slate-500">
+                          Enter the credit awarded to staff members upon approved submission.
+                        </p>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="e.g. 5"
+                          value={configStaffCredit}
+                          onChange={(e) => setConfigStaffCredit(e.target.value)}
+                          className="w-full px-3.5 py-2.5 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                        />
                       </div>
-                      <p className="text-xs text-slate-500">
-                        Enter the PBAS credit awarded to staff members upon approved submission.
-                      </p>
-                      <input
-                        type="number"
-                        min="0"
-                        placeholder="e.g. 10"
-                        value={configStaffCredit}
-                        onChange={(e) => setConfigStaffCredit(e.target.value)}
-                        className="w-full px-3.5 py-2.5 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                      />
+
+                      <div className="space-y-1.5 pt-2 border-t border-indigo-100">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-xs font-bold text-indigo-900">
+                            Maximum Credit Limit (Max)
+                          </label>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-100 text-indigo-700">
+                            Whole Numbers Only
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500">
+                          Maximum total credit points allowed for this leaf node per duration cycle (e.g. 20). Submissions remain unlimited.
+                        </p>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          placeholder="e.g. 20 (Leave blank for unlimited)"
+                          value={configLimit}
+                          onChange={(e) => {
+                            const val = e.target.value.replace(/\D/g, '')
+                            setConfigLimit(val)
+                          }}
+                          className="w-full px-3.5 py-2.5 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                        />
+                      </div>
                     </div>
                   )}
 
-                  {/* STUDENT ONLY SELECTED: 1. Student's Credit, 2. Mentor's Credit */}
+                  {/* STUDENT ONLY SELECTED */}
                   {configAudience === 'student' && (
                     <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 space-y-4 animate-fadeIn">
                       <div className="space-y-1.5">
                         <label className="block text-xs font-bold text-emerald-900">
-                          1. Student's Credit
+                          1. Student's Credit (Per Submission)
                         </label>
                         <p className="text-xs text-slate-500">Credit awarded to student on verification.</p>
                         <input
@@ -1311,6 +1382,32 @@ export default function PBASAdminPage() {
                           placeholder="e.g. 5"
                           value={configStudentCredit}
                           onChange={(e) => setConfigStudentCredit(e.target.value)}
+                          className="w-full px-3.5 py-2.5 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5 pt-2 border-t border-emerald-100">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-xs font-bold text-emerald-900">
+                            Maximum Credit Limit (Max)
+                          </label>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-700">
+                            Whole Numbers Only
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500">
+                          Maximum total credit points allowed for this leaf node per duration cycle (e.g. 20). Submissions remain unlimited.
+                        </p>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          placeholder="e.g. 20 (Leave blank for unlimited)"
+                          value={configLimit}
+                          onChange={(e) => {
+                            const val = e.target.value.replace(/\D/g, '')
+                            setConfigLimit(val)
+                          }}
                           className="w-full px-3.5 py-2.5 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
                         />
                       </div>
@@ -1332,7 +1429,7 @@ export default function PBASAdminPage() {
                     </div>
                   )}
 
-                  {/* BOTH SELECTED: Splits into two sections (Staff on left, Student & Mentor on right) */}
+                  {/* BOTH SELECTED */}
                   {configAudience === 'both' && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-fadeIn">
                       {/* Left: Staff Section */}
@@ -1343,20 +1440,40 @@ export default function PBASAdminPage() {
                           </div>
                           <p className="text-[11px] text-slate-500 mt-1">PBAS points for faculty/staff submissions.</p>
                         </div>
-                        <div className="space-y-1.5">
-                          <label className="block text-xs font-semibold text-slate-700">Staff Credit</label>
-                          <input
-                            type="number"
-                            min="0"
-                            placeholder="e.g. 10"
-                            value={configStaffCredit}
-                            onChange={(e) => setConfigStaffCredit(e.target.value)}
-                            className="w-full px-3.5 py-2 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                          />
+                        <div className="space-y-3">
+                          <div className="space-y-1">
+                            <label className="block text-xs font-semibold text-slate-700">Staff Credit (Per Sub.)</label>
+                            <input
+                              type="number"
+                              min="0"
+                              placeholder="e.g. 5"
+                              value={configStaffCredit}
+                              onChange={(e) => setConfigStaffCredit(e.target.value)}
+                              className="w-full px-3.5 py-2 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between">
+                              <label className="block text-xs font-semibold text-slate-700">Max Limit</label>
+                              <span className="text-[9px] font-bold text-indigo-600">Whole No.</span>
+                            </div>
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              placeholder="e.g. 20 (Optional)"
+                              value={configLimit}
+                              onChange={(e) => {
+                                const val = e.target.value.replace(/\D/g, '')
+                                setConfigLimit(val)
+                              }}
+                              className="w-full px-3.5 py-2 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                            />
+                          </div>
                         </div>
                       </div>
 
-                      {/* Right: Student Section (Student credit + Mentor credit) */}
+                      {/* Right: Student Section */}
                       <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 space-y-3">
                         <div>
                           <div className="flex items-center gap-1.5">
@@ -1365,28 +1482,49 @@ export default function PBASAdminPage() {
                           <p className="text-[11px] text-slate-500 mt-1">Credits for student & mentor verification.</p>
                         </div>
 
-                        <div className="space-y-1.5">
-                          <label className="block text-xs font-semibold text-slate-700">1. Student Credit</label>
-                          <input
-                            type="number"
-                            min="0"
-                            placeholder="e.g. 5"
-                            value={configStudentCredit}
-                            onChange={(e) => setConfigStudentCredit(e.target.value)}
-                            className="w-full px-3.5 py-2 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
-                          />
-                        </div>
+                        <div className="space-y-2.5">
+                          <div className="space-y-1">
+                            <label className="block text-xs font-semibold text-slate-700">1. Student Credit (Per Sub.)</label>
+                            <input
+                              type="number"
+                              min="0"
+                              placeholder="e.g. 5"
+                              value={configStudentCredit}
+                              onChange={(e) => setConfigStudentCredit(e.target.value)}
+                              className="w-full px-3.5 py-2 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                            />
+                          </div>
 
-                        <div className="space-y-1.5">
-                          <label className="block text-xs font-semibold text-slate-700">2. Mentor Credit</label>
-                          <input
-                            type="number"
-                            min="0"
-                            placeholder="e.g. 2"
-                            value={configMentorCredit}
-                            onChange={(e) => setConfigMentorCredit(e.target.value)}
-                            className="w-full px-3.5 py-2 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
-                          />
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between">
+                              <label className="block text-xs font-semibold text-slate-700">Max Limit</label>
+                              <span className="text-[9px] font-bold text-emerald-600">Whole No.</span>
+                            </div>
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              placeholder="e.g. 20 (Optional)"
+                              value={configLimit}
+                              onChange={(e) => {
+                                const val = e.target.value.replace(/\D/g, '')
+                                setConfigLimit(val)
+                              }}
+                              className="w-full px-3.5 py-2 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                            />
+                          </div>
+
+                          <div className="space-y-1 pt-1 border-t border-emerald-100">
+                            <label className="block text-xs font-semibold text-slate-700">2. Mentor Credit</label>
+                            <input
+                              type="number"
+                              min="0"
+                              placeholder="e.g. 2"
+                              value={configMentorCredit}
+                              onChange={(e) => setConfigMentorCredit(e.target.value)}
+                              className="w-full px-3.5 py-2 bg-white text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                            />
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1771,6 +1909,11 @@ function TreeNodeItem({
                 {(node.audience === 'student' || node.audience === 'both') && (
                   <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
                     Student: {node.pbas_credit ?? 0} Cr • Mentor: {node.mentor_credit ?? 0} Cr
+                  </span>
+                )}
+                {node.limit != null && node.limit > 0 && (
+                  <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200" title={`Capped at ${node.limit} max credit per duration cycle`}>
+                    Max: {node.limit} Cr
                   </span>
                 )}
               </>

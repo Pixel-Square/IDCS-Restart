@@ -92,7 +92,12 @@ export default function StaffLogsPage() {
   const loadLogs = async () => {
     setLoading(true);
     try {
+      const me = getCachedMe();
+      const meFullName = me ? `${me.first_name || ''} ${me.last_name || ''}`.trim() : '';
       const data = await fetchDisciplineLogs({
+        my_submissions: true,
+        username: me?.username,
+        reported_by_name: meFullName || me?.username,
         search,
         status: statusFilter,
         severity: severityFilter,
@@ -104,7 +109,7 @@ export default function StaffLogsPage() {
         setBackendDepts(data.departments);
       }
     } catch (e) {
-      console.error('Failed to load staff discipline logs:', e);
+      console.error('Failed to load my submissions:', e);
     } finally {
       setLoading(false);
     }
@@ -173,6 +178,32 @@ export default function StaffLogsPage() {
     }
   };
 
+  const getSubmissionStatusDisplay = (log: DisciplineLog) => {
+    if (log.status === 'RESOLVED') {
+      return {
+        label: 'Resolved • Cleared',
+        badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      };
+    }
+    if (log.status === 'DISMISSED') {
+      return {
+        label: 'Dismissed',
+        badgeClass: 'bg-slate-100 text-slate-600 border-slate-200',
+      };
+    }
+    if (log.status === 'PENDING_FINE_PAYMENT') {
+      return {
+        label: 'Pending at Student (Fine)',
+        badgeClass: 'bg-rose-50 text-rose-700 border-rose-200',
+      };
+    }
+    const pendingRole = log.current_role || (log.flow_roles && log.flow_roles[log.current_step_index || 0]) || 'Approver';
+    return {
+      label: `Pending at ${pendingRole}`,
+      badgeClass: 'bg-amber-50 text-amber-900 border-amber-300 font-bold',
+    };
+  };
+
   const getSeverityBadge = (sev: string) => {
     switch (sev) {
       case 'CRITICAL':
@@ -194,9 +225,14 @@ export default function StaffLogsPage() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-slate-100">
           <div className="flex items-center gap-2">
             <ClipboardList className="w-5 h-5 text-indigo-600" />
-            <h3 className="text-sm font-bold text-slate-900">Recorded Incident Logs</h3>
-            <span className="text-xs font-semibold px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-md border border-indigo-100">
-              {logs.length} Records
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">My Submissions</h3>
+              <p className="text-[11px] text-slate-500">
+                Track incidents submitted by you and monitor which role they are currently pending at.
+              </p>
+            </div>
+            <span className="text-xs font-semibold px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-md border border-indigo-100 ml-2">
+              {logs.length} Submitted
             </span>
           </div>
 
@@ -342,13 +378,16 @@ export default function StaffLogsPage() {
                     </td>
 
                     <td className="py-3.5 px-4">
-                      <span
-                        className={`inline-block text-[11px] font-semibold px-2.5 py-1 rounded-md border ${getStatusBadge(
-                          log.status
-                        )}`}
-                      >
-                        {log.status.replace('_', ' ')}
-                      </span>
+                      {(() => {
+                        const sInfo = getSubmissionStatusDisplay(log);
+                        return (
+                          <span
+                            className={`inline-block text-[11px] font-bold px-2.5 py-1 rounded-md border ${sInfo.badgeClass}`}
+                          >
+                            {sInfo.label}
+                          </span>
+                        );
+                      })()}
                     </td>
 
                     <td className="py-3.5 px-4 text-right">

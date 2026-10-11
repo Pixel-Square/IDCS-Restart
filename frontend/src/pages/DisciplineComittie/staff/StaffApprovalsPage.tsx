@@ -182,7 +182,7 @@ export default function StaffApprovalsPage() {
         action_notes: actionNotes.trim(),
       });
       setActiveLog(updated);
-      setApprovals((prev) => prev.filter((l) => l.id !== activeLog.id));
+      setApprovals((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
       setActionSuccessMsg('Incident approved and marked as resolved!');
       setTimeout(() => {
         handleCloseModal();
@@ -205,6 +205,17 @@ export default function StaffApprovalsPage() {
     );
   });
 
+  const isPendingForUser = (log: DisciplineLog) => {
+    if (log.status === 'RESOLVED' || log.status === 'DISMISSED') return false;
+    if (typeof log.is_actionable === 'boolean') {
+      return log.is_actionable;
+    }
+    return true;
+  };
+
+  const pendingApprovals = filteredApprovals.filter(isPendingForUser);
+  const historyApprovals = filteredApprovals.filter((log) => !isPendingForUser(log));
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       {/* Top Banner */}
@@ -218,7 +229,7 @@ export default function StaffApprovalsPage() {
               Discipline Approvals
             </h1>
             <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-              Review assigned student discipline requests, fix/modify fines, inspect receipt documents, and forward/approve.
+              Review assigned student discipline requests, inspect fine payments, and forward or approve resolutions.
             </p>
           </div>
         </div>
@@ -235,172 +246,359 @@ export default function StaffApprovalsPage() {
         </div>
       </div>
 
-      {/* Search Bar */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center gap-3">
+      {/* Search Bar & Split Summary */}
+      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search pending approval requests by student name, register number..."
+            placeholder="Search approval requests by student name, register number, violation category..."
             className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
           />
         </div>
-        <div className="text-xs text-slate-500 font-semibold px-2">
-          {filteredApprovals.length} Request{filteredApprovals.length !== 1 ? 's' : ''} Pending
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-xs font-bold px-2.5 py-1 rounded-lg bg-amber-50 text-amber-800 border border-amber-200">
+            {pendingApprovals.length} Pending Action
+          </span>
+          <span className="text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200">
+            {historyApprovals.length} Forwarded / Approved
+          </span>
         </div>
       </div>
 
-      {/* Approvals Table / Grid */}
-      {loading ? (
-        <div className="bg-white border border-slate-200 rounded-2xl p-16 text-center shadow-sm">
-          <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin mx-auto mb-3" />
-          <h3 className="text-sm font-bold text-slate-800">Loading Approvals Queue...</h3>
-        </div>
-      ) : filteredApprovals.length === 0 ? (
-        <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center shadow-sm">
-          <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-3">
-            <CheckCircle2 className="w-6 h-6" />
+      {/* ── SECTION 1 (TOP & IMPORTANT): PENDING APPROVALS QUEUE ── */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+          <div className="flex items-center gap-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse inline-block" />
+            <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
+              <span>Pending Approvals</span>
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-amber-100 text-amber-800 border border-amber-200">
+                {pendingApprovals.length} Important
+              </span>
+            </h2>
           </div>
-          <h3 className="text-base font-bold text-slate-800">No Pending Approvals</h3>
-          <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
-            All discipline incident requests assigned to your role have been processed and resolved.
-          </p>
+          <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 font-bold px-2.5 py-1 rounded-lg hidden sm:inline-flex items-center gap-1">
+            <AlertCircle className="w-3.5 h-3.5" />
+            Action Required Now
+          </span>
         </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {filteredApprovals.map((log) => {
-            const flow = log.flow_roles || [];
-            const isFinalStep = log.current_step_index === flow.length - 1;
-            const hasReceipt = Boolean(log.receipt_document || log.receipt_document_url);
 
-            return (
-              <div
-                key={log.id}
-                className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all flex flex-col justify-between overflow-hidden"
-              >
-                <div className="p-5 space-y-4">
-                  {/* Top Profile + Step Badge */}
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center overflow-hidden shrink-0">
-                        {log.profile_image_url ? (
-                          <img
-                            src={resolveMediaUrl(log.profile_image_url)!}
-                            alt={log.student_name}
-                            className="w-full h-full object-cover"
-                            onError={(e) => {
-                              (e.target as HTMLElement).style.display = 'none';
-                            }}
-                          />
-                        ) : (
-                          <User className="w-6 h-6 text-indigo-600" />
-                        )}
-                      </div>
-                      <div>
-                        <h3 className="text-sm font-bold text-slate-900 leading-snug">
-                          {log.student_name}
-                        </h3>
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          <span className="text-xs font-mono font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded">
-                            {log.reg_no}
-                          </span>
+        {loading ? (
+          <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center shadow-sm">
+            <RefreshCw className="w-7 h-7 text-indigo-600 animate-spin mx-auto mb-2" />
+            <h3 className="text-xs font-bold text-slate-700">Loading Pending Approvals...</h3>
+          </div>
+        ) : pendingApprovals.length === 0 ? (
+          <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center shadow-xs">
+            <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-2">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <h3 className="text-sm font-bold text-slate-800">No Pending Approvals Waiting</h3>
+            <p className="text-xs text-slate-500 max-w-sm mx-auto mt-0.5">
+              All discipline incident requests assigned to your current role have been processed.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {pendingApprovals.map((log) => {
+              const flow = log.flow_roles || [];
+              const isFinalStep = log.current_step_index === flow.length - 1;
+              const hasReceipt = Boolean(log.receipt_document || log.receipt_document_url);
+
+              return (
+                <div
+                  key={log.id}
+                  className="bg-white rounded-2xl border-2 border-amber-200/90 shadow-xs hover:shadow-md transition-all flex flex-col justify-between overflow-hidden"
+                >
+                  <div className="p-5 space-y-4">
+                    {/* Top Profile + Step Badge */}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center overflow-hidden shrink-0">
+                          {log.profile_image_url ? (
+                            <img
+                              src={resolveMediaUrl(log.profile_image_url)!}
+                              alt={log.student_name}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                (e.target as HTMLElement).style.display = 'none';
+                              }}
+                            />
+                          ) : (
+                            <User className="w-6 h-6 text-indigo-600" />
+                          )}
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-900 leading-snug">
+                            {log.student_name}
+                          </h3>
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <span className="text-xs font-mono font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded">
+                              {log.reg_no}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <span
-                      className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full border ${
-                        isFinalStep
-                          ? 'bg-purple-50 text-purple-700 border-purple-200'
-                          : 'bg-amber-50 text-amber-700 border-amber-200'
-                      }`}
-                    >
-                      {log.current_role || 'Approver'}
-                    </span>
-                  </div>
-
-                  {/* Violation Category & Status Details */}
-                  <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-100 space-y-1.5 text-xs">
-                    <div className="flex items-center justify-between text-slate-700">
-                      <span className="font-semibold text-slate-500">Category:</span>
-                      <span className="font-bold text-slate-900">{log.category_title || 'Violation'}</span>
-                    </div>
-                    <div className="flex items-center justify-between text-slate-700">
-                      <span className="font-semibold text-slate-500">Department:</span>
-                      <span className="font-medium text-slate-800">{log.department_name || '-'}</span>
-                    </div>
-                    {log.assigned_approver_name && (
-                      <div className="flex items-center justify-between text-slate-700">
-                        <span className="font-semibold text-slate-500">Assigned Approver:</span>
-                        <span className="font-bold text-indigo-700">
-                          {log.assigned_approver_name}
-                          {log.assigned_approver_department ? ` (${log.assigned_approver_department})` : ''}
-                        </span>
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between text-slate-700">
-                      <span className="font-semibold text-slate-500">Fine Status:</span>
-                      <span className="font-bold text-indigo-700 flex items-center gap-0.5">
-                        <IndianRupee className="w-3 h-3" />
-                        {log.has_fine ? `${Number(log.fine_amount).toFixed(2)}` : 'No Fine'}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-slate-700">
-                      <span className="font-semibold text-slate-500">Receipt Proof:</span>
                       <span
-                        className={`font-bold text-[11px] px-2 py-0.5 rounded-md flex items-center gap-1 ${
-                          hasReceipt
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : log.has_fine
-                            ? 'bg-rose-100 text-rose-700 border border-rose-200'
-                            : 'bg-slate-200/80 text-slate-600'
+                        className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full border ${
+                          isFinalStep
+                            ? 'bg-purple-50 text-purple-700 border-purple-200'
+                            : 'bg-amber-50 text-amber-700 border-amber-200'
                         }`}
                       >
-                        {hasReceipt ? (
-                          'Uploaded'
-                        ) : log.has_fine ? (
-                          <>
-                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 inline-block animate-pulse"></span>
-                            <span>Pending Upload</span>
-                          </>
-                        ) : (
-                          'Not Applicable'
-                        )}
+                        {log.current_role || 'Approver'}
                       </span>
                     </div>
+
+                    {/* Violation Category & Status Details */}
+                    <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-100 space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between text-slate-700">
+                        <span className="font-semibold text-slate-500">Category:</span>
+                        <span className="font-bold text-slate-900">{log.category_title || 'Violation'}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-slate-700">
+                        <span className="font-semibold text-slate-500">Department:</span>
+                        <span className="font-medium text-slate-800">{log.department_name || '-'}</span>
+                      </div>
+                      {log.assigned_approver_name && (
+                        <div className="flex items-center justify-between text-slate-700">
+                          <span className="font-semibold text-slate-500">Assigned Approver:</span>
+                          <span className="font-bold text-indigo-700">
+                            {log.assigned_approver_name}
+                            {log.assigned_approver_department ? ` (${log.assigned_approver_department})` : ''}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between text-slate-700">
+                        <span className="font-semibold text-slate-500">Fine Status:</span>
+                        <span className="font-bold text-indigo-700 flex items-center gap-0.5">
+                          <IndianRupee className="w-3 h-3" />
+                          {log.has_fine ? `${Number(log.fine_amount).toFixed(2)}` : 'No Fine'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-slate-700">
+                        <span className="font-semibold text-slate-500">Receipt Proof:</span>
+                        <span
+                          className={`font-bold text-[11px] px-2 py-0.5 rounded-md flex items-center gap-1 ${
+                            hasReceipt
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : log.has_fine
+                              ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                              : 'bg-slate-200/80 text-slate-600'
+                          }`}
+                        >
+                          {hasReceipt ? (
+                            'Uploaded'
+                          ) : log.has_fine ? (
+                            <>
+                              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 inline-block animate-pulse"></span>
+                              <span>Pending Upload</span>
+                            </>
+                          ) : (
+                            'Not Applicable'
+                          )}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Remarks */}
+                    {log.remarks && (
+                      <div className="p-2.5 bg-rose-50/80 rounded-xl border border-rose-200/90 text-xs text-rose-700 font-semibold italic flex items-start gap-1.5">
+                        <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
+                        <span className="leading-snug">"{log.remarks}"</span>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Remarks */}
-                  {log.remarks && (
-                    <div className="p-2.5 bg-rose-50/80 rounded-xl border border-rose-200/90 text-xs text-rose-700 font-semibold italic flex items-start gap-1.5">
-                      <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
-                      <span className="leading-snug">"{log.remarks}"</span>
-                    </div>
-                  )}
-                </div>
+                  {/* Footer View Action */}
+                  <div className="px-5 py-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+                    <span className="text-[11px] text-slate-400 font-medium flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {new Date(log.incident_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    </span>
 
-                {/* Footer View Action */}
-                <div className="px-5 py-3 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
-                  <span className="text-[11px] text-slate-400 font-medium flex items-center gap-1">
-                    <Clock className="w-3 h-3" />
-                    {new Date(log.incident_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })} • {new Date(log.incident_date).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
-                  </span>
-
-                  <button
-                    onClick={() => handleOpenActionModal(log)}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-xs transition active:scale-95 cursor-pointer"
-                  >
-                    <Eye className="w-3.5 h-3.5" />
-                    <span>View & Action</span>
-                  </button>
+                    <button
+                      onClick={() => handleOpenActionModal(log)}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-xs transition active:scale-95 cursor-pointer"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>View & Action</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ── SECTION 2 (BOTTOM): FORWARDED & APPROVED SUBMISSIONS (ROWS WISE) ── */}
+      <div className="space-y-4 pt-4">
+        <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+            <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
+              <span>Forwarded & Approved Submissions</span>
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-slate-100 text-slate-700 border border-slate-200">
+                {historyApprovals.length}
+              </span>
+            </h2>
+          </div>
+          <span className="text-xs text-slate-500 font-medium hidden sm:inline-block">
+            Applications forwarded to next roles or finalized
+          </span>
         </div>
-      )}
+
+        {historyApprovals.length === 0 ? (
+          <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-500 shadow-xs">
+            No forwarded or approved applications recorded yet.
+          </div>
+        ) : (
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-4">Student</th>
+                    <th className="py-3 px-4">Violation / Severity</th>
+                    <th className="py-3 px-4">Flow Status</th>
+                    <th className="py-3 px-4">Fine / Receipt</th>
+                    <th className="py-3 px-4">Incident Date</th>
+                    <th className="py-3 px-4 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {historyApprovals.map((log) => {
+                    const hasReceipt = Boolean(log.receipt_document || log.receipt_document_url);
+                    const isResolved = log.status === 'RESOLVED';
+                    const isDismissed = log.status === 'DISMISSED';
+
+                    return (
+                      <tr key={log.id} className="hover:bg-slate-50/70 transition">
+                        {/* Student */}
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center overflow-hidden shrink-0">
+                              {log.profile_image_url ? (
+                                <img
+                                  src={resolveMediaUrl(log.profile_image_url)!}
+                                  alt={log.student_name}
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    (e.target as HTMLElement).style.display = 'none';
+                                  }}
+                                />
+                              ) : (
+                                <User className="w-4 h-4 text-indigo-600" />
+                              )}
+                            </div>
+                            <div>
+                              <div className="font-bold text-slate-900 leading-tight">
+                                {log.student_name}
+                              </div>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span className="font-mono text-[10px] font-bold text-indigo-700 bg-indigo-50 px-1 py-0.2 rounded">
+                                  {log.reg_no}
+                                </span>
+                                {log.department_name && (
+                                  <span className="text-[11px] text-slate-400">
+                                    • {log.department_name}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Violation / Severity */}
+                        <td className="py-3 px-4">
+                          <div className="font-semibold text-slate-800">
+                            {log.category_title || 'General Incident'}
+                          </div>
+                          <span
+                            className={`inline-block mt-0.5 text-[9px] font-extrabold uppercase px-1.5 py-0.2 rounded border ${
+                              log.severity === 'CRITICAL'
+                                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                : log.severity === 'HIGH'
+                                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                : 'bg-slate-100 text-slate-600 border-slate-200'
+                            }`}
+                          >
+                            {log.severity || 'LOW'}
+                          </span>
+                        </td>
+
+                        {/* Status / Pending At */}
+                        <td className="py-3 px-4">
+                          {isResolved ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              <span>Resolved & Cleared</span>
+                            </span>
+                          ) : isDismissed ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                              <span>Dismissed</span>
+                            </span>
+                          ) : log.status === 'PENDING_FINE_PAYMENT' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 animate-pulse">
+                              <IndianRupee className="w-3 h-3 text-rose-600" />
+                              <span>Pending Student Fine</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              <Clock className="w-3 h-3 text-indigo-600" />
+                              <span>Pending at {log.current_role ? log.current_role.replace(/_/g, ' ') : 'Next Role'}</span>
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Fine / Proof */}
+                        <td className="py-3 px-4">
+                          <div className="font-semibold text-slate-800 flex items-center gap-0.5">
+                            <IndianRupee className="w-3 h-3 text-slate-500" />
+                            {log.has_fine ? Number(log.fine_amount).toFixed(2) : '0 (No Fine)'}
+                          </div>
+                          <span
+                            className={`inline-block mt-0.5 text-[9px] font-bold px-1.5 py-0.2 rounded ${
+                              hasReceipt
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : log.has_fine
+                                ? 'bg-rose-100 text-rose-700'
+                                : 'bg-slate-100 text-slate-500'
+                            }`}
+                          >
+                            {hasReceipt ? 'Receipt Uploaded' : log.has_fine ? 'Receipt Pending' : 'N/A'}
+                          </span>
+                        </td>
+
+                        {/* Date */}
+                        <td className="py-3 px-4 text-slate-500">
+                          {new Date(log.incident_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                        </td>
+
+                        {/* Action */}
+                        <td className="py-3 px-4 text-right">
+                          <button
+                            onClick={() => handleOpenActionModal(log)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 border border-slate-200 hover:border-indigo-200 rounded-lg text-xs font-bold transition cursor-pointer active:scale-95"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>View Details</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* ── ACTION / APPROVAL POPUP DIALOG ── */}
       {activeLog && (() => {
@@ -810,6 +1008,139 @@ export default function StaffApprovalsPage() {
                 />
               </div>
 
+              {/* 6.5 APPROVAL FLOW LINE: Status of Pending, Forwarded, Finalizer with Roles & Names */}
+              <div className="p-3.5 bg-slate-50/90 rounded-2xl border border-slate-200/80 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+                    Approval Flow Pipeline & Stage Status
+                  </span>
+                  <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200/60">
+                    Step {Math.min((activeLog.current_step_index ?? 0) + 1, activeLog.flow_stages?.length ?? ((activeLog.flow_roles?.length ?? 1) + 1))} of {activeLog.flow_stages?.length ?? ((activeLog.flow_roles?.length ?? 1) + 1)}
+                  </span>
+                </div>
+
+                {/* Flow line pipeline with node indicators */}
+                <div className="relative py-2">
+                  <div className="absolute top-5.5 left-6 right-6 h-1 bg-slate-200 rounded-full z-0" />
+
+                  <div className="relative z-10 flex items-start justify-between gap-1 overflow-x-auto pb-1">
+                    {activeLog.flow_stages && activeLog.flow_stages.length > 0 ? (
+                      activeLog.flow_stages.map((stage, idx) => {
+                        const isFirst = idx === 0;
+                        const isLast = idx === activeLog.flow_stages!.length - 1;
+
+                        return (
+                          <div key={stage.role_key + idx} className="flex flex-col items-center min-w-[76px] text-center">
+                            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shadow-xs ring-4 ring-white ${
+                              stage.is_done
+                                ? 'bg-emerald-500 text-white'
+                                : stage.is_current
+                                ? 'bg-amber-500 text-white animate-pulse ring-amber-100'
+                                : 'bg-slate-200 text-slate-500'
+                            }`}>
+                              {stage.is_done ? '✓' : stage.is_current ? '🕒' : isLast ? '★' : (idx + 1)}
+                            </div>
+                            <span className={`mt-1 text-[9px] font-extrabold uppercase tracking-tight ${
+                              stage.is_done ? 'text-emerald-700' : stage.is_current ? 'text-amber-700 font-black' : 'text-slate-400'
+                            }`}>
+                              {stage.status === 'SUBMITTED' ? 'Submitted' : stage.status === 'FORWARDED' ? 'Forwarded' : stage.status === 'PENDING' ? 'Pending' : stage.status === 'FINALIZER' ? 'Finalizer' : 'Upcoming'}
+                            </span>
+                            <span className="text-[10px] font-extrabold text-slate-900 leading-tight">
+                              {stage.assigned_name}
+                            </span>
+                            <span className={`text-[8px] font-semibold px-1.5 py-0.2 rounded mt-0.5 ${
+                              isFirst || isLast ? 'text-slate-400' : 'text-indigo-700 bg-indigo-50'
+                            }`}>
+                              {stage.role_title}
+                            </span>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <>
+                        {/* Origin Node: Submitter */}
+                        <div className="flex flex-col items-center min-w-[76px] text-center">
+                          <div className="w-7 h-7 rounded-full bg-emerald-500 text-white flex items-center justify-center text-xs font-black shadow-xs ring-4 ring-white">
+                            ✓
+                          </div>
+                          <span className="mt-1 text-[9px] font-extrabold text-emerald-700 uppercase tracking-tight">
+                            Submitted
+                          </span>
+                          <span className="text-[10px] font-extrabold text-slate-900 leading-tight">
+                            {activeLog.reported_by_name || 'Reporting Staff'}
+                          </span>
+                          <span className="text-[8px] font-semibold text-slate-400">
+                            Submitter (Origin)
+                          </span>
+                        </div>
+
+                        {/* Intermediate Stages in Flow */}
+                        {activeLog.flow_roles?.map((role, idx) => {
+                          const currIdx = activeLog.current_step_index ?? 0;
+                          const isPast = idx < currIdx;
+                          const isCurrent = idx === currIdx && activeLog.status !== 'RESOLVED';
+                          const isDone = isPast || activeLog.status === 'RESOLVED';
+
+                          const pastAction = activeLog.actions?.find(a =>
+                            a.role_performed?.toUpperCase() === role.toUpperCase() &&
+                            (a.action_type === 'FORWARDED' || a.action_type === 'APPROVED')
+                          );
+                          const authorityName = activeLog.flow_authorities?.[role.toUpperCase()] || (isCurrent ? activeLog.assigned_approver_name : '') || role.replace(/_/g, ' ');
+                          const performerName = pastAction?.user_name || authorityName;
+
+                          return (
+                            <div key={role + idx} className="flex flex-col items-center min-w-[76px] text-center">
+                              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shadow-xs ring-4 ring-white ${
+                                isDone
+                                  ? 'bg-emerald-500 text-white'
+                                  : isCurrent
+                                  ? 'bg-amber-500 text-white animate-pulse ring-amber-100'
+                                  : 'bg-slate-200 text-slate-500'
+                              }`}>
+                                {isDone ? '✓' : isCurrent ? '🕒' : (idx + 2)}
+                              </div>
+                              <span className={`mt-1 text-[9px] font-extrabold uppercase tracking-tight ${
+                                isDone ? 'text-emerald-700' : isCurrent ? 'text-amber-700 font-black' : 'text-slate-400'
+                              }`}>
+                                {isDone ? 'Forwarded' : isCurrent ? 'Pending' : 'Upcoming'}
+                              </span>
+                              <span className="text-[10px] font-extrabold text-slate-900 leading-tight">
+                                {performerName}
+                              </span>
+                              <span className="text-[8px] font-semibold text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded mt-0.5">
+                                {role.replace(/_/g, ' ')}
+                              </span>
+                            </div>
+                          );
+                        })}
+
+                        {/* Final Approver Node */}
+                        <div className="flex flex-col items-center min-w-[76px] text-center">
+                          <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shadow-xs ring-4 ring-white ${
+                            activeLog.status === 'RESOLVED'
+                              ? 'bg-emerald-600 text-white ring-emerald-100'
+                              : 'bg-slate-200 text-slate-500'
+                          }`}>
+                            ★
+                          </div>
+                          <span className={`mt-1 text-[9px] font-extrabold uppercase tracking-tight ${
+                            activeLog.status === 'RESOLVED' ? 'text-emerald-700' : 'text-slate-400'
+                          }`}>
+                            {activeLog.status === 'RESOLVED' ? 'Finalized' : 'Finalizer'}
+                          </span>
+                          <span className="text-[10px] font-extrabold text-slate-900 leading-tight">
+                            {activeLog.flow_authorities?.[activeLog.flow_roles?.[activeLog.flow_roles.length - 1]?.toUpperCase() ?? ''] || 'Final Approver'}
+                          </span>
+                          <span className="text-[8px] font-semibold text-slate-400">
+                            Clearance
+                          </span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               {/* 7. Action Buttons & Workflow Gate */}
               <div className="space-y-2.5 pt-3 border-t border-slate-100">
                 {isReceiptPending && (
@@ -829,45 +1160,75 @@ export default function StaffApprovalsPage() {
                   </button>
 
                   <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-                    {/* FORWARD BUTTON: Enabled for intermediate roles when not blocked */}
-                    {activeLog.flow_roles && activeLog.current_step_index! < activeLog.flow_roles.length - 1 && (
-                      <button
-                        type="button"
-                        onClick={handleForward}
-                        disabled={processing || isReceiptPending}
-                        className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-xl text-xs font-bold shadow-xs transition active:scale-95 flex items-center justify-center gap-1.5 ${
-                          isReceiptPending
-                            ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed opacity-60'
-                            : 'bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white cursor-pointer disabled:opacity-50'
-                        }`}
-                        title={isReceiptPending ? "Blocked: Receipt not uploaded" : "Forward request"}
-                      >
-                        {processing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : isReceiptPending ? <Lock className="w-3.5 h-3.5" /> : <Send className="w-3.5 h-3.5" />}
-                        <span>Forward to Next</span>
-                      </button>
-                    )}
+                    {(() => {
+                      if (activeLog.status === 'RESOLVED') {
+                        return (
+                          <div className="px-3.5 py-2 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold flex items-center gap-1.5">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Incident Resolved & Cleared</span>
+                          </div>
+                        );
+                      }
 
-                    {/* APPROVE BUTTON: Blocked if receipt is pending */}
-                    <button
-                      type="button"
-                      onClick={handleFinalApprove}
-                      disabled={processing || isReceiptPending}
-                      className={`flex-1 sm:flex-initial px-5 py-2.5 rounded-xl text-xs font-bold shadow-sm transition active:scale-95 flex items-center justify-center gap-1.5 ${
-                        isReceiptPending
-                          ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed opacity-60'
-                          : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-200 cursor-pointer disabled:opacity-50'
-                      }`}
-                      title={isReceiptPending ? "Blocked: Receipt not uploaded" : "Approve & Resolve"}
-                    >
-                      {processing ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : isReceiptPending ? (
-                        <Lock className="w-3.5 h-3.5" />
-                      ) : (
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                      )}
-                      <span>{isReceiptPending ? 'Approval Blocked' : 'Approve & Resolve'}</span>
-                    </button>
+                      const isIntermediate = Boolean(
+                        activeLog.flow_roles &&
+                        typeof activeLog.current_step_index === 'number' &&
+                        activeLog.current_step_index < activeLog.flow_roles.length - 1
+                      );
+                      const nextRoleName = isIntermediate
+                        ? activeLog.flow_roles![activeLog.current_step_index! + 1] || 'Next Role'
+                        : 'Final Approver';
+
+                      if (isIntermediate) {
+                        return (
+                          /* INTERMEDIATE ROLE: Show Forward to <Role> button */
+                          <button
+                            type="button"
+                            onClick={handleForward}
+                            disabled={processing || isReceiptPending}
+                            className={`flex-1 sm:flex-initial px-5 py-2.5 rounded-xl text-xs font-bold shadow-sm transition active:scale-95 flex items-center justify-center gap-1.5 ${
+                              isReceiptPending
+                                ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed opacity-60'
+                                : 'bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white cursor-pointer disabled:opacity-50'
+                            }`}
+                            title={isReceiptPending ? "Blocked: Receipt not uploaded" : `Forward to ${nextRoleName}`}
+                          >
+                            {processing ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : isReceiptPending ? (
+                              <Lock className="w-3.5 h-3.5" />
+                            ) : (
+                              <Send className="w-3.5 h-3.5" />
+                            )}
+                            <span>Forward to {nextRoleName}</span>
+                          </button>
+                        );
+                      }
+
+                      /* FINAL ROLE: Show Approve & Resolve */
+                      return (
+                        <button
+                          type="button"
+                          onClick={handleFinalApprove}
+                          disabled={processing || isReceiptPending}
+                          className={`flex-1 sm:flex-initial px-5 py-2.5 rounded-xl text-xs font-bold shadow-sm transition active:scale-95 flex items-center justify-center gap-1.5 ${
+                            isReceiptPending
+                              ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed opacity-60'
+                              : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-200 cursor-pointer disabled:opacity-50'
+                          }`}
+                          title={isReceiptPending ? "Blocked: Receipt not uploaded" : "Approve & Resolve"}
+                        >
+                          {processing ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : isReceiptPending ? (
+                            <Lock className="w-3.5 h-3.5" />
+                          ) : (
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                          )}
+                          <span>{isReceiptPending ? 'Approval Blocked' : 'Approve & Resolve'}</span>
+                        </button>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>

@@ -22,11 +22,13 @@ from .views import (
     PBASVerifierTicketForwardToDepartmentView,
     PBASVerifierTicketForwardToMentorView,
     PBASVerifierTicketsMyListView,
+    PBASDurationViewSet,
 )
 
 
 router = SimpleRouter()
 router.register(r'custom-departments', PBASCustomDepartmentViewSet, basename='pbas-custom-departments')
+router.register(r'durations', PBASDurationViewSet, basename='pbas-durations')
 
 
 urlpatterns = [

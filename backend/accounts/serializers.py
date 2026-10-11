@@ -631,16 +631,61 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
         # Build tokens
         refresh = RefreshToken.for_user(user)
 
-        # add roles claim to tokens for convenience
+        effective_roles = []
         try:
-            refresh['roles'] = _compute_effective_role_names(user)
+            effective_roles = _compute_effective_role_names(user)
+            refresh['roles'] = effective_roles
         except Exception:
             refresh['roles'] = []
+
+        # Resolve student/staff profile info
+        profile_img_url = ''
+        dept_name = ''
+        reg_no_val = ''
+        profile_type_val = 'STUDENT' if any('STUDENT' in str(r).upper() for r in effective_roles) else 'STAFF'
+
+        try:
+            from academics.models import StudentProfile
+            sp = StudentProfile.objects.filter(user=user).select_related(
+                'home_department', 'section__batch__course__department'
+            ).first()
+            if sp:
+                profile_type_val = 'STUDENT'
+                reg_no_val = sp.reg_no
+                if getattr(sp, 'profile_image', None):
+                    profile_img_url = sp.profile_image.url
+                dept_name = sp.home_department.name if sp.home_department else (
+                    sp.section.batch.course.department.name if sp.section and sp.section.batch and sp.section.batch.course and sp.section.batch.course.department else ''
+                )
+        except Exception:
+            pass
+
+        if not dept_name:
+            try:
+                from academics.models import StaffProfile
+                st = StaffProfile.objects.filter(user=user).select_related('department').first()
+                if st:
+                    if getattr(st, 'profile_image', None) and not profile_img_url:
+                        profile_img_url = st.profile_image.url
+                    if st.department:
+                        dept_name = st.department.name
+            except Exception:
+                pass
+
+        if not profile_img_url and getattr(user, 'profile_image', None):
+            try:
+                profile_img_url = user.profile_image.url
+            except Exception:
+                pass
 
         return {
             'refresh': str(refresh),
             'access': str(refresh.access_token),
             'user_id': int(user.id),
             'name': (f"{getattr(user, 'first_name', '')} {getattr(user, 'last_name', '')}").strip() or str(getattr(user, 'username', '') or '').strip(),
-            'roles': _compute_effective_role_names(user),
+            'roles': effective_roles,
+            'profile_type': profile_type_val,
+            'profile_image': profile_img_url,
+            'department': dept_name,
+            'reg_no': reg_no_val,
         }

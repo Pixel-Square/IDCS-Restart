@@ -15,6 +15,7 @@ export interface DisciplineCategory {
   description?: string;
   semesters: string[];
   severity?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  require_comment?: boolean;
   created_at?: string;
   is_active: boolean;
 }
@@ -58,12 +59,25 @@ export interface DisciplineLog {
 
   // Flow & Fine
   flow_roles?: string[];
+  flow_authorities?: Record<string, string>;
+  flow_stages?: Array<{
+    step_index: number;
+    role_key: string;
+    role_title: string;
+    assigned_name: string;
+    status: string;
+    is_done: boolean;
+    is_current: boolean;
+  }>;
   current_step_index?: number;
   current_role?: string;
+  is_actionable?: boolean;
   has_fine?: boolean;
   fine_amount?: number | string;
   fine_fixed_by?: number | null;
   fine_fixed_at?: string | null;
+  incident_document?: string | null;
+  incident_document_url?: string;
   receipt_document?: string | null;
   receipt_document_url?: string;
   receipt_notes?: string;
@@ -170,6 +184,9 @@ export async function fetchDisciplineLogs(params?: {
   severity?: string;
   department?: string;
   date?: string;
+  my_submissions?: boolean;
+  username?: string;
+  reported_by_name?: string;
 }): Promise<{
   results: DisciplineLog[];
   departments?: string[];
@@ -184,6 +201,9 @@ export async function fetchDisciplineLogs(params?: {
   if (params?.severity && params.severity !== 'ALL') qp.set('severity', params.severity);
   if (params?.department && params.department !== 'ALL') qp.set('department', params.department);
   if (params?.date) qp.set('date', params.date);
+  if (params?.my_submissions) qp.set('my_submissions', 'true');
+  if (params?.username) qp.set('username', params.username);
+  if (params?.reported_by_name) qp.set('reported_by_name', params.reported_by_name);
 
   const query = qp.toString();
   const res = await fetchWithAuth(`/api/discipline/logs/${query ? `?${query}` : ''}`);
@@ -199,15 +219,21 @@ export async function fetchDisciplineLogs(params?: {
   };
 }
 
-export async function createDisciplineLog(payload: Partial<DisciplineLog>): Promise<DisciplineLog> {
+export async function createDisciplineLog(payload: Partial<DisciplineLog> | FormData): Promise<DisciplineLog> {
+  const isFormData = payload instanceof FormData;
   const res = await fetchWithAuth('/api/discipline/logs/', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    headers: isFormData ? undefined : { 'Content-Type': 'application/json' },
+    body: isFormData ? payload : JSON.stringify(payload),
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || 'Failed to create discipline log');
+    let errorMsg = text;
+    try {
+      const errObj = JSON.parse(text);
+      errorMsg = errObj.error || errObj.detail || Object.values(errObj).flat().join(', ') || text;
+    } catch {}
+    throw new Error(errorMsg || 'Failed to create discipline log');
   }
   return res.json();
 }

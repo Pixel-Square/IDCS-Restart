@@ -32,10 +32,10 @@ export default function StaffDisciplinePage() {
     },
     {
       id: 'logs' as StaffDisciplineTab,
-      label: 'Discipline Logs',
-      description: 'Incident logs & recorded details',
+      label: 'My Submissions',
+      description: 'Incidents submitted by you and their live forwarding status in the ladder',
       icon: ClipboardList,
-      badge: 'History',
+      badge: 'Submissions',
     },
     {
       id: 'approvals' as StaffDisciplineTab,

@@ -4,7 +4,7 @@ from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 import openpyxl
 from openpyxl.drawing.image import Image as OpenpyxlImage
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -76,7 +76,7 @@ def is_user_approver_for_incident(user, log: DisciplineIncidentLog, target_role:
 
     academic_year = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
 
-    # 1. MENTOR role check: Must be the specific student's assigned active mentor
+    # 1. MENTOR role check: Specific student's mentor
     if role_code == 'MENTOR':
         if student:
             mentor_staff = authority_resolver.get_student_mentor(student)
@@ -84,7 +84,7 @@ def is_user_approver_for_incident(user, log: DisciplineIncidentLog, target_role:
                 return True
         return False
 
-    # 2. ADVISOR role check: Must be the specific student's section advisor
+    # 2. ADVISOR role check: Specific student's section advisor
     if role_code == 'ADVISOR':
         if student and academic_year:
             advisor_staff = authority_resolver.get_section_advisor(student, academic_year)
@@ -92,7 +92,7 @@ def is_user_approver_for_incident(user, log: DisciplineIncidentLog, target_role:
                 return True
         return False
 
-    # 3. HOD role check: Must be the student's department HOD
+    # 3. HOD role check: Student's department HOD
     if role_code == 'HOD':
         dept = None
         if student:
@@ -108,7 +108,7 @@ def is_user_approver_for_incident(user, log: DisciplineIncidentLog, target_role:
                 return True
         return False
 
-    # 4. AHOD role check: Must be the student's department AHOD
+    # 4. AHOD role check: Student's department AHOD
     if role_code == 'AHOD':
         dept = None
         if student:
@@ -125,7 +125,6 @@ def is_user_approver_for_incident(user, log: DisciplineIncidentLog, target_role:
         return False
 
     # 5. Generic / Committee role match (e.g. DISCIPLINE_COMMITTEE, PRINCIPAL, DEAN, etc.)
-    # Match user's direct assigned roles
     clean_role_code = role_code.replace(' ', '_').replace('-', '_')
     for u_role in roles_upper:
         clean_u_role = u_role.replace(' ', '_').replace('-', '_')
@@ -153,12 +152,26 @@ class DisciplineApprovalFlowConfigView(APIView):
             )
         serializer = DisciplineApprovalFlowConfigSerializer(flow)
 
-        # Also return list of all available system roles for convenience
-        all_roles = list(Role.objects.values_list('name', flat=True).distinct())
-        # Filter out student/ext_staff if needed or sort
+        # Return comprehensive list of all available approver and academic roles
+        system_roles = list(Role.objects.values_list('name', flat=True).distinct())
+        standard_roles = [
+            'DISCIPLINE_COMMITTEE',
+            'MENTOR',
+            'ADVISOR',
+            'HOD',
+            'AHOD',
+            'DEAN',
+            'PRINCIPAL',
+            'VICE_PRINCIPAL',
+            'DISCIPLINE_COMMITTEE_ADMIN',
+            'IQAC',
+        ]
+        all_roles = sorted(list(set(
+            [r.strip() for r in (system_roles + standard_roles) if r.strip().upper() not in ('STUDENT', 'DB_READER')]
+        )))
         return Response({
             'flow': serializer.data,
-            'available_roles': sorted(all_roles),
+            'available_roles': all_roles,
         })
 
     def post(self, request):
@@ -184,7 +197,10 @@ class DisciplineCategoriesView(APIView):
     GET /api/discipline/categories/ - List all configured discipline categories.
     POST /api/discipline/categories/ - Create a new discipline category.
     """
-    permission_classes = (IsAuthenticated,)
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [AllowAny()]
+        return [IsAuthenticated()]
 
     def get(self, request):
         qs = DisciplineCategory.objects.all()
@@ -252,7 +268,7 @@ class DisciplineIncidentLogsView(APIView):
     GET /api/discipline/logs/ - List real incident logs with filters.
     POST /api/discipline/logs/ - Record a new student discipline incident.
     """
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (AllowAny,)
 
     def get(self, request):
         qs = DisciplineIncidentLog.objects.select_related('student', 'category', 'reported_by').prefetch_related('actions').all()
@@ -294,6 +310,27 @@ class DisciplineIncidentLogsView(APIView):
         if role_filter:
             qs = qs.filter(current_role__iexact=role_filter)
 
+        # Filter strictly by current user's submitted actions
+        my_submissions = request.query_params.get('my_submissions')
+        if my_submissions and my_submissions.lower() in ['1', 'true']:
+            reporter_q = Q()
+            if request.user.is_authenticated:
+                user_full = f"{request.user.first_name} {request.user.last_name}".strip()
+                reporter_q |= Q(reported_by=request.user)
+                if user_full:
+                    reporter_q |= Q(reported_by_name__iexact=user_full)
+                if request.user.username:
+                    reporter_q |= Q(reported_by_name__iexact=request.user.username)
+
+            reporter_param = request.query_params.get('reported_by_name') or request.query_params.get('username')
+            if reporter_param:
+                reporter_q |= Q(reported_by_name__iexact=reporter_param) | Q(reported_by__username__iexact=reporter_param)
+
+            if reporter_q:
+                qs = qs.filter(reporter_q)
+            else:
+                qs = qs.none()
+
         total_count = qs.count()
         reported_count = qs.filter(status__in=['REPORTED', 'PENDING_FINE_PAYMENT', 'RECEIPT_UPLOADED', 'IN_APPROVAL']).count()
         action_taken_count = qs.filter(status='ACTION_TAKEN').count()
@@ -320,7 +357,17 @@ class DisciplineIncidentLogsView(APIView):
         if request.user.is_authenticated:
             data['reported_by'] = request.user.id
             full_reporter_name = f"{request.user.first_name} {request.user.last_name}".strip()
-            data['reported_by_name'] = full_reporter_name or request.user.username
+            data['reported_by_name'] = data.get('reported_by_name') or full_reporter_name or request.user.username
+        else:
+            staff_user_val = data.get('reported_by_username') or data.get('username')
+            if staff_user_val:
+                from django.contrib.auth import get_user_model
+                User = get_user_model()
+                matched_user = User.objects.filter(username=staff_user_val).first()
+                if matched_user:
+                    data['reported_by'] = matched_user.id
+                    full_name = f"{matched_user.first_name} {matched_user.last_name}".strip()
+                    data['reported_by_name'] = data.get('reported_by_name') or full_name or matched_user.username
 
         # Sanitize student ID if passed as 0, null, or string
         student_val = data.get('student')
@@ -363,7 +410,42 @@ class DisciplineIncidentLogsView(APIView):
                 if not data.get('batch_name') and st.section and st.section.batch:
                     data['batch_name'] = st.section.batch.name
 
+        file_obj = request.FILES.get('incident_document') or request.FILES.get('attachment') or request.FILES.get('file')
+        if file_obj:
+            data['incident_document'] = file_obj
+
+        # Support base64 image data from camera snapshot or canvas capture
+        raw_doc = data.get('incident_document')
+        if isinstance(raw_doc, str) and raw_doc.startswith('data:image'):
+            try:
+                import base64
+                from django.core.files.base import ContentFile
+                fmt, imgstr = raw_doc.split(';base64,')
+                ext = fmt.split('/')[-1]
+                if ext == 'jpeg':
+                    ext = 'jpg'
+                file_name = f"incident_{timezone.now().strftime('%Y%m%d_%H%M%S')}.{ext}"
+                data['incident_document'] = ContentFile(base64.b64decode(imgstr), name=file_name)
+            except Exception:
+                pass
+
         cat_id = data.get('category')
+        cat_ids = data.get('category_ids')
+        checked_ids = []
+        if isinstance(cat_ids, list):
+            checked_ids.extend(cat_ids)
+        elif cat_id:
+            checked_ids.append(cat_id)
+
+        if checked_ids:
+            req_cats = DisciplineCategory.objects.filter(id__in=checked_ids, require_comment=True)
+            if req_cats.exists() and not str(data.get('remarks', '')).strip():
+                req_names = ", ".join([c.title for c in req_cats])
+                return Response(
+                    {'error': f"Staff remarks/notes are required for: {req_names}."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         if cat_id:
             try:
                 cat_obj = DisciplineCategory.objects.get(pk=cat_id)
@@ -371,8 +453,22 @@ class DisciplineIncidentLogsView(APIView):
                     data['category_title'] = cat_obj.title
                 if not data.get('severity'):
                     data['severity'] = cat_obj.severity
-            except DisciplineCategory.DoesNotExist:
-                pass
+            except (DisciplineCategory.DoesNotExist, ValueError):
+                cat_title = data.get('category_title', '').strip()
+                cat_obj = DisciplineCategory.objects.filter(title__iexact=cat_title).first() if cat_title else None
+                if cat_obj:
+                    data['category'] = cat_obj.id
+                    if not data.get('severity'):
+                        data['severity'] = cat_obj.severity
+                else:
+                    data['category'] = None
+        elif data.get('category_title'):
+            cat_title = data.get('category_title', '').strip()
+            cat_obj = DisciplineCategory.objects.filter(title__iexact=cat_title).first()
+            if cat_obj:
+                data['category'] = cat_obj.id
+                if not data.get('severity'):
+                    data['severity'] = cat_obj.severity
 
         # Attach active approval flow path to the incident
         active_flow = DisciplineApprovalFlowConfig.objects.filter(is_active=True).first()
@@ -391,6 +487,12 @@ class DisciplineIncidentLogsView(APIView):
         serializer = DisciplineIncidentLogSerializer(data=data)
         if serializer.is_valid():
             obj = serializer.save()
+            if obj.incident_document and not obj.incident_document_url:
+                try:
+                    obj.incident_document_url = obj.incident_document.url
+                    obj.save(update_fields=['incident_document_url'])
+                except Exception:
+                    pass
             # Record first action in audit
             DisciplineIncidentAction.objects.create(
                 incident=obj,
@@ -467,19 +569,21 @@ class DisciplineApprovalsListView(APIView):
             'student', 'student__user', 'student__home_department', 'student__section',
             'student__section__batch', 'student__section__batch__course', 'student__section__batch__course__department',
             'category', 'reported_by'
-        ).prefetch_related('actions').exclude(status__in=['RESOLVED', 'DISMISSED'])
+        ).prefetch_related('actions').all().order_by('-updated_at')
 
         if is_admin_or_iqac:
-            results = qs
+            results = list(qs)
         else:
-            # Candidate filter: only check logs where user can act for that specific student's role
             matching_logs = []
             for log in qs:
-                if is_user_approver_for_incident(user, log):
+                # Include if user is current approver OR has performed an action on it
+                is_curr_approver = is_user_approver_for_incident(user, log)
+                has_acted = any(act.user_id == user.id for act in log.actions.all())
+                if is_curr_approver or has_acted:
                     matching_logs.append(log)
             results = matching_logs
 
-        serializer = DisciplineIncidentLogSerializer(results, many=True)
+        serializer = DisciplineIncidentLogSerializer(results, many=True, context={'request': request})
         return Response({'results': serializer.data})
 
 
@@ -533,7 +637,7 @@ class DisciplineFixFineView(APIView):
             fine_amount=fine_amount if has_fine else 0.00,
         )
 
-        return Response(DisciplineIncidentLogSerializer(log).data)
+        return Response(DisciplineIncidentLogSerializer(log, context={'request': request}).data)
 
 
 class DisciplineForwardActionView(APIView):
@@ -582,7 +686,7 @@ class DisciplineForwardActionView(APIView):
             comments=comments or f"Forwarded to {next_role}",
         )
 
-        return Response(DisciplineIncidentLogSerializer(log).data)
+        return Response(DisciplineIncidentLogSerializer(log, context={'request': request}).data)
 
 
 class DisciplineFinalApproveView(APIView):
@@ -624,7 +728,7 @@ class DisciplineFinalApproveView(APIView):
             comments=comments or "Final approval granted. Discipline incident closed & resolved.",
         )
 
-        return Response(DisciplineIncidentLogSerializer(log).data)
+        return Response(DisciplineIncidentLogSerializer(log, context={'request': request}).data)
 
 
 class DisciplineStudentUploadReceiptView(APIView):
@@ -697,11 +801,11 @@ class DisciplineStudentDirectoryView(APIView):
     GET /api/discipline/students/ - Stream and query real active students from DB with barcodes,
     avatars, batches, sections, and departments.
     """
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (AllowAny,)
 
     def get(self, request):
         qs = StudentProfile.objects.select_related(
-            'user', 'home_department', 'section', 'section__batch', 'section__batch__course', 'section__batch__course__department'
+            'user', 'home_department', 'section', 'section__batch'
         ).filter(status__in=['ACTIVE', 'active', 'Active'])
 
         dept_param = request.query_params.get('department')
@@ -750,22 +854,13 @@ class DisciplineStudentDirectoryView(APIView):
             dept_name = getattr(dept, 'short_name', None) or getattr(dept, 'code', None) or getattr(dept, 'name', '')
             batch_label = st.batch or (st.section.batch.name if st.section and st.section.batch else '')
 
-            img_url = None
-            if getattr(st, 'profile_image', None):
-                try:
-                    img_url = st.profile_image.url
-                except Exception:
-                    img_url = None
-            elif getattr(u, 'profile_image', None):
-                img_url = getattr(u, 'profile_image', None)
-
             results.append({
                 'id': st.id,
                 'reg_no': st.reg_no,
                 'name': full_name or getattr(u, 'username', st.reg_no),
                 'username': getattr(u, 'username', ''),
                 'email': getattr(u, 'email', ''),
-                'profile_image_url': img_url,
+                'profile_image_url': None,
                 'department': dept_name,
                 'batch': batch_label,
                 'section': getattr(st.section, 'name', '') if st.section else '',
@@ -1109,4 +1204,103 @@ class DisciplineStudentExportBarcodeImagesZipView(APIView):
         response = HttpResponse(zip_buffer.getvalue(), content_type="application/zip")
         response['Content-Disposition'] = 'attachment; filename="student_barcodes_images.zip"'
         return response
+
+
+class DisciplineStudentAuthoritiesView(APIView):
+    """
+    GET /api/discipline/student-authorities/?reg_no=<reg_no>
+    Returns hierarchy of approval roles and names for a student.
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        reg_no = request.query_params.get('reg_no')
+        user = request.user
+        student = None
+        if reg_no:
+            student = StudentProfile.objects.filter(
+                Q(reg_no__iexact=reg_no) | Q(user__username__iexact=reg_no)
+            ).select_related(
+                'user', 'home_department', 'section', 'section__batch',
+                'section__batch__course', 'section__batch__course__department'
+            ).first()
+        elif hasattr(user, 'student_profile'):
+            student = getattr(user, 'student_profile', None)
+        else:
+            student = StudentProfile.objects.filter(user=user).first()
+
+        authorities = []
+
+        # 1. Submitter (Reporting Faculty)
+        authorities.append({
+            'role_key': 'SUBMITTER',
+            'role': 'Submitter',
+            'name': 'Reporting Faculty',
+            'icon': 'send',
+        })
+
+        from academics.models import AcademicYear, Department
+        from academics.services import authority_resolver
+
+        academic_year = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
+
+        # 2. Mentor
+        mentor_name = 'Prof. Faculty Mentor'
+        if student:
+            m = authority_resolver.get_student_mentor(student)
+            if m and m.user:
+                mentor_name = f"{m.user.first_name} {m.user.last_name}".strip() or m.user.username
+        authorities.append({
+            'role_key': 'MENTOR',
+            'role': 'Faculty Mentor',
+            'name': mentor_name,
+            'icon': 'school',
+        })
+
+        # 3. Class Advisor
+        advisor_name = 'Dr. Section Advisor'
+        if student and academic_year:
+            adv = authority_resolver.get_section_advisor(student, academic_year)
+            if adv and adv.user:
+                advisor_name = f"{adv.user.first_name} {adv.user.last_name}".strip() or adv.user.username
+        authorities.append({
+            'role_key': 'ADVISOR',
+            'role': 'Class Advisor',
+            'name': advisor_name,
+            'icon': 'person',
+        })
+
+        # 4. HOD
+        hod_name = 'Dr. Head of Dept'
+        if student:
+            dept = authority_resolver._get_student_department(student)
+            if dept and academic_year:
+                h = authority_resolver.get_department_hod_by_department(dept, academic_year)
+                if h and h.user:
+                    hod_name = f"{h.user.first_name} {h.user.last_name}".strip() or h.user.username
+        authorities.append({
+            'role_key': 'HOD',
+            'role': 'Head of Dept (HOD)',
+            'name': hod_name,
+            'icon': 'account_balance',
+        })
+
+        # 5. Discipline Cell
+        authorities.append({
+            'role_key': 'DISCIPLINE_COMMITTEE',
+            'role': 'Discipline Cell',
+            'name': 'Discipline In-Charge',
+            'icon': 'verified_user',
+        })
+
+        # 6. Principal
+        authorities.append({
+            'role_key': 'PRINCIPAL',
+            'role': 'Principal',
+            'name': 'Dr. D. Sriram',
+            'icon': 'shield',
+        })
+
+        return Response({'authorities': authorities})
+
 

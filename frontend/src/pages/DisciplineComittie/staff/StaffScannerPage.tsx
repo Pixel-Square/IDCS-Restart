@@ -18,7 +18,12 @@ import {
   GraduationCap,
   Power,
   PowerOff,
-  ScanLine
+  ScanLine,
+  Paperclip,
+  Trash2,
+  FileText,
+  Upload,
+  SwitchCamera
 } from 'lucide-react';
 import Barcode from 'react-barcode';
 import { getApiBase } from '../../../services/apiBase';
@@ -31,9 +36,50 @@ import {
 } from '../../../services/discipline';
 
 function resolveProfileImageUrl(url?: string | null): string | null {
-  if (!url) return null;
-  if (url.startsWith('http')) return url;
-  return `${getApiBase()}${url.startsWith('/') ? '' : '/'}${url}`;
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:') ||
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://')
+  ) {
+    return trimmed;
+  }
+  const apiBase = getApiBase().replace(/\/+$/, '');
+  const path = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return `${apiBase}${path}`;
+}
+
+function ScannedStudentAvatar({
+  student,
+}: {
+  student: DisciplineStudent;
+}) {
+  const [hasError, setHasError] = useState(false);
+  const resolvedUrl = resolveProfileImageUrl(student.profile_image_url);
+
+  useEffect(() => {
+    setHasError(false);
+  }, [student.profile_image_url, student.reg_no]);
+
+  return (
+    <div className="w-12 h-12 sm:w-14 sm:h-14 min-w-[48px] min-h-[48px] max-w-[48px] max-h-[48px] sm:max-w-[56px] sm:max-h-[56px] rounded-2xl bg-indigo-50 border-2 border-indigo-200/90 flex items-center justify-center overflow-hidden shrink-0 shadow-xs relative">
+      {resolvedUrl && !hasError ? (
+        <img
+          src={resolvedUrl}
+          alt={student.name || 'Student'}
+          className="w-full h-full object-cover object-center pointer-events-none select-none"
+          onError={() => setHasError(true)}
+          loading="lazy"
+        />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center bg-gradient-to-tr from-indigo-100 to-violet-100 text-indigo-700 font-extrabold text-sm sm:text-base select-none">
+          {student.name ? student.name.charAt(0).toUpperCase() : <User className="w-6 h-6 text-indigo-600" />}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function StaffScannerPage({ onIncidentLogged }: { onIncidentLogged?: () => void }) {
@@ -54,6 +100,17 @@ export default function StaffScannerPage({ onIncidentLogged }: { onIncidentLogge
   const [scannedStudent, setScannedStudent] = useState<DisciplineStudent | null>(null);
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<(number | string)[]>([]);
   const [remarks, setRemarks] = useState<string>('');
+  const [remarksError, setRemarksError] = useState<string | null>(null);
+  const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [attachedFilePreview, setAttachedFilePreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Evidence Camera Modal State (Camera proof next to remarks)
+  const [isEvidenceCameraOpen, setIsEvidenceCameraOpen] = useState<boolean>(false);
+  const [evidenceCameraFacing, setEvidenceCameraFacing] = useState<'environment' | 'user'>('environment');
+  const evidenceVideoRef = useRef<HTMLVideoElement | null>(null);
+  const evidenceStreamRef = useRef<MediaStream | null>(null);
+
   const [submitting, setSubmitting] = useState<boolean>(false);
 
   // Success tick animation modal
@@ -514,16 +571,108 @@ export default function StaffScannerPage({ onIncidentLogged }: { onIncidentLogge
     handleBarcodeCapturedRef.current = handleBarcodeCaptured;
   });
 
+  const startEvidenceCamera = async (facing: 'environment' | 'user' = evidenceCameraFacing) => {
+    stopEvidenceCamera();
+    try {
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: facing },
+        });
+      } catch (err) {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      }
+      evidenceStreamRef.current = stream;
+      setIsEvidenceCameraOpen(true);
+      setTimeout(() => {
+        if (evidenceVideoRef.current) {
+          evidenceVideoRef.current.srcObject = stream;
+          evidenceVideoRef.current.play().catch((e) => console.error('Play camera error:', e));
+        }
+      }, 100);
+    } catch (e) {
+      console.error('Failed to access camera for incident proof:', e);
+      alert('Camera access was not permitted. You can use the "Upload File" button instead.');
+    }
+  };
+
+  const stopEvidenceCamera = () => {
+    if (evidenceStreamRef.current) {
+      evidenceStreamRef.current.getTracks().forEach((track) => track.stop());
+      evidenceStreamRef.current = null;
+    }
+    setIsEvidenceCameraOpen(false);
+  };
+
+  const handleCaptureEvidencePhoto = () => {
+    const video = evidenceVideoRef.current;
+    if (!video) return;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    canvas.toBlob((blob) => {
+      if (blob) {
+        const file = new File([blob], `evidence_${Date.now()}.jpg`, { type: 'image/jpeg' });
+        const previewUrl = URL.createObjectURL(blob);
+        setAttachedFile(file);
+        setAttachedFilePreview(previewUrl);
+      }
+      stopEvidenceCamera();
+    }, 'image/jpeg', 0.9);
+  };
+
+  const handleToggleEvidenceCameraFacing = () => {
+    const nextFacing = evidenceCameraFacing === 'environment' ? 'user' : 'environment';
+    setEvidenceCameraFacing(nextFacing);
+    startEvidenceCamera(nextFacing);
+  };
+
+  const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAttachedFile(file);
+    if (file.type.startsWith('image/')) {
+      setAttachedFilePreview(URL.createObjectURL(file));
+    } else {
+      setAttachedFilePreview(null);
+    }
+    e.target.value = '';
+  };
+
+  const handleRemoveAttachedFile = () => {
+    setAttachedFile(null);
+    if (attachedFilePreview) {
+      URL.revokeObjectURL(attachedFilePreview);
+    }
+    setAttachedFilePreview(null);
+  };
+
   const openStudentIncidentPopup = (student: DisciplineStudent) => {
     setScannedStudent(student);
     setSelectedCategoryIds([]);
     setRemarks('');
+    setRemarksError(null);
+    setAttachedFile(null);
+    setAttachedFilePreview(null);
+    stopEvidenceCamera();
   };
 
   const handleClosePopup = () => {
     setScannedStudent(null);
     setSelectedCategoryIds([]);
     setRemarks('');
+    setRemarksError(null);
+    setAttachedFile(null);
+    if (attachedFilePreview) {
+      URL.revokeObjectURL(attachedFilePreview);
+    }
+    setAttachedFilePreview(null);
+    stopEvidenceCamera();
     // Release scanner lock after a brief delay
     setTimeout(() => {
       scanLockRef.current = false;
@@ -531,9 +680,16 @@ export default function StaffScannerPage({ onIncidentLogged }: { onIncidentLogge
   };
 
   const handleToggleCategory = (catId: number | string) => {
-    setSelectedCategoryIds((prev) =>
-      prev.includes(catId) ? prev.filter((id) => id !== catId) : [...prev, catId]
-    );
+    setSelectedCategoryIds((prev) => {
+      const next = prev.includes(catId) ? prev.filter((id) => id !== catId) : [...prev, catId];
+      // If user toggles category, recheck if remarks error is cleared or required
+      const nextCats = categories.filter((c) => next.includes(c.id));
+      const requiresComment = nextCats.some((c) => c.require_comment);
+      if (!requiresComment) {
+        setRemarksError(null);
+      }
+      return next;
+    });
   };
 
   // ── Submit Incident to DB ──
@@ -541,10 +697,18 @@ export default function StaffScannerPage({ onIncidentLogged }: { onIncidentLogge
     e.preventDefault();
     if (!scannedStudent || selectedCategoryIds.length === 0) return;
 
+    // Check if any selected category requires mandatory remarks
+    const selectedCats = categories.filter((c) => selectedCategoryIds.includes(c.id));
+    const isCommentRequired = selectedCats.some((c) => c.require_comment);
+
+    if (isCommentRequired && !remarks.trim()) {
+      setRemarksError('Staff Remarks / Notes are required for the selected violation category.');
+      return;
+    }
+    setRemarksError(null);
+
     setSubmitting(true);
     try {
-      // Find matching categories
-      const selectedCats = categories.filter((c) => selectedCategoryIds.includes(c.id));
       const categoryTitles = selectedCats.map((c) => c.title).join(', ');
       const highestSeverity = selectedCats.some((c) => c.severity === 'CRITICAL')
         ? 'CRITICAL'
@@ -554,27 +718,49 @@ export default function StaffScannerPage({ onIncidentLogged }: { onIncidentLogge
         ? 'MEDIUM'
         : 'LOW';
 
-      // Record incident in DB
-      await createDisciplineLog({
-        student: scannedStudent.id > 0 ? scannedStudent.id : null,
-        reg_no: scannedStudent.reg_no,
-        student_name: scannedStudent.name,
-        username: scannedStudent.username,
-        department_name: scannedStudent.department || '',
-        section_name: scannedStudent.section || '',
-        batch_name: scannedStudent.batch || '',
-        category: selectedCats[0]?.id || null,
-        category_title: categoryTitles,
-        severity: highestSeverity,
-        status: 'REPORTED',
-        remarks: remarks.trim(),
-      });
+      // If an evidence file is attached, submit with FormData; otherwise submit JSON
+      if (attachedFile) {
+        const formData = new FormData();
+        if (scannedStudent.id > 0) formData.append('student', String(scannedStudent.id));
+        formData.append('reg_no', scannedStudent.reg_no);
+        formData.append('student_name', scannedStudent.name);
+        formData.append('username', scannedStudent.username);
+        formData.append('department_name', scannedStudent.department || '');
+        formData.append('section_name', scannedStudent.section || '');
+        formData.append('batch_name', scannedStudent.batch || '');
+        if (selectedCats[0]?.id) formData.append('category', String(selectedCats[0].id));
+        formData.append('category_title', categoryTitles);
+        formData.append('severity', highestSeverity);
+        formData.append('status', 'REPORTED');
+        formData.append('remarks', remarks.trim());
+        formData.append('incident_document', attachedFile);
+
+        await createDisciplineLog(formData);
+      } else {
+        await createDisciplineLog({
+          student: scannedStudent.id > 0 ? scannedStudent.id : null,
+          reg_no: scannedStudent.reg_no,
+          student_name: scannedStudent.name,
+          username: scannedStudent.username,
+          department_name: scannedStudent.department || '',
+          section_name: scannedStudent.section || '',
+          batch_name: scannedStudent.batch || '',
+          category: selectedCats[0]?.id || null,
+          category_title: categoryTitles,
+          severity: highestSeverity,
+          status: 'REPORTED',
+          remarks: remarks.trim(),
+        });
+      }
 
       // Show success tick popup animation
       setLastLoggedStudentName(scannedStudent.name || scannedStudent.reg_no);
       setScannedStudent(null);
       setSelectedCategoryIds([]);
       setRemarks('');
+      setRemarksError(null);
+      setAttachedFile(null);
+      setAttachedFilePreview(null);
       setShowSuccessTick(true);
 
       if (onIncidentLogged) {
@@ -718,25 +904,12 @@ export default function StaffScannerPage({ onIncidentLogged }: { onIncidentLogge
       {/* ── VERTICAL POPUP DIALOG FOR SCANNED STUDENT INCIDENT RECORDING ── */}
       {scannedStudent && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-100 animate-in zoom-in-95 duration-200 max-h-[92vh] overflow-hidden flex flex-col">
+          <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-slate-100 animate-in zoom-in-95 duration-200 max-h-[92vh] overflow-hidden flex flex-col">
             {/* Modal Top Header with Distinct Light Milky Slate/Indigo Gradient Background & Responsive Layout */}
             <div className="bg-gradient-to-r from-slate-50 via-indigo-50/40 to-slate-100/80 p-4 sm:p-5 border-b border-indigo-100/60 flex items-start justify-between gap-3 shrink-0">
               <div className="flex items-start gap-3 sm:gap-3.5 min-w-0 flex-1">
                 {/* Profile Avatar */}
-                <div className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl bg-white border-2 border-indigo-200/90 flex items-center justify-center overflow-hidden shrink-0 shadow-xs">
-                  {scannedStudent.profile_image_url ? (
-                    <img
-                      src={resolveProfileImageUrl(scannedStudent.profile_image_url)!}
-                      alt={scannedStudent.name}
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        (e.target as HTMLElement).style.display = 'none';
-                      }}
-                    />
-                  ) : (
-                    <User className="w-7 h-7 text-indigo-600" />
-                  )}
-                </div>
+                <ScannedStudentAvatar student={scannedStudent} />
 
                 {/* Student Info with perfect mobile text wrapping & alignment */}
                 <div className="min-w-0 flex-1">
@@ -812,17 +985,24 @@ export default function StaffScannerPage({ onIncidentLogged }: { onIncidentLogge
                           <div className="flex-1">
                             <div className="flex items-center justify-between">
                               <span className="font-bold text-slate-900">{cat.title}</span>
-                              <span
-                                className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
-                                  cat.severity === 'CRITICAL'
-                                    ? 'bg-red-100 text-red-700'
-                                    : cat.severity === 'HIGH'
-                                    ? 'bg-amber-100 text-amber-700'
-                                    : 'bg-blue-100 text-blue-700'
-                                }`}
-                              >
-                                {cat.severity}
-                              </span>
+                              <div className="flex items-center gap-1.5">
+                                {cat.require_comment && (
+                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                    Notes Req.
+                                  </span>
+                                )}
+                                <span
+                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                                    cat.severity === 'CRITICAL'
+                                      ? 'bg-red-100 text-red-700'
+                                      : cat.severity === 'HIGH'
+                                      ? 'bg-amber-100 text-amber-700'
+                                      : 'bg-blue-100 text-blue-700'
+                                  }`}
+                                >
+                                  {cat.severity}
+                                </span>
+                              </div>
                             </div>
                             {cat.description && (
                               <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">
@@ -837,19 +1017,144 @@ export default function StaffScannerPage({ onIncidentLogged }: { onIncidentLogge
                 )}
               </div>
 
-              {/* Remarks Field */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Staff Remarks / Notes (Optional)
-                </label>
-                <textarea
-                  rows={2}
-                  value={remarks}
-                  onChange={(e) => setRemarks(e.target.value)}
-                  placeholder="Add context e.g. location, period, or warning details..."
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder:text-slate-400 focus:ring-2 focus:ring-indigo-500 focus:bg-white focus:outline-none"
-                />
-              </div>
+              {/* Split Row: Remarks / Notes + Upload File or Camera Section next to it */}
+              {(() => {
+                const selectedCats = categories.filter((c) => selectedCategoryIds.includes(c.id));
+                const isCommentRequired = selectedCats.some((c) => c.require_comment);
+
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-1">
+                    {/* Left: Remarks Field (Turns Required if category comment is on) */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1">
+                          <span>Staff Remarks / Notes</span>
+                          {isCommentRequired ? (
+                            <span className="text-rose-600 font-extrabold">* (Required)</span>
+                          ) : (
+                            <span className="text-slate-400 font-normal">(Optional)</span>
+                          )}
+                        </label>
+                        {isCommentRequired && (
+                          <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">
+                            Required
+                          </span>
+                        )}
+                      </div>
+                      <textarea
+                        rows={3}
+                        value={remarks}
+                        onChange={(e) => {
+                          setRemarks(e.target.value);
+                          if (remarksError) setRemarksError(null);
+                        }}
+                        placeholder={
+                          isCommentRequired
+                            ? 'Mandatory notes: specify location, circumstance, or context...'
+                            : 'Add context e.g. location, period, or warning details...'
+                        }
+                        className={`w-full px-3.5 py-2.5 bg-slate-50 border rounded-xl text-xs text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none transition ${
+                          remarksError
+                            ? 'border-rose-400 focus:ring-2 focus:ring-rose-400 bg-rose-50/20'
+                            : isCommentRequired
+                            ? 'border-indigo-300 focus:ring-2 focus:ring-indigo-500'
+                            : 'border-slate-200 focus:ring-2 focus:ring-indigo-500'
+                        }`}
+                      />
+                      {remarksError && (
+                        <p className="text-[11px] font-semibold text-rose-600 mt-1 flex items-center gap-1">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{remarksError}</span>
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Right: Upload File or Camera Section next to Staff Remarks */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1">
+                          <span>Photo / File Proof</span>
+                          <span className="text-slate-400 font-normal">(Optional)</span>
+                        </label>
+                        {attachedFile && (
+                          <button
+                            type="button"
+                            onClick={handleRemoveAttachedFile}
+                            className="text-[11px] text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-0.5 cursor-pointer"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Remove</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Hidden File Input */}
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*,.pdf,.doc,.docx"
+                        className="hidden"
+                        onChange={handleFileSelected}
+                      />
+
+                      {!attachedFile ? (
+                        <div className="p-2.5 bg-slate-50/90 border border-dashed border-slate-300 rounded-xl flex flex-col justify-center items-center gap-2 min-h-[88px]">
+                          <div className="flex items-center gap-2 w-full">
+                            {/* Upload File Button */}
+                            <button
+                              type="button"
+                              onClick={() => fileInputRef.current?.click()}
+                              className="flex-1 py-2 px-2.5 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 flex items-center justify-center gap-1.5 shadow-2xs transition active:scale-95 cursor-pointer"
+                            >
+                              <Paperclip className="w-3.5 h-3.5 text-indigo-600" />
+                              <span>Upload File</span>
+                            </button>
+
+                            {/* Camera Snapshot Button */}
+                            <button
+                              type="button"
+                              onClick={() => startEvidenceCamera()}
+                              className="flex-1 py-2 px-2.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl text-xs font-bold text-indigo-700 flex items-center justify-center gap-1.5 shadow-2xs transition active:scale-95 cursor-pointer"
+                            >
+                              <Camera className="w-3.5 h-3.5 text-indigo-600" />
+                              <span>Camera</span>
+                            </button>
+                          </div>
+                          <p className="text-[10px] text-slate-400 text-center">
+                            Attach student photo or evidence document
+                          </p>
+                        </div>
+                      ) : (
+                        /* Preview of Attached File / Image */
+                        <div className="p-2 bg-indigo-50/50 border border-indigo-200 rounded-xl flex items-center gap-2.5 min-h-[88px]">
+                          {attachedFilePreview ? (
+                            <img
+                              src={attachedFilePreview}
+                              alt="Attached evidence"
+                              className="w-16 h-16 object-cover rounded-lg border border-indigo-200 shadow-2xs shrink-0"
+                            />
+                          ) : (
+                            <div className="w-16 h-16 bg-indigo-100 rounded-lg flex items-center justify-center shrink-0 text-indigo-600">
+                              <FileText className="w-7 h-7" />
+                            </div>
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-bold text-slate-800 truncate">
+                              {attachedFile.name}
+                            </p>
+                            <p className="text-[10px] text-slate-500 mt-0.5">
+                              {(attachedFile.size / 1024).toFixed(1)} KB
+                            </p>
+                            <span className="inline-block mt-1 text-[10px] font-bold text-emerald-700 bg-emerald-100/90 px-1.5 py-0.2 rounded-md">
+                              Attached to Incident
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Action Buttons */}
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
@@ -873,6 +1178,76 @@ export default function StaffScannerPage({ onIncidentLogged }: { onIncidentLogge
           </div>
         </div>
       </div>
+      )}
+
+      {/* ── EVIDENCE CAMERA CAPTURE POPUP MODAL ── */}
+      {isEvidenceCameraOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-slate-900 text-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-700/60 overflow-hidden flex flex-col space-y-4 p-5 animate-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-indigo-500/20 text-indigo-400 rounded-xl">
+                  <Camera className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Capture Incident Photo</h3>
+                  <p className="text-[11px] text-slate-400">Position evidence in camera viewfinder</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={stopEvidenceCamera}
+                className="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Video Viewfinder */}
+            <div className="relative aspect-4/3 bg-black rounded-2xl overflow-hidden border border-slate-800 flex items-center justify-center">
+              <video
+                ref={evidenceVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full h-full object-cover"
+              />
+              <div className="absolute inset-4 border border-white/20 rounded-xl pointer-events-none" />
+            </div>
+
+            {/* Controls */}
+            <div className="flex items-center justify-between pt-2">
+              <button
+                type="button"
+                onClick={handleToggleEvidenceCameraFacing}
+                className="p-3 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-2xl transition flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
+                title="Switch Camera (Front/Rear)"
+              >
+                <SwitchCamera className="w-4 h-4" />
+                <span className="hidden sm:inline">Flip</span>
+              </button>
+
+              {/* Shutter Button */}
+              <button
+                type="button"
+                onClick={handleCaptureEvidencePhoto}
+                className="px-6 py-3 bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 text-white text-xs font-bold rounded-2xl shadow-lg shadow-indigo-500/30 flex items-center gap-2 active:scale-95 transition cursor-pointer"
+              >
+                <div className="w-3.5 h-3.5 rounded-full bg-white animate-pulse" />
+                <span>Snap Photo</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={stopEvidenceCamera}
+                className="px-3.5 py-3 text-xs font-semibold text-slate-400 hover:text-white transition cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── SUCCESS TICK POPUP ANIMATION ── */}

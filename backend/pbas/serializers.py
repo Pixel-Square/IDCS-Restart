@@ -8,7 +8,7 @@ from rest_framework import serializers
 
 from college.models import College
 
-from .models import PBASCustomDepartment, PBASNode, PBASSubmission
+from .models import PBASCustomDepartment, PBASNode, PBASSubmission, PBASDuration
 
 
 ALLOWED_UPLOAD_EXTS = {'pdf', 'png', 'jpg', 'jpeg', 'webp', 'gif'}
@@ -236,3 +236,29 @@ class PBASSubmissionSerializer(serializers.ModelSerializer):
         except DjangoValidationError as e:
             raise serializers.ValidationError(e.message_dict)
 
+
+class PBASDurationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PBASDuration
+        fields = ('id', 'title', 'start_date', 'end_date', 'created_at')
+        read_only_fields = ('id', 'created_at')
+
+    def validate(self, attrs):
+        start = attrs.get('start_date')
+        end = attrs.get('end_date')
+
+        if start and end and start > end:
+            raise serializers.ValidationError("Start date cannot be after end date.")
+
+        instance = self.instance
+        if start and end:
+            overlaps = PBASDuration.objects.filter(
+                start_date__lte=end,
+                end_date__gte=start
+            )
+            if instance:
+                overlaps = overlaps.exclude(pk=instance.pk)
+            if overlaps.exists():
+                raise serializers.ValidationError("This duration overlaps with an existing duration.")
+
+        return attrs

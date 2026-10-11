@@ -44,6 +44,14 @@ export type PBASNode = {
   children?: PBASNode[]
 }
 
+export type PBASDuration = {
+  id: string
+  title: string
+  start_date: string
+  end_date: string
+  created_at?: string
+}
+
 export type StaffMember = {
   user_id: number
   name: string
@@ -665,6 +673,36 @@ export async function fetchPBASUserActivityDetail(userId: number | string): Prom
   return await res.json()
 }
 
+export async function fetchPBASDurations(): Promise<PBASDuration[]> {
+  const url = '/api/pbas/durations/'
+  const res = await fetchWithAuth(url)
+  if (!res.ok) throw new Error(await parseError(res))
+  return await res.json()
+}
+
+export async function createPBASDuration(data: {
+  title: string
+  start_date: string
+  end_date: string
+}): Promise<PBASDuration> {
+  const url = '/api/pbas/durations/'
+  const res = await fetchWithAuth(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return await res.json()
+}
+
+export async function deletePBASDuration(id: string): Promise<void> {
+  const url = `/api/pbas/durations/${encodeURIComponent(id)}/`
+  const res = await fetchWithAuth(url, {
+    method: 'DELETE',
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+}
+
 export default {
   listCustomDepartments,
   createCustomDepartment,
@@ -694,6 +732,9 @@ export default {
   fetchPBASUserActivityDetail,
   getStoredPBASTree,
   saveStoredPBASTree,
+  fetchPBASDurations,
+  createPBASDuration,
+  deletePBASDuration,
 }
 
 

@@ -240,3 +240,37 @@ class PBASVerificationTicket(models.Model):
     def __str__(self) -> str:
         return f"PBASVerificationTicket({self.id})"
 
+
+class PBASDuration(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=255)
+    start_date = models.DateField()
+    end_date = models.DateField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('-start_date',)
+
+    def __str__(self) -> str:
+        return f"{self.title} ({self.start_date} to {self.end_date})"
+
+    def clean(self):
+        super().clean()
+        if self.start_date and self.end_date:
+            if self.start_date > self.end_date:
+                raise ValidationError("Start date cannot be after end date.")
+            
+            # Check for overlaps
+            overlaps = PBASDuration.objects.filter(
+                start_date__lte=self.end_date,
+                end_date__gte=self.start_date
+            )
+            if self.pk:
+                overlaps = overlaps.exclude(pk=self.pk)
+            
+            if overlaps.exists():
+                raise ValidationError("This duration overlaps with an existing duration.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)

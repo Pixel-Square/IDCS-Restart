@@ -20,7 +20,8 @@ import {
   ArrowRight,
   User,
   ShieldCheck,
-  ChevronRight
+  ChevronRight,
+  MessageSquare
 } from 'lucide-react';
 import {
   DisciplineCategory,
@@ -48,6 +49,7 @@ export default function ConfigPage() {
   const [description, setDescription] = useState('');
   const [selectedSemesters, setSelectedSemesters] = useState<string[]>([]);
   const [severity, setSeverity] = useState<'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'>('MEDIUM');
+  const [requireComment, setRequireComment] = useState<boolean>(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   // ── Approval Flow State ──
@@ -166,6 +168,7 @@ export default function ConfigPage() {
     setDescription('');
     setSelectedSemesters([...ALL_SEMESTERS]);
     setSeverity('MEDIUM');
+    setRequireComment(false);
     setFormError(null);
     setIsModalOpen(true);
   };
@@ -176,6 +179,7 @@ export default function ConfigPage() {
     setDescription(cat.description || '');
     setSelectedSemesters(cat.semesters || []);
     setSeverity(cat.severity || 'MEDIUM');
+    setRequireComment(Boolean(cat.require_comment));
     setFormError(null);
     setIsModalOpen(true);
   };
@@ -216,6 +220,7 @@ export default function ConfigPage() {
           description: description.trim(),
           semesters: selectedSemesters,
           severity,
+          require_comment: requireComment,
         });
         setCategories((prev) => prev.map((c) => (c.id === editingId ? updated : c)));
       } else {
@@ -225,6 +230,7 @@ export default function ConfigPage() {
           description: description.trim(),
           semesters: selectedSemesters,
           severity,
+          require_comment: requireComment,
           is_active: true,
         });
         setCategories((prev) => [created, ...prev]);
@@ -235,6 +241,18 @@ export default function ConfigPage() {
       setFormError(err.message || 'Failed to save category to backend.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleToggleCommentRequirement = async (cat: DisciplineCategory) => {
+    try {
+      const updated = await updateDisciplineCategory(cat.id, {
+        require_comment: !cat.require_comment,
+      });
+      setCategories((prev) => prev.map((c) => (c.id === cat.id ? updated : c)));
+    } catch (err) {
+      console.error('Failed to toggle comment requirement:', err);
+      alert('Failed to update comment requirement setting.');
     }
   };
 
@@ -445,6 +463,54 @@ export default function ConfigPage() {
                     ))}
                   </div>
                 </div>
+
+                {/* Comment / Remarks Mandatory On/Off Switch on each Category Element */}
+                <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2 bg-slate-50/80 p-2.5 rounded-xl border border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`p-1.5 rounded-lg ${
+                        cat.require_comment
+                          ? 'bg-indigo-100 text-indigo-600'
+                          : 'bg-slate-200/70 text-slate-500'
+                      }`}
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                        <span>Staff Remarks / Comment</span>
+                        {cat.require_comment ? (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-md">
+                            ON (Required)
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 bg-slate-100 text-slate-500 border border-slate-200 rounded-md">
+                            OFF (Optional)
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-400">
+                        {cat.require_comment
+                          ? 'Remarks required when recording incident'
+                          : 'Remarks are optional'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleCommentRequirement(cat)}
+                    title={cat.require_comment ? 'Turn OFF comment requirement' : 'Turn ON comment requirement'}
+                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      cat.require_comment ? 'bg-indigo-600' : 'bg-slate-300'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                        cat.require_comment ? 'translate-x-4' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
 
               {/* Card Footer Actions */}
@@ -593,6 +659,51 @@ export default function ConfigPage() {
                     );
                   })}
                 </div>
+              </div>
+
+              {/* Mandatory Comment On/Off Switch in Add / Edit Modal */}
+              <div className="flex items-center justify-between p-3.5 bg-slate-50 rounded-xl border border-slate-200">
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className={`p-2 rounded-lg transition ${
+                      requireComment ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-200 text-slate-500'
+                    }`}
+                  >
+                    <MessageSquare className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-bold text-slate-800">
+                        Require Staff Remarks / Notes
+                      </label>
+                      <span
+                        className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+                          requireComment
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-slate-200 text-slate-600'
+                        }`}
+                      >
+                        {requireComment ? 'ON' : 'OFF'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      When ON, staff must provide notes when recording this incident category.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setRequireComment(!requireComment)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    requireComment ? 'bg-indigo-600' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                      requireComment ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
               </div>
 
               {/* Buttons */}

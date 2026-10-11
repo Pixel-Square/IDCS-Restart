@@ -7,13 +7,15 @@ import {
   QrCode,
   Sparkles,
   Layers,
-  GraduationCap
+  GraduationCap,
+  GitFork
 } from 'lucide-react';
 import ConfigPage from './ConfigPage';
 import LogsPage from './LogsPage';
 import StudentsBarCode from './StudentsBarCode';
+import FlowPage from './FlowPage';
 
-export type DCAdminTab = 'config' | 'logs' | 'barcode';
+export type DCAdminTab = 'config' | 'logs' | 'barcode' | 'flow';
 
 export default function DCAdminPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -44,6 +46,13 @@ export default function DCAdminPage() {
       description: 'Student list & barcode generation',
       icon: QrCode,
       badge: 'Directory',
+    },
+    {
+      id: 'flow' as DCAdminTab,
+      label: 'Flow',
+      description: 'Incident escalation & approval ladder',
+      icon: GitFork,
+      badge: 'Workflow',
     },
   ];
 
@@ -112,6 +121,7 @@ export default function DCAdminPage() {
         {currentTab === 'config' && <ConfigPage />}
         {currentTab === 'logs' && <LogsPage />}
         {currentTab === 'barcode' && <StudentsBarCode />}
+        {currentTab === 'flow' && <FlowPage />}
       </main>
     </div>
   );

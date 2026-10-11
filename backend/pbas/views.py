@@ -19,13 +19,14 @@ from college.models import College
 
 User = get_user_model()
 
-from .models import PBASCustomDepartment, PBASNode, PBASSubmission, PBASVerificationTicket, PBASNodeApproverHistory
+from .models import PBASCustomDepartment, PBASNode, PBASSubmission, PBASVerificationTicket, PBASNodeApproverHistory, PBASDuration
 from .permissions import IsIQACManager, IsAuthenticatedSubmitter
 from .serializers import (
     CollegeSerializer,
     PBASCustomDepartmentSerializer,
     PBASNodeTreeSerializer,
     PBASSubmissionSerializer,
+    PBASDurationSerializer,
 )
 from .utils import (
     allowed_audiences_for_viewer,
@@ -751,6 +752,7 @@ def _get_node_category(node: PBASNode) -> str:
     return 'Other'
 
 
+
 def _get_node_ancestor_ids(node: PBASNode) -> list[str]:
     ids = []
     current = node
@@ -758,6 +760,98 @@ def _get_node_ancestor_ids(node: PBASNode) -> list[str]:
         ids.append(str(current.id))
         current = current.parent
     return ids
+
+
+def _calculate_submission_effective_credit(sub: PBASSubmission) -> int:
+    """
+    Calculates effective pbas_credit to award for this submission,
+    enforcing the node's limit per duration period.
+    """
+    base_credit = sub.node.pbas_credit or 0
+    if base_credit <= 0:
+        return 0
+
+    node_limit = sub.node.limit
+    if node_limit is None or node_limit <= 0:
+        return base_credit
+
+    sub_date = sub.created_at.date() if sub.created_at else timezone.now().date()
+    duration = PBASDuration.objects.filter(start_date__lte=sub_date, end_date__gte=sub_date).first()
+
+    if duration:
+        prior_approved_count = PBASSubmission.objects.filter(
+            user=sub.user,
+            node=sub.node,
+            status=PBASSubmission.Status.APPROVED,
+            created_at__date__gte=duration.start_date,
+            created_at__date__lte=duration.end_date,
+        ).exclude(pk=sub.pk).count()
+    else:
+        durations = list(PBASDuration.objects.all())
+        prior_qs = PBASSubmission.objects.filter(
+            user=sub.user,
+            node=sub.node,
+            status=PBASSubmission.Status.APPROVED,
+        ).exclude(pk=sub.pk)
+        for d in durations:
+            prior_qs = prior_qs.exclude(created_at__date__gte=d.start_date, created_at__date__lte=d.end_date)
+        prior_approved_count = prior_qs.count()
+
+    already_awarded = min(node_limit, prior_approved_count * base_credit)
+    remaining_allowed = max(0, node_limit - already_awarded)
+    return min(base_credit, remaining_allowed)
+
+
+def _calculate_user_total_credits(submissions_list, all_durations) -> int:
+    """
+    Aggregates total approved credits for a user, respecting node limits per duration.
+    """
+    from datetime import datetime
+    from collections import defaultdict
+    groups = defaultdict(lambda: {'limit': None, 'base_credit': 0, 'approved_count': 0})
+
+    for s in submissions_list:
+        is_approved = (s.get('status') == 'approved' if isinstance(s, dict) else s.status == PBASSubmission.Status.APPROVED)
+        if not is_approved:
+            continue
+
+        nid = s['node_id'] if isinstance(s, dict) else str(s.node_id)
+        base_credit = (s.get('node__pbas_credit') if isinstance(s, dict) else getattr(s.node, 'pbas_credit', 0)) or 0
+        limit = (s.get('node__limit') if isinstance(s, dict) else getattr(s.node, 'limit', None))
+        created_at = s.get('created_at') if isinstance(s, dict) else s.created_at
+
+        dt = None
+        if isinstance(created_at, str):
+            try:
+                dt = datetime.fromisoformat(created_at.replace('Z', '+00:00')).date()
+            except Exception:
+                dt = None
+        elif created_at:
+            dt = created_at.date()
+
+        matched_d_id = 'outside'
+        if dt and all_durations:
+            for d in all_durations:
+                if d.start_date <= dt <= d.end_date:
+                    matched_d_id = str(d.id)
+                    break
+
+        key = (nid, matched_d_id)
+        groups[key]['limit'] = limit
+        groups[key]['base_credit'] = base_credit
+        groups[key]['approved_count'] += 1
+
+    total = 0
+    for key, data in groups.items():
+        base = data['base_credit']
+        count = data['approved_count']
+        lim = data['limit']
+        raw = base * count
+        if lim is not None and lim > 0:
+            total += min(lim, raw)
+        else:
+            total += raw
+    return total
 
 
 def _get_submission_applicant_type(user) -> str:
@@ -1078,10 +1172,11 @@ class PBASSubmissionActionView(APIView):
                 if not was_already_approved:
                     category = _get_node_category(sub.node)
                     category_field = PBAS_CATEGORY_SCORE_FIELDS.get(category)
+                    awarded_credit = _calculate_submission_effective_credit(sub)
 
                     # Accumulate student/staff score in the submitted category.
                     if stp:
-                        student_credit_points = sub.node.pbas_credit or 0
+                        student_credit_points = awarded_credit
                         if student_credit_points > 0:
                             update_fields = ['pbas_credit']
                             stp.pbas_credit = (stp.pbas_credit or 0) + student_credit_points
@@ -1104,7 +1199,7 @@ class PBASSubmissionActionView(APIView):
                                 mentor_sp.save(update_fields=update_fields)
 
                     elif sp:
-                        staff_credit_points = sub.node.pbas_credit or 0
+                        staff_credit_points = awarded_credit
                         if staff_credit_points > 0:
                             update_fields = ['pbas_credit']
                             sp.pbas_credit = (sp.pbas_credit or 0) + staff_credit_points
@@ -1450,8 +1545,9 @@ class PBASUserActivityListView(APIView):
 
         # Fetch submissions for all queried users
         submissions = PBASSubmission.objects.filter(user_id__in=user_ids).values(
-            'user_id', 'node_id', 'status', 'created_at', 'node__pbas_credit'
+            'user_id', 'node_id', 'status', 'created_at', 'node__pbas_credit', 'node__limit'
         )
+        all_durations = list(PBASDuration.objects.all())
         user_submissions_map: dict[int, list[dict]] = {}
         for s in submissions:
             uid = s['user_id']
@@ -1514,15 +1610,13 @@ class PBASUserActivityListView(APIView):
             # Calculate completion
             u_subs = user_submissions_map.get(u.id, [])
             submitted_leaf_ids = set()
-            total_credits = 0
+            total_credits = _calculate_user_total_credits(u_subs, all_durations)
             latest_sub_at = None
 
             for s in u_subs:
                 nid = s['node_id']
                 if nid in applicable_leaf_ids:
                     submitted_leaf_ids.add(nid)
-                if s.get('status') == 'approved' and s.get('node__pbas_credit'):
-                    total_credits += (s['node__pbas_credit'] or 0)
                 if s.get('created_at'):
                     if not latest_sub_at or s['created_at'] > latest_sub_at:
                         latest_sub_at = s['created_at']
@@ -1668,8 +1762,9 @@ class PBASUserActivityDetailView(APIView):
 
         # Submissions by this user
         submissions = PBASSubmission.objects.filter(user=target_user).select_related('approved_by', 'node').order_by('-created_at')
+        all_durations = list(PBASDuration.objects.all())
         subs_by_node: dict[str, list[dict]] = {}
-        total_credits = 0
+        total_credits = _calculate_user_total_credits(submissions, all_durations)
         for s in submissions:
             nid = str(s.node_id)
             if nid not in subs_by_node:
@@ -1689,8 +1784,6 @@ class PBASUserActivityDetailView(APIView):
                 'approved_by_name': s.approved_by.get_full_name() if s.approved_by else (s.approved_by.username if s.approved_by else None),
                 'rejection_reason': s.rejection_reason,
             })
-            if s.status == 'approved' and getattr(s.node, 'pbas_credit', None):
-                total_credits += (s.node.pbas_credit or 0)
 
         # Get master or dept nodes tree
         master_dept = _get_or_create_master_dept()
@@ -1807,4 +1900,12 @@ class PBASUserActivityDetailView(APIView):
         })
 
 
-
+class PBASDurationViewSet(viewsets.ModelViewSet):
+    queryset = PBASDuration.objects.all()
+    serializer_class = PBASDurationSerializer
+    http_method_names = ['get', 'post', 'delete']
+    
+    def get_permissions(self):
+        if self.action in ['create', 'destroy']:
+            return [IsAuthenticated(), IsIQACManager()]
+        return [IsAuthenticated()]

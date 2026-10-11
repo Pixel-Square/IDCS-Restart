@@ -42,6 +42,7 @@ class DisciplineCategory(models.Model):
         help_text="Applicable semesters e.g. ['SEM 1', 'SEM 2', 'SEM 3', ...]"
     )
     severity = models.CharField(max_length=16, choices=SEVERITY_CHOICES, default='MEDIUM')
+    require_comment = models.BooleanField(default=False, help_text="Require staff remarks/comment when this category is selected")
     is_active = models.BooleanField(default=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -116,6 +117,10 @@ class DisciplineIncidentLog(models.Model):
         related_name='fine_fixed_discipline_incidents'
     )
     fine_fixed_at = models.DateTimeField(null=True, blank=True)
+
+    # Staff Uploaded Incident Photo / File Evidence
+    incident_document = models.FileField(upload_to='discipline/incidents/', null=True, blank=True)
+    incident_document_url = models.CharField(max_length=500, blank=True, default='')
 
     # Student Uploaded Proof / Receipt Document
     receipt_document = models.FileField(upload_to='discipline/receipts/', null=True, blank=True)
