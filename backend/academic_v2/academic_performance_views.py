@@ -494,10 +494,21 @@ class AcademicPerformanceAnalyticsView(APIView):
                 return qs.exclude(**{"%s__isnull" % field: True})
 
             # Context-aware list of assessments that actually have records in scope
-            available_assessments = [
-                name for name, M, field in assessment_registry
-                if _scoped_marks(M, field).exists()
-            ]
+            from academic_v2.models import AcV2ExamAssignment
+            from .marks_helper import _normalise_exam_key, _exam_key_matches, fetch_scoped_acv2_student_marks, _get_pass_threshold
+
+            acv2_available_norm = set(
+                _normalise_exam_key(e) for e in
+                AcV2ExamAssignment.objects.filter(status='PUBLISHED', student_marks__total_mark__isnull=False)
+                .values_list('exam', flat=True).distinct()
+            )
+
+            available_assessments = []
+            for name, M, field in assessment_registry:
+                norm_name = _normalise_exam_key(name)
+                if _scoped_marks(M, field).exists() or norm_name in acv2_available_norm:
+                    if name not in available_assessments:
+                        available_assessments.append(name)
 
             # Data-driven batches / semesters for the dropdowns
             cohort_scope = active_student_cohort()
@@ -656,19 +667,41 @@ class AcademicPerformanceAnalyticsView(APIView):
             sum_pct_pooled = 0.0
             pass_count_pooled = 0
 
+            pass_threshold_pct = _get_pass_threshold()
+
+            # Scoped published AcV2 marks matching active filters
+            student_ids_in_scope = list(student_qs.values_list('id', flat=True))
+            acv2_in_scope = fetch_scoped_acv2_student_marks(
+                student_ids=student_ids_in_scope,
+                dept_code=effective_dept,
+                batch=req_batch,
+                sem_num=int(req_sem) if req_sem.isdigit() else None,
+                section_name=req_sec,
+                subject=req_subject,
+                exam_type=req_qp if not pooled_mode else None,
+            )
+            acv2_seen_keys = set(
+                (r['student_id'], r['subject_code'], _normalise_exam_key(r['exam']))
+                for r in acv2_in_scope
+            )
+
+            dept_single_stats = {}   # dept_id -> [record_count, sum_pct, pass_count]
+            combined_records = []
+
             if pooled_mode:
                 for _name, _M, _field in assessment_registry:
-                    qs = _scoped_marks(_M, _field)
+                    qs = _scoped_marks(_M, _field).select_related("subject")
                     ref = qs.aggregate(m=Max(_field))["m"]
                     if not ref or float(ref) <= 0:
                         continue
                     ref = float(ref)
-                    thresh = ref * 0.50
-                    for sid, did, val in qs.values_list("student_id", "student__home_department_id", _field):
+                    for sid, did, sub_code, val in qs.values_list("student_id", "student__home_department_id", "subject__code", _field):
                         if val is None:
                             continue
+                        if (sid, sub_code or '', _normalise_exam_key(_name)) in acv2_seen_keys:
+                            continue  # Authoritative AcV2 mark takes precedence
                         pct = (float(val) / ref) * 100.0
-                        passed = pct >= 50.0
+                        passed = pct >= pass_threshold_pct
                         total_records_pooled += 1
                         sum_pct_pooled += pct
                         if passed:
@@ -682,6 +715,24 @@ class AcademicPerformanceAnalyticsView(APIView):
                         prev = student_pass_map.get(sid)
                         student_pass_map[sid] = passed if prev is None else (prev and passed)
 
+                for r in acv2_in_scope:
+                    sid = r['student_id']
+                    did = r['dept_id']
+                    pct = r['pct']
+                    passed = r['is_pass']
+                    total_records_pooled += 1
+                    sum_pct_pooled += pct
+                    if passed:
+                        pass_count_pooled += 1
+                    if did is not None:
+                        st = dept_stats.setdefault(did, [0, 0.0, 0])
+                        st[0] += 1
+                        st[1] += pct
+                        if passed:
+                            st[2] += 1
+                    prev = student_pass_map.get(sid)
+                    student_pass_map[sid] = passed if prev is None else (prev and passed)
+
                 total_marks_records = total_records_pooled
                 if total_records_pooled > 0:
                     overall_marks_pct = round(sum_pct_pooled / total_records_pooled, 1)
@@ -690,19 +741,48 @@ class AcademicPerformanceAnalyticsView(APIView):
                     overall_marks_pct = 0.0
                     overall_pass_pct = 0.0
             else:
-                marks_qs = _legacy_marks_qs()
-                total_marks_records = marks_qs.count()
+                marks_qs = _legacy_marks_qs().select_related("subject")
+                obe_records = []
+                for sid, did, sub_code, val in marks_qs.values_list("student_id", "student__home_department_id", "subject__code", mark_field):
+                    if val is None:
+                        continue
+                    if (sid, sub_code or '', _normalise_exam_key(req_qp)) in acv2_seen_keys:
+                        continue  # Authoritative AcV2 mark takes precedence
+                    pct = (float(val) / max_score) * 100.0 if max_score > 0 else 0.0
+                    obe_records.append({
+                        'student_id': sid,
+                        'dept_id': did,
+                        'pct': pct,
+                        'is_pass': pct >= pass_threshold_pct,
+                    })
 
-                # Calculate exact live Overall Academic Average and Pass Rate % for current filter
+                combined_records = obe_records + [
+                    {
+                        'student_id': r['student_id'],
+                        'dept_id': r['dept_id'],
+                        'pct': r['pct'],
+                        'is_pass': r['is_pass'],
+                    }
+                    for r in acv2_in_scope
+                ]
+
+                total_marks_records = len(combined_records)
                 if total_marks_records > 0:
-                    avg_raw = marks_qs.aggregate(Avg(mark_field))[f"{mark_field}__avg"] or 0
-                    overall_marks_pct = round((float(avg_raw) / max_score) * 100.0, 1)
-                    pass_threshold = max_score * 0.50
-                    passed_marks_count = marks_qs.filter(**{f"{mark_field}__gte": pass_threshold}).count()
-                    overall_pass_pct = round((passed_marks_count / total_marks_records) * 100.0, 1)
+                    overall_marks_pct = round(sum(r['pct'] for r in combined_records) / total_marks_records, 1)
+                    passed_cnt = sum(1 for r in combined_records if r['is_pass'])
+                    overall_pass_pct = round((passed_cnt / total_marks_records) * 100.0, 1)
                 else:
                     overall_marks_pct = 0.0
                     overall_pass_pct = 0.0
+
+                for r in combined_records:
+                    did = r['dept_id']
+                    if did is not None:
+                        st = dept_single_stats.setdefault(did, [0, 0.0, 0])
+                        st[0] += 1
+                        st[1] += r['pct']
+                        if r['is_pass']:
+                            st[2] += 1
 
             # Department performance breakdown
             depts_to_evaluate = all_depts_db
@@ -714,132 +794,109 @@ class AcademicPerformanceAnalyticsView(APIView):
                 ]
 
             dept_comparison = []
-            if pooled_mode:
-                # Pooled mode: per-department stats come from the normalized pool
-                for d in depts_to_evaluate:
-                    st = dept_stats.get(d.id)
-                    if not st or st[0] == 0:
-                        continue
-                    d_cnt, d_sum, d_pass = st
-                    d_avg_pct = round(d_sum / d_cnt, 1)
-                    d_pass_pct = round((d_pass / d_cnt) * 100.0, 1)
+            stats_source = dept_stats if pooled_mode else dept_single_stats
+            for d in depts_to_evaluate:
+                st = stats_source.get(d.id)
+                if not st or st[0] == 0:
+                    continue
+                d_cnt, d_sum, d_pass = st
+                d_avg_pct = round(d_sum / d_cnt, 1)
+                d_pass_pct = round((d_pass / d_cnt) * 100.0, 1)
 
-                    d_student_qs = student_qs.filter(get_student_dept_q(d.id))
-                    d_students = d_student_qs.count()
+                d_student_qs = student_qs.filter(get_student_dept_q(d.id))
+                d_students = d_student_qs.count()
 
-                    d_att_pct = None
-                    d_att_qs = DailyAttendanceRecord.objects.filter(student__in=d_student_qs)
-                    d_att_total = d_att_qs.count()
-                    if d_att_total > 0:
-                        d_att_present = d_att_qs.filter(status__in=['P', 'OD', 'PRESENT', 'ON_DUTY']).count()
-                        d_att_pct = round((d_att_present / d_att_total) * 100.0, 1)
+                d_att_pct = None
+                d_att_qs = DailyAttendanceRecord.objects.filter(student__in=d_student_qs)
+                d_att_total = d_att_qs.count()
+                if d_att_total > 0:
+                    d_att_present = d_att_qs.filter(status__in=['P', 'OD', 'PRESENT', 'ON_DUTY']).count()
+                    d_att_pct = round((d_att_present / d_att_total) * 100.0, 1)
 
-                    dept_comparison.append({
-                        "dept_code": d.short_name or d.code or d.name[:4],
-                        "dept_name": d.name,
-                        "pass_rate_pct": min(100.0, max(0.0, d_pass_pct)),
-                        "avg_marks_pct": min(100.0, max(0.0, d_avg_pct)),
-                        "total_records": d_cnt,
-                        "total_students": d_students,
-                        "attendance_pct": d_att_pct
-                    })
-            else:
-                for d in depts_to_evaluate:
-                    d_marks = _legacy_marks_qs().filter(get_mark_dept_q(d.id))
+                dept_comparison.append({
+                    "dept_code": d.short_name or d.code or d.name[:4],
+                    "dept_name": d.name,
+                    "pass_rate_pct": min(100.0, max(0.0, d_pass_pct)),
+                    "avg_marks_pct": min(100.0, max(0.0, d_avg_pct)),
+                    "total_records": d_cnt,
+                    "total_students": d_students,
+                    "attendance_pct": d_att_pct
+                })
 
-                    d_cnt = d_marks.count()
-                    if d_cnt > 0:
-                        d_avg = d_marks.aggregate(Avg(mark_field))[f"{mark_field}__avg"] or 0
-                        d_avg_pct = round((float(d_avg) / max_score) * 100.0, 1)
-                        d_passed = d_marks.filter(**{f"{mark_field}__gte": max_score * 0.50}).count()
-                        d_pass_pct = round((d_passed / d_cnt) * 100.0, 1)
-
-                        # Real unique student count for this department from the active student cohort
-                        d_student_qs = student_qs.filter(get_student_dept_q(d.id))
-                        d_students = d_student_qs.count()
-
-                        # Per-department attendance from DailyAttendanceRecord
-                        d_att_pct = None
-                        d_att_qs = DailyAttendanceRecord.objects.filter(student__in=d_student_qs)
-                        d_att_total = d_att_qs.count()
-                        if d_att_total > 0:
-                            d_att_present = d_att_qs.filter(status__in=['P', 'OD', 'PRESENT', 'ON_DUTY']).count()
-                            d_att_pct = round((d_att_present / d_att_total) * 100.0, 1)
-
-                        dept_comparison.append({
-                            "dept_code": d.short_name or d.code or d.name[:4],
-                            "dept_name": d.name,
-                            "pass_rate_pct": min(100.0, max(0.0, d_pass_pct)),
-                            "avg_marks_pct": min(100.0, max(0.0, d_avg_pct)),
-                            "total_records": d_cnt,
-                            "total_students": d_students,
-                            "attendance_pct": d_att_pct
-                        })
-
-            # Calculate exact Students Needing Support (< 58% average) for current filter
-            # (single-assessment mode only; the college view does not render this list)
+            # Calculate exact Students Needing Support (< configured threshold average) for current filter
             weak_students = []
             students_needing_support_count = 0
-            for s in ([] if pooled_mode else student_qs[:60]):
-                s_marks = marks_model.objects.filter(student=s)
-                cnt = s_marks.count()
-                if cnt > 0:
-                    s_avg = s_marks.aggregate(Avg(mark_field))[f"{mark_field}__avg"] or 0
-                    s_pct = round((float(s_avg) / max_score) * 100.0, 1)
-                    if s_pct < 58.0:
+            if not pooled_mode and combined_records:
+                student_pct_acc = {}
+                for r in combined_records:
+                    student_pct_acc.setdefault(r['student_id'], []).append(r['pct'])
+                for sid, pcts in student_pct_acc.items():
+                    s_avg = round(sum(pcts) / len(pcts), 1)
+                    if s_avg < pass_threshold_pct:
                         students_needing_support_count += 1
                         if len(weak_students) < 50:
-                            failed = s_marks.filter(**{f"{mark_field}__lt": max_score * 0.50}).count()
-                            sem_str = str(s.section.semester.number) if (s.section and s.section.semester) else "5"
-                            dept_label = s.home_department.short_name if s.home_department else (s.section.batch.course.department.short_name if (s.section and s.section.batch and s.section.batch.course and s.section.batch.course.department) else "ENG")
-                            weak_students.append({
-                                "student_id": str(s.id),
-                                "reg_no": s.reg_no or f"REG{s.id}",
-                                "name": s.user.get_full_name() or s.user.username,
-                                "dept": dept_label,
-                                "section": s.section.name if s.section else "A",
-                                "sem": sem_str,
-                                "photo": "",
-                                "total_exams": cnt,
-                                "passed_exams": cnt - failed,
-                                "failed_exams": failed,
-                                "avg_score_pct": s_pct,
-                                "status": "Below 58%" if s_pct < 50 else "Needs Support"
-                            })
+                            s = student_qs.filter(id=sid).first()
+                            if s:
+                                sem_str = str(s.section.semester.number) if (s.section and s.section.semester) else "—"
+                                dept_label = s.home_department.short_name if s.home_department else (s.section.batch.course.department.short_name if (s.section and s.section.batch and s.section.batch.course and s.section.batch.course.department) else "ENG")
+                                failed = sum(1 for p in pcts if p < pass_threshold_pct)
+                                weak_students.append({
+                                    "student_id": str(s.id),
+                                    "reg_no": s.reg_no or f"REG{s.id}",
+                                    "name": s.user.get_full_name() or s.user.username,
+                                    "dept": dept_label,
+                                    "section": s.section.name if s.section else "A",
+                                    "sem": sem_str,
+                                    "photo": "",
+                                    "total_exams": len(pcts),
+                                    "passed_exams": len(pcts) - failed,
+                                    "failed_exams": failed,
+                                    "avg_score_pct": s_avg,
+                                    "status": "Below Pass Threshold" if s_avg < pass_threshold_pct else "Pass"
+                                })
 
-            # Real Pass / Fail Trends for filtered scope
-            c1_m = Cia1Mark.objects.all()
-            c2_m = Cia2Mark.objects.all()
-            md_m = ModelExamMark.objects.all()
-            _pf_q = allowed_mark_student_q(scope)
-            if _pf_q is not None:
-                c1_m = c1_m.filter(_pf_q)
-                c2_m = c2_m.filter(_pf_q)
-                md_m = md_m.filter(_pf_q)
-            if effective_dept:
-                c1_m = c1_m.filter(get_mark_dept_q(effective_dept))
-                c2_m = c2_m.filter(get_mark_dept_q(effective_dept))
-                md_m = md_m.filter(get_mark_dept_q(effective_dept))
-            if req_batch:
-                c1_m = c1_m.filter(student__batch=req_batch)
-                c2_m = c2_m.filter(student__batch=req_batch)
-                md_m = md_m.filter(student__batch=req_batch)
-            if req_sec:
-                c1_m = c1_m.filter(student__section__name__iexact=req_sec)
-                c2_m = c2_m.filter(student__section__name__iexact=req_sec)
-                md_m = md_m.filter(student__section__name__iexact=req_sec)
+            # Real Pass / Fail Trends for filtered scope (CIA 1, CIA 2, Model Exam)
+            def _calc_trend(exam_name, obe_model, obe_field):
+                t_key = _normalise_exam_key(exam_name)
+                # OBE marks
+                obe_q = _scoped_marks(obe_model, obe_field).select_related("subject")
+                ref_max = obe_q.aggregate(m=Max(obe_field))["m"]
+                ref_val = float(ref_max) if ref_max and float(ref_max) > 0 else 50.0
 
-            c1_c = c1_m.count() or 1
-            c1_p = c1_m.filter(mark__gte=25).count()
-            c2_c = c2_m.count() or 1
-            c2_p = c2_m.filter(mark__gte=25).count()
-            md_c = md_m.count() or 1
-            md_p = md_m.filter(total_mark__gte=50).count()
+                # AcV2 marks
+                ac_marks = fetch_scoped_acv2_student_marks(
+                    student_ids=student_ids_in_scope,
+                    dept_code=effective_dept,
+                    batch=req_batch,
+                    sem_num=int(req_sem) if req_sem.isdigit() else None,
+                    section_name=req_sec,
+                    subject=req_subject,
+                    exam_type=exam_name,
+                )
+                ac_keys = set((r['student_id'], r['subject_code']) for r in ac_marks)
+
+                cnt = 0
+                passed = 0
+                for sid, sub_code, val in obe_q.values_list("student_id", "subject__code", obe_field):
+                    if val is None or (sid, sub_code or '') in ac_keys:
+                        continue
+                    cnt += 1
+                    pct = (float(val) / ref_val) * 100.0
+                    if pct >= pass_threshold_pct:
+                        passed += 1
+
+                for r in ac_marks:
+                    cnt += 1
+                    if r['is_pass']:
+                        passed += 1
+
+                rate = round((passed / cnt) * 100.0, 1) if cnt > 0 else 0.0
+                return {"name": exam_name, "pass": passed, "fail": cnt - passed, "total": cnt, "pass_rate_pct": rate}
 
             pass_fail_trends = [
-                {"name": "CIA 1", "pass": c1_p, "fail": c1_c - c1_p, "total": c1_c, "pass_rate_pct": round((c1_p/c1_c)*100, 1)},
-                {"name": "CIA 2", "pass": c2_p, "fail": c2_c - c2_p, "total": c2_c, "pass_rate_pct": round((c2_p/c2_c)*100, 1)},
-                {"name": "Model Exam", "pass": md_p, "fail": md_c - md_p, "total": md_c, "pass_rate_pct": round((md_p/md_c)*100, 1)},
+                _calc_trend("CIA 1", Cia1Mark, "mark"),
+                _calc_trend("CIA 2", Cia2Mark, "mark"),
+                _calc_trend("Model Exam", ModelExamMark, "total_mark"),
             ]
 
             # 10-Mark Interval Range Distribution (0-10, 11-20, ..., 91-100)
@@ -861,30 +918,39 @@ class AcademicPerformanceAnalyticsView(APIView):
             if pooled_mode:
                 intervals = []  # cross-assessment ranges are not scale-comparable
             for low_pct, high_pct, label in intervals:
-                low_val = max_score * (low_pct / 100.0)
-                high_val = max_score * (high_pct / 100.0)
-                r_count = marks_qs.filter(**{f"{mark_field}__gte": low_val, f"{mark_field}__lte": high_val}).count()
+                r_count = sum(1 for r in combined_records if low_pct <= r['pct'] <= high_pct)
                 range_distribution.append({
                     "label": label,
                     "min": int(low_pct),
                     "max": int(high_pct),
                     "student_count": r_count,
-                    "percentage": round((r_count / tot_m) * 100, 1)
+                    "percentage": round((r_count / tot_m) * 100.0, 1)
                 })
 
             # INDIVIDUAL STUDENTS PERFORMANCE TABLE WITH SUBJECT CELLS IN CLASS SELECTED
             class_students_perf = []
             distinct_subjects = []
             if req_sec and effective_dept and not pooled_mode:
-                # Get the matching student ID list
                 s_ids = list(student_qs.values_list('id', flat=True))
-                # Find all subjects actually taken by these students
-                subj_ids = marks_model.objects.filter(student_id__in=s_ids).values_list("subject_id", flat=True).distinct()
+                # OBE subjects
+                subj_ids = list(marks_model.objects.filter(student_id__in=s_ids).values_list("subject_id", flat=True).distinct())
+                db_subjs = list(Subject.objects.filter(id__in=subj_ids))
+                subj_code_set = {sb.code for sb in db_subjs if sb.code}
 
-                db_subjs = Subject.objects.filter(id__in=subj_ids)
+                # Add subjects from AcV2 in this section
+                from academic_v2.models import AcV2Course
+                for r in acv2_in_scope:
+                    if r['subject_code'] and r['subject_code'] not in subj_code_set:
+                        subj_code_set.add(r['subject_code'])
+                        db_subjs.append(Subject(id=90000 + len(db_subjs), code=r['subject_code'], name=r['subject_name']))
+
                 distinct_subjects = [{"id": str(sb.id), "name": sb.name, "code": sb.code} for sb in db_subjs]
 
-                # Sort students in Reg No ascending order by the last 3 digit numbers (converting to int for numeric sort)
+                # Map AcV2 marks per student per subject_code
+                acv2_perf_map = {}
+                for r in acv2_in_scope:
+                    acv2_perf_map[(r['student_id'], r['subject_code'])] = round(r['pct'], 1)
+
                 sorted_student_qs = list(student_qs)
                 def get_sort_key(s_obj):
                     reg = str(s_obj.reg_no or '').strip()
@@ -904,12 +970,15 @@ class AcademicPerformanceAnalyticsView(APIView):
                         "marks": {}
                     }
                     for sb in db_subjs:
-                        m_rec = marks_model.objects.filter(student=s, subject=sb).first()
-                        if m_rec:
-                            score = float(getattr(m_rec, mark_field))
-                            s_perf_row["marks"][str(sb.id)] = round((score / max_score) * 100.0, 1)
+                        if (s.id, sb.code) in acv2_perf_map:
+                            s_perf_row["marks"][str(sb.id)] = acv2_perf_map[(s.id, sb.code)]
                         else:
-                            s_perf_row["marks"][str(sb.id)] = "-"
+                            m_rec = marks_model.objects.filter(student=s, subject=sb).first()
+                            if m_rec:
+                                score = float(getattr(m_rec, mark_field))
+                                s_perf_row["marks"][str(sb.id)] = round((score / max_score) * 100.0, 1)
+                            else:
+                                s_perf_row["marks"][str(sb.id)] = "-"
                     class_students_perf.append(s_perf_row)
 
             # Calculate unique student pass / fail counts
@@ -921,28 +990,17 @@ class AcademicPerformanceAnalyticsView(APIView):
                 if untested > 0:
                     fail_count += untested
             elif student_ids and total_marks_records > 0:
-                pass_th = max_score * 0.50
-                # Students with at least one mark who passed ALL their taken exams
-                # Group by student
-                pass_count = 0
-                fail_count = 0
-                student_marks_map = {}
-                for m in marks_qs.values('student_id', mark_field):
-                    sid = m['student_id']
-                    val = float(m[mark_field])
-                    if sid not in student_marks_map:
-                        student_marks_map[sid] = True
-                    if val < pass_th:
-                        student_marks_map[sid] = False
+                student_single_map = {}
+                for r in combined_records:
+                    sid = r['student_id']
+                    if sid not in student_single_map:
+                        student_single_map[sid] = True
+                    if not r['is_pass']:
+                        student_single_map[sid] = False
 
-                for sid, is_p in student_marks_map.items():
-                    if is_p:
-                        pass_count += 1
-                    else:
-                        fail_count += 1
-
-                # Account for active students with no mark records as fail/pending
-                untested = len(student_ids) - len(student_marks_map)
+                pass_count = sum(1 for v in student_single_map.values() if v)
+                fail_count = len(student_single_map) - pass_count
+                untested = len(student_ids) - len(student_single_map)
                 if untested > 0:
                     fail_count += untested
             else:
@@ -1035,44 +1093,45 @@ class AcademicPerformanceAnalyticsView(APIView):
         student_ids = [s.id for s in students]
         reg_no_set = {s.reg_no for s in students if s.reg_no}
 
-        # Real ESE rows from the COE final-result table
-        from COE.models import CoeFinalResult
-        coe_qs = CoeFinalResult.objects.all()
-        if reg_no_set:
-            coe_qs = coe_qs.filter(reg_no__in=reg_no_set)
-        rows = list(coe_qs)
-        total_marks_records = len(rows)
+        # Real ESE rows from AcV2 published marks
+        # NOTE: ESE is treated as an assessment type; only PUBLISHED AcV2 records count.
+        # Fallback to COE final-result only when AcV2 has no matching records (legacy).
+        from .marks_helper import fetch_scoped_acv2_student_marks
+        acv2_ese_rows = fetch_scoped_acv2_student_marks(
+            student_ids=student_ids,
+            exam_type="Semester Exam",
+        )
+        total_marks_records = len(acv2_ese_rows)
+
+        # Use configured pass threshold
+        pass_threshold = _get_pass_threshold()
 
         overall_pass_pct = 0.0
         overall_marks_pct = 0.0
-        if rows:
-            pass_cnt = sum(1 for r in rows if (r.max_marks or 0) > 0 and r.total_marks >= (r.max_marks * 0.5))
-            total_pct = sum(
-                (r.total_marks / r.max_marks) * 100.0 if (r.max_marks or 0) > 0 else 0.0
-                for r in rows
-            )
-            overall_pass_pct = round((pass_cnt / len(rows)) * 100.0, 1)
-            overall_marks_pct = round(total_pct / len(rows), 1)
+        if acv2_ese_rows:
+            pass_cnt = sum(1 for r in acv2_ese_rows if r.get('is_pass'))
+            total_pct = sum(float(r.get('pct') or 0) for r in acv2_ese_rows)
+            overall_pass_pct = round((pass_cnt / len(acv2_ese_rows)) * 100.0, 1)
+            overall_marks_pct = round(total_pct / len(acv2_ese_rows), 1)
 
         # Pass / fail counts per unique student
         pass_count = 0
         fail_count = 0
-        student_map_ok = {}
-        for r in rows:
-            reg = r.reg_no
-            if reg not in student_map_ok:
-                student_map_ok[reg] = True
-            if (r.max_marks or 0) > 0 and r.total_marks < (r.max_marks * 0.5):
-                student_map_ok[reg] = False
-        for reg, ok in student_map_ok.items():
-            if ok:
-                pass_count += 1
-            else:
-                fail_count += 1
-        untested = len(student_ids) - len(student_map_ok)
-        if untested > 0:
-            fail_count += untested
-        if not rows:
+        if acv2_ese_rows:
+            pass_count = sum(1 for r in acv2_ese_rows if r.get('is_pass'))
+            fail_count = len(acv2_ese_rows) - pass_count
+        elif use_coes_fallback and coe_rows:
+            # Legacy fallback: distinct students passing/failing based on COE marks
+            pass_regs = set()
+            fail_regs = set()
+            for r in coe_rows:
+                if (r.max_marks or 0) > 0 and r.total_marks >= (r.max_marks * pass_threshold):
+                    pass_regs.add(r.reg_no)
+                elif r.total_marks is not None:
+                    fail_regs.add(r.reg_no)
+            pass_count = len(pass_regs)
+            fail_count = len(fail_regs)
+        else:
             pass_count = 0
             fail_count = len(student_ids)
 
@@ -1085,16 +1144,17 @@ class AcademicPerformanceAnalyticsView(APIView):
                 present = att_qs.filter(status__in=['P', 'OD', 'PRESENT', 'ON_DUTY']).count()
                 overall_attendance = round((present / total_att) * 100.0, 1)
 
-        # Department-wise comparison from the same ESE rows
+        # Department-wise comparison from the same source rows (AcV2 primary, COE fallback only)
         all_depts = Department.objects.filter(is_teaching=True).order_by("name")
         dept_comparison = []
+        use_rows = acv2_ese_rows if acv2_ese_rows else (coe_rows or [])
         for d in all_depts:
             d_student_qs = _scope(True).filter(get_student_dept_q(d.id))
             d_regs = {sp.reg_no for sp in d_student_qs if sp.reg_no}
-            d_rows = [r for r in rows if r.reg_no in d_regs]
+            d_rows = [r for r in use_rows if r.reg_no in d_regs]
             if not d_rows:
                 continue
-            d_pass = sum(1 for r in d_rows if (r.max_marks or 0) > 0 and r.total_marks >= (r.max_marks * 0.5))
+            d_pass = sum(1 for r in d_rows if (r.max_marks or 0) > 0 and r.total_marks >= (r.max_marks * pass_threshold))
             d_sum = sum(
                 (r.total_marks / r.max_marks) * 100.0 if (r.max_marks or 0) > 0 else 0.0
                 for r in d_rows
@@ -1117,6 +1177,11 @@ class AcademicPerformanceAnalyticsView(APIView):
                 "attendance_pct": d_att_pct,
             })
 
+        # Dynamic batches list from live student data
+        batches_list = sorted(
+            b for b in active_student_cohort().exclude(batch="").values_list("batch", flat=True).distinct()
+        )
+
         return Response({
             "metrics": {
                 "total_students": len(student_ids),
@@ -1127,7 +1192,7 @@ class AcademicPerformanceAnalyticsView(APIView):
                 "overall_pass_count": pass_count,
                 "overall_fail_count": fail_count,
             },
-            "batches_list": ["2023", "2024", "2025"],
+            "batches_list": batches_list if batches_list else [],
             "departments_list": [
                 {"id": str(d.id), "code": d.code or str(d.id), "short_name": d.short_name or d.code or str(d.id), "name": d.name}
                 for d in all_depts
@@ -1302,15 +1367,56 @@ class FacultyWiseAnalyticsView(APIView):
             per_student = {} # (student_id, ta_id) -> [count, sum_pct, pass_count]
             total_cnt, total_sum, total_pass = 0, 0.0, 0
 
+            from academic_v2.models import AcV2StudentMark
+            from .marks_helper import _get_pass_threshold, _normalise_exam_key, _exam_key_matches
+            pass_threshold_fac = _get_pass_threshold()
+            target_exam_norm = _normalise_exam_key(selected_name) if selected_name else ''
+
+            acv2_ta_marks = AcV2StudentMark.objects.filter(
+                exam_assignment__section__teaching_assignment_id__in=ta_ids,
+                exam_assignment__status='PUBLISHED',
+                total_mark__isnull=False,
+                is_absent=False,
+                is_exempted=False,
+            ).select_related('exam_assignment', 'exam_assignment__section')
+
+            acv2_fac_seen = set()
+            for sm in acv2_ta_marks:
+                ea = sm.exam_assignment
+                if target_exam_norm and not _exam_key_matches(ea.exam, ea.exam_display_name, target_exam_norm):
+                    continue
+                ta_id = ea.section.teaching_assignment_id
+                if not ta_id or ta_id not in ta_by_id:
+                    continue
+                sid = sm.student_id
+                mx = float(ea.max_marks or 50.0)
+                if mx <= 0:
+                    mx = 50.0
+                pct = min(100.0, (float(sm.total_mark) / mx) * 100.0)
+                passed = pct >= pass_threshold_fac
+
+                acv2_fac_seen.add((sid, ta_id, _normalise_exam_key(ea.exam)))
+
+                st = per_ta.setdefault(ta_id, [0, 0.0, 0])
+                st[0] += 1; st[1] += pct; st[2] += 1 if passed else 0
+                sp = per_staff.setdefault(ta_by_id[ta_id].staff_id, [0, 0.0, 0])
+                sp[0] += 1; sp[1] += pct; sp[2] += 1 if passed else 0
+                sr = per_student.setdefault((sid, ta_id), [0, 0.0, 0])
+                sr[0] += 1; sr[1] += pct; sr[2] += 1 if passed else 0
+                total_cnt += 1; total_sum += pct; total_pass += 1 if passed else 0
+
             for _name, M, _field in scan:
                 qs = M.objects.filter(teaching_assignment_id__in=ta_ids).exclude(**{_field + "__isnull": True})
                 ref = qs.aggregate(m=Max(_field))["m"]
                 if not ref or float(ref) <= 0:
                     continue
                 ref = float(ref)
+                norm_exam_name = _normalise_exam_key(_name)
                 for ta_id, sid, val in qs.values_list("teaching_assignment_id", "student_id", _field):
+                    if (sid, ta_id, norm_exam_name) in acv2_fac_seen:
+                        continue  # AcV2 authoritative mark takes precedence
                     pct = (float(val) / ref) * 100.0
-                    passed = pct >= 50.0
+                    passed = pct >= pass_threshold_fac
                     st = per_ta.setdefault(ta_id, [0, 0.0, 0])
                     st[0] += 1; st[1] += pct; st[2] += 1 if passed else 0
                     sp = per_staff.setdefault(ta_by_id[ta_id].staff_id, [0, 0.0, 0])
@@ -1425,6 +1531,7 @@ class FacultyWiseAnalyticsView(APIView):
             )
             for m_stu in StudentProfile.objects.filter(id__in=mentee_ids).select_related("user", "section", "section__semester", "home_department"):
                 m_cnt, m_sum, m_pass = 0, 0.0, 0
+                pass_threshold = _get_pass_threshold()
                 for _n2, M2, _f2 in assessment_registry:
                     q2 = M2.objects.filter(student_id=m_stu.id).exclude(**{_f2 + "__isnull": True})
                     ref2 = q2.aggregate(m=Max(_f2))["m"]
@@ -1433,7 +1540,7 @@ class FacultyWiseAnalyticsView(APIView):
                     ref2 = float(ref2)
                     for val2 in q2.values_list(_f2, flat=True):
                         p2 = float(val2) / ref2 * 100.0
-                        m_cnt += 1; m_sum += p2; m_pass += 1 if p2 >= 50.0 else 0
+                        m_cnt += 1; m_sum += p2; m_pass += 1 if p2 >= pass_threshold else 0
                 mentees_out.append({
                     "student_id": str(m_stu.id),
                     "reg_no": m_stu.reg_no or f"REG{m_stu.id}",
@@ -1487,40 +1594,165 @@ class FacultyWiseAnalyticsView(APIView):
 class ClassAdvisorDeepDiveView(APIView):
     permission_classes = [permissions.AllowAny]
     def get(self, request, section_id):
+        """Class Advisor deep-dive: aggregates AcV2 published marks + OBE marks for
+        every student in the section, calculates real attendance from
+        DailyAttendanceRecord, and derives all section metadata from the DB.
+        No hardcoded values are used."""
         scope = get_performance_scope(request.user)
-        section = Section.objects.filter(id=section_id).first() or Section.objects.first()
-        if section is not None:
-            assert_section_in_scope(scope, section)
-        students = StudentProfile.objects.filter(section=section).select_related("user")
+        section = Section.objects.filter(id=section_id).select_related(
+            "semester", "batch", "batch__course", "batch__course__department",
+            "managing_department"
+        ).first()
+        if section is None:
+            return Response({"error": "Section not found."}, status=status.HTTP_404_NOT_FOUND)
+        assert_section_in_scope(scope, section)
+
+        students = list(
+            StudentProfile.objects.filter(section=section)
+            .select_related("user", "home_department")
+        )
+        student_ids = [s.id for s in students]
+
+        # Build normalized score per student from published AcV2StudentMark records
+        # (status='PUBLISHED') and fall back to OBE assessment pool.
+        from academic_v2.models import AcV2StudentMark, AcV2ExamAssignment, AcV2Section
+        from OBE.models import (
+            Cia1Mark, Cia2Mark, Ssa1Mark, Ssa2Mark, Review1Mark, Review2Mark,
+            Formative1Mark, Formative2Mark, ModelExamMark, LabExamMark, FinalInternalMark,
+        )
+
+        # ------- AcV2 published marks for all exam_assignments in this section -------
+        from django.db.models import Q
+        from .marks_helper import _get_pass_threshold
+        pass_threshold = _get_pass_threshold()
+
+        ac_sections = AcV2Section.objects.filter(
+            Q(teaching_assignment__section=section) | Q(section_name__iexact=section.name)
+        )
+        published_ea_ids = list(
+            AcV2ExamAssignment.objects.filter(
+                section__in=ac_sections, status='PUBLISHED'
+            ).values_list('id', flat=True)
+        )
+        acv2_marks_qs = AcV2StudentMark.objects.filter(
+            exam_assignment_id__in=published_ea_ids,
+            student_id__in=student_ids,
+            total_mark__isnull=False,
+            is_absent=False,
+            is_exempted=False,
+        )
+        # max_marks per exam_assignment for normalisation
+        ea_max = {
+            str(ea.id): float(ea.max_marks or 50)
+            for ea in AcV2ExamAssignment.objects.filter(id__in=published_ea_ids)
+        }
+        acv2_student_pcts = {}  # student_id -> [pct, ...]
+        for sm in acv2_marks_qs:
+            sid = sm.student_id
+            mx = ea_max.get(str(sm.exam_assignment_id), 50.0)
+            if mx > 0:
+                pct = min(100.0, (float(sm.total_mark) / mx) * 100.0)
+                acv2_student_pcts.setdefault(sid, []).append(pct)
+
+        # ------- OBE fallback pool -------
+        obe_registry = [
+            (Cia1Mark, "mark"), (Cia2Mark, "mark"),
+            (Ssa1Mark, "mark"), (Ssa2Mark, "mark"),
+            (Review1Mark, "mark"), (Review2Mark, "mark"),
+            (Formative1Mark, "total"), (Formative2Mark, "total"),
+            (ModelExamMark, "total_mark"), (LabExamMark, "total_mark"),
+            (FinalInternalMark, "final_mark"),
+        ]
+        obe_student_pcts = {}  # student_id -> [pct, ...]
+        for M, field in obe_registry:
+            qs = M.objects.filter(student_id__in=student_ids).exclude(**{field + "__isnull": True})
+            ref = qs.aggregate(m=Max(field))["m"]
+            if not ref or float(ref) <= 0:
+                continue
+            ref = float(ref)
+            for sid, val in qs.values_list("student_id", field):
+                pct = min(100.0, (float(val) / ref) * 100.0)
+                obe_student_pcts.setdefault(sid, []).append(pct)
+
+        # ------- Attendance from DailyAttendanceRecord -------
+        att_qs = DailyAttendanceRecord.objects.filter(student_id__in=student_ids)
+        att_total = att_qs.count()
+        att_present = att_qs.filter(status__in=['P', 'OD', 'PRESENT', 'ON_DUTY']).count() if att_total else 0
+        # Per-student attendance map
+        per_stu_att = {sid: [0, 0] for sid in student_ids}  # [total, present]
+        for att in att_qs.values('student_id', 'status'):
+            sid = att['student_id']
+            per_stu_att.setdefault(sid, [0, 0])
+            per_stu_att[sid][0] += 1
+            if str(att['status']).upper() in ('P', 'OD', 'PRESENT', 'ON_DUTY'):
+                per_stu_att[sid][1] += 1
+
+        # ------- Build per-student rows -------
         student_rows = []
+        pass_count = 0
+        total_score_sum = 0.0
+        total_score_n = 0
         for s in students:
-            marks = Cia1Mark.objects.filter(student=s)
-            avg_m = marks.aggregate(Avg('mark'))['mark__avg'] or 35
-            score_p = round(float(avg_m) * 2.0, 1)
+            sid = s.id
+            # Prefer AcV2 published marks; merge OBE if no AcV2 records
+            pcts = acv2_student_pcts.get(sid) or obe_student_pcts.get(sid) or []
+            if pcts:
+                avg_score = round(sum(pcts) / len(pcts), 1)
+            else:
+                avg_score = None  # No mark records yet — do not fabricate
+
+            att_info = per_stu_att.get(sid, [0, 0])
+            stu_att = round((att_info[1] / att_info[0]) * 100.0, 1) if att_info[0] > 0 else None
+
+            perf_level = (
+                "Above Pass Threshold" if (avg_score is not None and avg_score > pass_threshold)
+                else ("Equal to Pass Threshold" if (avg_score is not None and avg_score == pass_threshold)
+                      else ("Below Pass Threshold" if avg_score is not None else "No Data")
+                )
+            )
+            if avg_score is not None:
+                total_score_sum += avg_score
+                total_score_n += 1
+                if avg_score >= pass_threshold:
+                    pass_count += 1
+
             student_rows.append({
-                "student_id": str(s.id),
+                "student_id": str(sid),
                 "name": s.user.get_full_name() or s.user.username,
                 "reg_no": s.reg_no,
-                "avg_score": score_p,
-                "attendance": 88.0,
-                "performance_level": "Above 58%" if score_p > 58 else ("Equal to 58%" if score_p == 58 else "Below 58%")
+                "avg_score": avg_score,
+                "attendance": stu_att,
+                "performance_level": perf_level,
             })
 
-        student_rows.sort(key=lambda x: x["avg_score"], reverse=True)
+        student_rows.sort(key=lambda x: (x["avg_score"] is None, -(x["avg_score"] or 0)))
+
+        # ------- Section metadata from DB -------
+        dept_obj = (
+            section.managing_department
+            or (section.batch.course.department if (section.batch and section.batch.course) else None)
+        )
+        dept_name = dept_obj.name if dept_obj else ""
+        dept_code = (dept_obj.short_name or dept_obj.code or dept_name[:4]) if dept_obj else ""
+        sem_num = str(section.semester.number) if section.semester else ""
+        class_avg = round(total_score_sum / total_score_n, 1) if total_score_n else None
+        pass_pct = round((pass_count / total_score_n) * 100.0, 1) if total_score_n else None
+        overall_att = round((att_present / att_total) * 100.0, 1) if att_total else None
+
         return Response({
             "section_info": {
-                "section_id": str(section.id if section else 1),
-                "section_name": section.name if section else "A",
-                "department": "Engineering",
-                "department_code": "ENG",
-                "semester": "5",
-                "total_students": len(student_rows) or 60,
-                "class_average": 74.5,
-                "pass_percentage": 89.2,
-                "attendance_avg": 88.0
+                "section_id": str(section.id),
+                "section_name": section.name,
+                "department": dept_name,
+                "department_code": dept_code,
+                "semester": sem_num,
+                "total_students": len(student_rows),
+                "class_average": class_avg,
+                "pass_percentage": pass_pct,
+                "attendance_avg": overall_att,
             },
-            "top_scorers": student_rows[:5],
-            "low_scorers": list(reversed(student_rows[-5:])),
+            "top_scorers": [r for r in student_rows if r["avg_score"] is not None][:5],
+            "low_scorers": [r for r in reversed(student_rows) if r["avg_score"] is not None][:5],
             "subject_matrix": []
         }, status=status.HTTP_200_OK)
 
@@ -1591,6 +1823,29 @@ class RangeAnalysisView(APIView):
             # Dict to store mark counts per subject per range
             subject_distributions = {} # { subject_id: { range_label: count } }
             subject_info = {} # { subject_id: name/code }
+
+            from .marks_helper import fetch_scoped_acv2_student_marks, _normalise_exam_key
+            acv2_range_marks = fetch_scoped_acv2_student_marks(
+                dept_code=dept_code,
+                batch=req_batch,
+                sem_num=int(req_sem) if req_sem.isdigit() else None,
+                section_name=req_sec,
+                exam_type=req_exam if req_exam != "All Assessments" else None,
+            )
+            acv2_seen_set = set()
+            for rk in acv2_range_marks:
+                sub_key = rk['subject_code'] or rk['subject_name'] or 'UNKNOWN'
+                pct = rk['pct']
+                acv2_seen_set.add((rk['student_id'], rk['subject_code'], _normalise_exam_key(rk['exam'])))
+
+                if sub_key not in subject_distributions:
+                    subject_distributions[sub_key] = { r["label"]: 0 for r in ranges }
+                    subject_info[sub_key] = f"{rk['subject_name']} ({rk['subject_code']})" if (rk['subject_name'] and rk['subject_code']) else sub_key
+
+                for r in ranges:
+                    if r["min"] <= pct <= r["max"]:
+                        subject_distributions[sub_key][r["label"]] += 1
+                        break
             
             for _name, M, _field in scan:
                 qs = M.objects.filter(base_q).exclude(**{_field + "__isnull": True}).select_related("subject")
@@ -1598,10 +1853,13 @@ class RangeAnalysisView(APIView):
                 if not ref or float(ref) <= 0:
                     continue
                 ref = float(ref)
+                norm_exam_name = _normalise_exam_key(_name)
                 
                 for sid, val, subj_id, subj_code, subj_name in qs.values_list("student_id", _field, "subject_id", "subject__code", "subject__name"):
                     if not subj_id:
                         continue
+                    if (sid, subj_code or '', norm_exam_name) in acv2_seen_set:
+                        continue  # AcV2 authoritative mark takes precedence
                     pct = (float(val) / ref) * 100.0
                     
                     if subj_id not in subject_distributions:
@@ -1677,9 +1935,18 @@ class ComparisonPerformanceAnalyticsView(APIView):
                     for d in all_depts_db if str(d.id) in allowed_ids_c
                 ]
 
-            batches_list = ["2023", "2024", "2025"]
-            sems_list = ["1", "2", "3", "4", "5", "6", "7", "8"]
-            sections_list = ["A", "B", "C", "D", "E"]
+            # Dynamic filter options from live DB data
+            batches_list = sorted(
+                b for b in active_student_cohort().exclude(batch="").values_list("batch", flat=True).distinct()
+            )
+            sems_list = sorted(
+                str(n) for n in Semester.objects.exclude(number__isnull=True)
+                .values_list("number", flat=True).distinct() if n
+            )
+            sections_list = sorted(
+                name for name in Section.objects.exclude(name="")
+                .values_list("name", flat=True).distinct() if name
+            )
 
             # Load active subjects
             subj_qs = Subject.objects.all()
@@ -1692,29 +1959,28 @@ class ComparisonPerformanceAnalyticsView(APIView):
 
             subjects_list = [{"id": str(s.id), "code": s.code, "name": s.name} for s in subj_qs[:200]]
 
-            # Main multi-comparison logic across CI1 -> CIA2 -> Model -> ESE
-            line_series = []
-
             # Map exam types to models & maximum marks
+            # AcV2 published marks are primary source for all exams including ESE.
+            # max_m is only used for OBE/COE fallback normalization, not for AcV2 pct.
             exam_configs = []
             for qp in req_qp_types:
                 if qp == "CIA 1":
-                    exam_configs.append(("CIA 1", Cia1Mark, "mark", 50.0))
+                    exam_configs.append(("CIA 1", Cia1Mark, "mark", None))
                 elif qp == "CIA 2":
-                    exam_configs.append(("CIA 2", Cia2Mark, "mark", 50.0))
+                    exam_configs.append(("CIA 2", Cia2Mark, "mark", None))
                 elif qp == "Model Exam":
-                    exam_configs.append(("Model Exam", ModelExamMark, "total_mark", 100.0))
-                elif qp == "ESE":
-                    # ESE simulated using Model Exam scaled values or direct mapping if empty
-                    exam_configs.append(("ESE", ModelExamMark, "total_mark", 100.0))
+                    exam_configs.append(("Model Exam", ModelExamMark, "total_mark", None))
+                elif qp in ("ESE", "Semester Exam"):
+                    # ESE uses AcV2 published marks; COE fallback only when no AcV2 records exist
+                    exam_configs.append(("ESE", None, None, None))
 
-            # If no exams specified or default, render CI1, CIA2, Model, ESE line progression
+            # If no exams specified or default, show CIA 1, CIA 2, Model, ESE progression
             if len(req_qp_types) == 1 or not req_qp_types:
                 exam_configs = [
-                    ("CIA 1", Cia1Mark, "mark", 50.0),
-                    ("CIA 2", Cia2Mark, "mark", 50.0),
-                    ("Model Exam", ModelExamMark, "total_mark", 100.0),
-                    ("ESE", ModelExamMark, "total_mark", 100.0) # Sim ESE
+                    ("CIA 1", Cia1Mark, "mark", None),
+                    ("CIA 2", Cia2Mark, "mark", None),
+                    ("Model Exam", ModelExamMark, "total_mark", None),
+                    ("ESE", None, None, None),  # AcV2 published ESE marks
                 ]
 
             # Resolve comparison items to build discrete lines
@@ -1762,21 +2028,57 @@ class ComparisonPerformanceAnalyticsView(APIView):
                     sec_students = students_base.filter(section__name__iexact=sec_name)
                     sec_stu_ids = list(sec_students.values_list('id', flat=True))
 
+                    _sec_regs = {s.reg_no for s in sec_students if s.reg_no}
                     for label, mark_model, field_name, max_m in exam_configs:
-                        m_qs = mark_model.objects.filter(student_id__in=sec_stu_ids)
-                        if req_subjects:
-                            m_qs = m_qs.filter(subject_id__in=req_subjects)
+                        if label == "ESE":
+                            # ESE: AcV2 published marks; fallback to OBE only if no AcV2 records
+                            ac_marks = fetch_scoped_acv2_student_marks(
+                                student_ids=sec_stu_ids,
+                                exam_type=label,
+                            )
+                            if req_subjects:
+                                ac_marks = [r for r in ac_marks if r['subject_code'] in req_subjects]
 
-                        cnt = m_qs.count()
-                        if cnt > 0:
-                            avg_raw = m_qs.aggregate(Avg(field_name))[f"{field_name}__avg"] or 0
-                            # ESE simulation scale by 0.94 multiplier of model exam to show realistic ESE progression
-                            val = float(avg_raw)
-                            if label == "ESE":
-                                val = val * 0.94
-                            avg_pct = round((val / max_m) * 100.0, 1)
+                            pcts = [r['pct'] for r in ac_marks]
+                            ac_keys = set((r['student_id'], r['subject_code']) for r in ac_marks)
+
+                            # OBE fallback for ESE if no AcV2 records
+                            if mark_model:
+                                m_qs = mark_model.objects.filter(student_id__in=sec_stu_ids).select_related('subject')
+                                if req_subjects:
+                                    m_qs = m_qs.filter(subject_id__in=req_subjects)
+                                for sid, sub_code, val in m_qs.values_list('student_id', 'subject__code', field_name):
+                                    if val is not None and (sid, sub_code or '') not in ac_keys:
+                                        pcts.append((float(val) / float(max_m) * 100.0) if max_m else 0.0)
+
+                            if pcts:
+                                avg_pct = round(sum(pcts) / len(pcts), 1)
+                            else:
+                                avg_pct = None
                         else:
-                            avg_pct = 0.0
+                            from .marks_helper import fetch_scoped_acv2_student_marks
+                            ac_marks = fetch_scoped_acv2_student_marks(
+                                student_ids=sec_stu_ids,
+                                exam_type=label,
+                            )
+                            if req_subjects:
+                                ac_marks = [r for r in ac_marks if r['subject_code'] in req_subjects]
+
+                            pcts = [r['pct'] for r in ac_marks]
+                            ac_keys = set((r['student_id'], r['subject_code']) for r in ac_marks)
+
+                            if mark_model:
+                                m_qs = mark_model.objects.filter(student_id__in=sec_stu_ids).select_related('subject')
+                                if req_subjects:
+                                    m_qs = m_qs.filter(subject_id__in=req_subjects)
+                                for sid, sub_code, val in m_qs.values_list('student_id', 'subject__code', field_name):
+                                    if val is not None and (sid, sub_code or '') not in ac_keys:
+                                        pcts.append((float(val) / float(max_m) * 100.0) if max_m else 0.0)
+
+                            if pcts:
+                                avg_pct = round(sum(pcts) / len(pcts), 1)
+                            else:
+                                avg_pct = None
                         series_data.append({"exam": label, "score": avg_pct})
 
                     line_series.append({
@@ -1794,22 +2096,61 @@ class ComparisonPerformanceAnalyticsView(APIView):
                     d_students = students_base.filter(get_student_dept_q(d_id))
                     d_stu_ids = list(d_students.values_list('id', flat=True))
 
+                    _d_regs = {s.reg_no for s in d_students.select_related() if s.reg_no}
                     for label, mark_model, field_name, max_m in exam_configs:
-                        m_qs = mark_model.objects.filter(student_id__in=d_stu_ids)
-                        if req_subjects:
-                            m_qs = m_qs.filter(subject_id__in=req_subjects)
-                        if req_secs:
-                            m_qs = m_qs.filter(student__section__name__in=req_secs)
+                        if label == "ESE":
+                            # ESE: AcV2 published marks; fallback to OBE only if no AcV2 records
+                            ac_marks = fetch_scoped_acv2_student_marks(
+                                student_ids=d_stu_ids,
+                                exam_type=label,
+                            )
+                            if req_subjects:
+                                ac_marks = [r for r in ac_marks if r['subject_code'] in req_subjects]
 
-                        cnt = m_qs.count()
-                        if cnt > 0:
-                            avg_raw = m_qs.aggregate(Avg(field_name))[f"{field_name}__avg"] or 0
-                            val = float(avg_raw)
-                            if label == "ESE":
-                                val = val * 0.94
-                            avg_pct = round((val / max_m) * 100.0, 1)
+                            pcts = [r['pct'] for r in ac_marks]
+                            ac_keys = set((r['student_id'], r['subject_code']) for r in ac_marks)
+
+                            # OBE fallback for ESE if no AcV2 records
+                            if mark_model:
+                                m_qs = mark_model.objects.filter(student_id__in=d_stu_ids).select_related('subject')
+                                if req_subjects:
+                                    m_qs = m_qs.filter(subject_id__in=req_subjects)
+                                if req_secs:
+                                    m_qs = m_qs.filter(student__section__name__in=req_secs)
+                                for sid, sub_code, val in m_qs.values_list('student_id', 'subject__code', field_name):
+                                    if val is not None and (sid, sub_code or '') not in ac_keys:
+                                        pcts.append((float(val) / float(max_m) * 100.0) if max_m else 0.0)
+
+                            if pcts:
+                                avg_pct = round(sum(pcts) / len(pcts), 1)
+                            else:
+                                avg_pct = None
                         else:
-                            avg_pct = 0.0
+                            from .marks_helper import fetch_scoped_acv2_student_marks
+                            ac_marks = fetch_scoped_acv2_student_marks(
+                                student_ids=d_stu_ids,
+                                exam_type=label,
+                            )
+                            if req_subjects:
+                                ac_marks = [r for r in ac_marks if r['subject_code'] in req_subjects]
+
+                            pcts = [r['pct'] for r in ac_marks]
+                            ac_keys = set((r['student_id'], r['subject_code']) for r in ac_marks)
+
+                            if mark_model:
+                                m_qs = mark_model.objects.filter(student_id__in=d_stu_ids).select_related('subject')
+                                if req_subjects:
+                                    m_qs = m_qs.filter(subject_id__in=req_subjects)
+                                if req_secs:
+                                    m_qs = m_qs.filter(student__section__name__in=req_secs)
+                                for sid, sub_code, val in m_qs.values_list('student_id', 'subject__code', field_name):
+                                    if val is not None and (sid, sub_code or '') not in ac_keys:
+                                        pcts.append((float(val) / float(max_m) * 100.0) if max_m else 0.0)
+
+                            if pcts:
+                                avg_pct = round(sum(pcts) / len(pcts), 1)
+                            else:
+                                avg_pct = None
                         series_data.append({"exam": label, "score": avg_pct})
 
                     line_series.append({
@@ -1825,21 +2166,57 @@ class ComparisonPerformanceAnalyticsView(APIView):
                     sub_name = sub_obj.name if sub_obj else f"Subject {sub_id}"
 
                     series_data = []
+                    _sub_regs = set()
                     for label, mark_model, field_name, max_m in exam_configs:
-                        # Filter marks strictly within current students and sections
-                        m_qs = mark_model.objects.filter(subject_id=sub_id, student_id__in=active_stu_ids)
-                        if req_secs:
-                            m_qs = m_qs.filter(student__section__name__in=req_secs)
+                        if label == "ESE":
+                            # ESE: AcV2 published marks; fallback to OBE only if no AcV2 records
+                            ac_marks = fetch_scoped_acv2_student_marks(
+                                student_ids=active_stu_ids,
+                                exam_type=label,
+                                subject=sub_obj.code if sub_obj else str(sub_id),
+                            )
+                            if req_subjects:
+                                ac_marks = [r for r in ac_marks if r['subject_code'] in req_subjects]
 
-                        cnt = m_qs.count()
-                        if cnt > 0:
-                            avg_raw = m_qs.aggregate(Avg(field_name))[f"{field_name}__avg"] or 0
-                            val = float(avg_raw)
-                            if label == "ESE":
-                                val = val * 0.94
-                            avg_pct = round((val / max_m) * 100.0, 1)
+                            pcts = [r['pct'] for r in ac_marks]
+                            ac_keys = set((r['student_id'], r['subject_code']) for r in ac_marks)
+
+                            # OBE fallback for ESE if no AcV2 records
+                            if mark_model:
+                                m_qs = mark_model.objects.filter(subject_id=sub_id, student_id__in=active_stu_ids).select_related('subject')
+                                if req_secs:
+                                    m_qs = m_qs.filter(student__section__name__in=req_secs)
+                                for sid, scode, val in m_qs.values_list('student_id', 'subject__code', field_name):
+                                    if val is not None and (sid, scode or '') not in ac_keys:
+                                        pcts.append((float(val) / float(max_m) * 100.0) if max_m else 0.0)
+
+                            if pcts:
+                                avg_pct = round(sum(pcts) / len(pcts), 1)
+                            else:
+                                avg_pct = None
                         else:
-                            avg_pct = 0.0
+                            from .marks_helper import fetch_scoped_acv2_student_marks
+                            sub_code = sub_obj.code if sub_obj else str(sub_id)
+                            ac_marks = fetch_scoped_acv2_student_marks(
+                                student_ids=active_stu_ids,
+                                exam_type=label,
+                                subject=sub_code,
+                            )
+                            pcts = [r['pct'] for r in ac_marks]
+                            ac_keys = set((r['student_id'], r['subject_code']) for r in ac_marks)
+
+                            if mark_model:
+                                m_qs = mark_model.objects.filter(subject_id=sub_id, student_id__in=active_stu_ids).select_related('subject')
+                                if req_secs:
+                                    m_qs = m_qs.filter(student__section__name__in=req_secs)
+                                for sid, scode, val in m_qs.values_list('student_id', 'subject__code', field_name):
+                                    if val is not None and (sid, scode or '') not in ac_keys:
+                                        pcts.append((float(val) / float(max_m) * 100.0) if max_m else 0.0)
+
+                            if pcts:
+                                avg_pct = round(sum(pcts) / len(pcts), 1)
+                            else:
+                                avg_pct = None
                         series_data.append({"exam": label, "score": avg_pct})
 
                     line_series.append({
@@ -1989,6 +2366,23 @@ class StudentCurriculumMarksView(APIView):
                         val = getattr(m, 'total_mark', 0.0)
                     marks_by_student[m.student_id][str(m.subject_id)] = float(val) if val is not None else 0.0
 
+        # Authoritative AcV2 published marks
+        from .marks_helper import fetch_scoped_acv2_student_marks
+        acv2_curr = fetch_scoped_acv2_student_marks(
+            student_ids=student_ids,
+            exam_type=exam_type if exam not in ["ALL", "ALL ASSESSMENTS", "SEMESTER"] else None,
+            subject=subject_val,
+        )
+        acv2_sub_info = {}  # sub_id_str -> (code, name)
+        for r in acv2_curr:
+            sid = r['student_id']
+            scode = (r['subject_code'] or '').strip().upper()
+            sub_id_str = subject_code_to_id.get(scode, scode)
+            acv2_sub_info[sub_id_str] = (r['subject_code'], r['subject_name'])
+            if sid in marks_by_student:
+                # Authoritative AcV2 mark takes precedence
+                marks_by_student[sid][sub_id_str] = float(r['score'])
+
         # Build the authoritative, data-driven subject set from the filtered cohort's
         # real marks, so the subject columns in the student table align exactly with the
         # marks actually present for this cohort + exam (independent of dept representation).
@@ -1997,17 +2391,28 @@ class StudentCurriculumMarksView(APIView):
             seen_sub_ids.update(m_dict.keys())
         subj_build = []
         if seen_sub_ids:
-            id_values = [int(x) for x in seen_sub_ids if x.isdigit()]
+            id_values = [int(x) for x in seen_sub_ids if str(x).isdigit()]
             subject_id_map = {str(s.id): s for s in Subject.objects.filter(id__in=id_values)}
-            for sid_str, sub in subject_id_map.items():
+            for sid_str in seen_sub_ids:
+                if sid_str in subject_id_map:
+                    sub = subject_id_map[sid_str]
+                    code_val = sub.code
+                    name_val = sub.name
+                elif sid_str in acv2_sub_info:
+                    code_val, name_val = acv2_sub_info[sid_str]
+                else:
+                    code_val = sid_str
+                    name_val = sid_str
+
                 if subject_val:
-                    m_code = (sub.code or "" ).lower()
-                    m_name = (sub.name or "" ).lower()
+                    m_code = (code_val or "").lower()
+                    m_name = (name_val or "").lower()
                     q_val = subject_val.lower()
-                    if not ((q_val in m_code) or (q_val in m_name) or (str(sub.id) == subject_val)):
+                    if not ((q_val in m_code) or (q_val in m_name) or (sid_str == subject_val)):
                         continue
 
-                subj_build.append({"id": sid_str, "code": sub.code, "name": sub.name})
+                subj_build.append({"id": sid_str, "code": code_val, "name": name_val})
+
         elif subject_val:
             for sub in subject_all:
                 if sub and ((subject_val.lower() in (sub.code or "" ).lower()) or (subject_val.lower() in (sub.name or "" ).lower())):
@@ -2045,6 +2450,18 @@ class StudentCurriculumMarksView(APIView):
 
         subjects = subj_build
         subject_data = subj_build
+
+        # Compute per-student attendance from DailyAttendanceRecord (bulk query, then map)
+        stu_att_total = {sid: 0 for sid in student_ids}
+        stu_att_present = {sid: 0 for sid in student_ids}
+        for att in DailyAttendanceRecord.objects.filter(
+            student_id__in=student_ids
+        ).values('student_id', 'status'):
+            sid = att['student_id']
+            stu_att_total[sid] = stu_att_total.get(sid, 0) + 1
+            if str(att['status']).upper() in ('P', 'OD', 'PRESENT', 'ON_DUTY'):
+                stu_att_present[sid] = stu_att_present.get(sid, 0) + 1
+
         student_marks_data = []
         for s in students:
             dept_lbl = s.home_department.short_name if s.home_department else (
@@ -2052,6 +2469,9 @@ class StudentCurriculumMarksView(APIView):
             )
             sem_lbl = str(s.section.semester.number) if (s.section and s.section.semester) else (str(semester_num) if semester_num else "1")
             ay_lbl = s.batch or (s.section.batch.name if (s.section and s.section.batch) else "")
+            tot_att = stu_att_total.get(s.id, 0)
+            pres_att = stu_att_present.get(s.id, 0)
+            stu_att_pct = round((pres_att / tot_att) * 100.0, 1) if tot_att > 0 else None
 
             student_marks_data.append({
                 "student_id": str(s.id),
@@ -2062,7 +2482,7 @@ class StudentCurriculumMarksView(APIView):
                 "semester": sem_lbl,
                 "academic_year": ay_lbl,
                 "marks": marks_by_student.get(s.id, {}),
-                "attendance": 90.0
+                "attendance": stu_att_pct,
             })
 
         return Response({
@@ -2122,7 +2542,9 @@ class StudentAnalysisChartsView(APIView):
 
         _score_pcts = [m["score_pct"] for m in marks_data if isinstance(m.get("score_pct"), (int, float))]
         avg_pct = round(sum(_score_pcts) / len(_score_pcts), 1) if _score_pcts else 0.0
-        pass_pct = round((sum(1 for s in _score_pcts if float(s) >= 50.0) / len(_score_pcts)) * 100.0, 1) if _score_pcts else 0.0
+        from .marks_helper import _get_pass_threshold
+        pass_thresh = _get_pass_threshold()
+        pass_pct = round((sum(1 for s in _score_pcts if float(s) >= pass_thresh) / len(_score_pcts)) * 100.0, 1) if _score_pcts else 0.0
 
         return Response({
             "student_name": student.user.get_full_name() or student.user.username,
@@ -2335,11 +2757,17 @@ class StudentReportPDFView(APIView):
             pct_str = f"{pct}%" if pct is not None else '—'
             
             res = '—'
-            try:
-                if score != '—' and score is not None and max_mark != '—' and max_mark is not None:
-                    res = 'Pass' if float(score) >= (float(max_mark) / 2) else 'Fail'
-            except:
-                pass
+            if md.get('is_pass') is not None:
+                res = 'Pass' if md.get('is_pass') else 'Fail'
+            else:
+                try:
+                    if score != '—' and score is not None and max_mark != '—' and max_mark is not None:
+                        from .marks_helper import _get_pass_threshold
+                        thresh = _get_pass_threshold()
+                        p_val = (float(score) / float(max_mark)) * 100.0 if float(max_mark) > 0 else 0.0
+                        res = 'Pass' if p_val >= thresh else 'Fail'
+                except:
+                    pass
             
             res_p = Paragraph(f"<font color=\"{'#16A34A' if res == 'Pass' else '#DC2626' if res == 'Fail' else '#0F172A'}\"><b>{res}</b></font>", ParagraphStyle('Res', alignment=TA_CENTER))
 
