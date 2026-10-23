@@ -121,22 +121,6 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ('id', 'username', 'email', 'roles')
 
 
-class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True)
-
-    class Meta:
-        model = User
-        fields = ('username', 'email', 'password')
-
-    def create(self, validated_data):
-        user = User.objects.create_user(
-            username=validated_data['username'],
-            email=validated_data.get('email'),
-            password=validated_data['password'],
-        )
-        return user
-
-
 class MeSerializer(serializers.Serializer):
     # Compatibility aliases for clients that expect {user_id, name, roles}
     user_id = serializers.IntegerField(source='id', read_only=True)

@@ -5,6 +5,7 @@ Academic 2.1 API Views
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from .permissions import IsAcV2Admin, IsAcV2AdminForGenericWrites, IsAcV2AdminOrReadOnly, is_acv2_admin
 from rest_framework.response import Response
 from django.conf import settings
 from django.http import HttpResponse
@@ -90,6 +91,22 @@ def _extract_spreadsheet_id(sheet_url: str) -> str:
     return str(match.group(1)) if match else ''
 
 
+def _user_owns_acv2_section(user, section) -> bool:
+    """True for admins and for the faculty who teach this Academic 2.1 section."""
+    if section is None:
+        return False
+    if _has_admin_bypass_access(user):
+        return True
+    uid = getattr(user, 'id', None)
+    if uid is None:
+        return False
+    if section.faculty_user_id == uid:
+        return True
+    ta = getattr(section, 'teaching_assignment', None)
+    staff = getattr(ta, 'staff', None) if ta is not None else None
+    return bool(staff is not None and staff.user_id == uid)
+
+
 def _render_notification_template(template: str, context: dict) -> str:
     """Simple token replacement for templates like 'Hello {student_name}'."""
     out = str(template or '')
@@ -105,6 +122,9 @@ def _render_notification_template(template: str, context: dict) -> str:
 @permission_classes([IsAuthenticated])
 def google_sheet_links(request):
     """Get and update section-level Google Sheet links and per-exam mapping configs."""
+    err = _require_admin(request)
+    if err:
+        return err
     if request.method == 'POST':
         payload = request.data or {}
         section_id = payload.get('sectionId') or payload.get('section_id')
@@ -397,6 +417,9 @@ def _get_google_oauth_client_config() -> dict:
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def google_sheets_oauth_status(request):
+    err = _require_admin(request)
+    if err:
+        return err
     credential = AcV2GoogleSheetsOAuthCredential.objects.filter(is_active=True).order_by('-updated_at').first()
     stored_scopes = credential.scopes if credential else []
     has_script_scope = any('script.projects' in str(s) for s in (stored_scopes or []))
@@ -410,6 +433,9 @@ def google_sheets_oauth_status(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def google_sheets_oauth_start(request):
+    err = _require_admin(request)
+    if err:
+        return err
     client_config = _get_google_oauth_client_config()
     if not client_config['web']['client_id'] or not client_config['web']['client_secret']:
         return Response({'detail': 'Google OAuth client ID and client secret are not configured.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -540,6 +566,9 @@ def _get_qp_specs_for_exam(ea):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def google_sheets_sync_to_sheet(request):
+    err = _require_admin(request)
+    if err:
+        return err
     payload = request.data or {}
     spreadsheet_id = str(payload.get('spreadsheetId') or payload.get('spreadsheet_id') or '').strip()
     exam_assignment_id = payload.get('examAssignmentId') or payload.get('exam_assignment_id')
@@ -566,6 +595,9 @@ def google_sheets_sync_to_sheet(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def google_sheets_sync_from_sheet(request):
+    err = _require_admin(request)
+    if err:
+        return err
     payload = request.data or {}
     spreadsheet_id = str(payload.get('spreadsheetId') or payload.get('spreadsheet_id') or '').strip()
     exam_assignment_id = payload.get('examAssignmentId') or payload.get('exam_assignment_id')
@@ -634,6 +666,9 @@ def _resolve_google_sheet_exam_config(ea, lk):
 @permission_classes([IsAuthenticated])
 def google_sheets_pull_live(request):
     """Pull latest marks from linked Google Sheet into backend for one exam or full section."""
+    err = _require_admin(request)
+    if err:
+        return err
     payload = request.data or {}
     exam_assignment_id = payload.get('examAssignmentId') or payload.get('exam_assignment_id')
     section_id = payload.get('sectionId') or payload.get('section_id')
@@ -687,6 +722,9 @@ def google_sheets_inject_script(request):
     (sheet tabs, register-number column, question columns) and registers an onEdit +
     hourly trigger that POSTs live mark data back to our webhook endpoint.
     """
+    err = _require_admin(request)
+    if err:
+        return err
     from .google_sheets_service import inject_apps_script_to_sheet
 
     payload = request.data or {}
@@ -778,6 +816,16 @@ def google_sheets_derive_mark_manager(request):
     apply_to_ea = bool(payload.get('apply'))
     config = payload.get('config') or {}
 
+    if section_id:
+        target_section = AcV2Section.objects.filter(pk=section_id).first()
+    elif exam_assignment_id:
+        _ea_for_section = AcV2ExamAssignment.objects.filter(pk=exam_assignment_id).select_related('section').first()
+        target_section = _ea_for_section.section if _ea_for_section else None
+    else:
+        target_section = None
+    if not _user_owns_acv2_section(request.user, target_section):
+        return Response({'detail': 'You do not teach this section.'}, status=status.HTTP_403_FORBIDDEN)
+
     link = None
     if section_id:
         link = AcV2GoogleSheetLink.objects.filter(section_id=section_id, is_active=True).first()
@@ -833,6 +881,10 @@ def google_sheets_derive_mark_manager(request):
 
     if apply_to_ea and exam_assignment_id:
         target_ea = AcV2ExamAssignment.objects.filter(pk=exam_assignment_id).first()
+        if target_ea and target_ea.section_id != getattr(target_section, 'id', None):
+            return Response({'detail': 'Exam assignment does not belong to this section.'}, status=status.HTTP_400_BAD_REQUEST)
+        if target_ea and not _has_admin_bypass_access(request.user) and not target_ea.is_editable():
+            return Response({'detail': 'This exam is locked and cannot be edited.'}, status=status.HTTP_403_FORBIDDEN)
         if target_ea:
             cos_cfg = derived_mm.get('cos', {})
             cia_enabled = derived_mm.get('cia_enabled', False)
@@ -954,9 +1006,11 @@ def google_sheets_webhook(request):
     Accepts mark rows keyed by register number, matches to students, and saves
     AcV2StudentMark records — identical to the pull-live flow but push-initiated.
 
-    No auth token required since the Apps Script cannot pass session cookies;
-    the sectionId + examAssignmentId combination is treated as a shared secret.
+    The Apps Script cannot send a JWT, so each push carries a per-section HMAC
+    token embedded in the generated script (see webhook_token_for_section).
+    Sheets wired up before the token existed must be re-injected.
     """
+    from .google_sheets_service import verify_webhook_token
     payload = request.data or {}
     section_id = str(payload.get('sectionId') or payload.get('section_id') or '').strip()
     exam_assignment_id = payload.get('examAssignmentId') or payload.get('exam_assignment_id')
@@ -973,6 +1027,10 @@ def google_sheets_webhook(request):
     exam_assignment = get_object_or_404(AcV2ExamAssignment, pk=exam_assignment_id)
     if str(exam_assignment.section_id) != section_id:
         return Response({'detail': 'Section and exam assignment mismatch.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not verify_webhook_token(section_id, payload.get('token')):
+        return Response({'detail': 'Invalid webhook token.'}, status=status.HTTP_403_FORBIDDEN)
+    if not exam_assignment.is_editable():
+        return Response({'detail': 'This exam is locked; sheet changes were not applied.'}, status=status.HTTP_409_CONFLICT)
 
     link = AcV2GoogleSheetLink.objects.filter(section_id=section_id, is_active=True).first()
     if not link:
@@ -1090,6 +1148,9 @@ def google_sheets_webhook(request):
 @permission_classes([IsAuthenticated])
 def google_sheets_create(request):
     """Create Google spreadsheets for selected Academic 2.1 sections."""
+    err = _require_admin(request)
+    if err:
+        return err
     from academics.models import StudentSectionAssignment
 
     payload = request.data or {}
@@ -1580,9 +1641,8 @@ def _send_student_publish_notifications(
 
 
 def _has_admin_bypass_access(user):
-    if not user or not getattr(user, 'is_authenticated', False):
-        return False
-    return bool(user.is_staff or user.is_superuser or user.has_perm('academic_v2.page.admin'))
+    # is_staff is not accepted: it would let any staff-flagged account bypass mark locks.
+    return is_acv2_admin(user)
 
 
 @api_view(['GET', 'PUT', 'PATCH'])
@@ -2637,7 +2697,7 @@ class AcV2SemesterConfigViewSet(viewsets.ModelViewSet):
     """
     queryset = AcV2SemesterConfig.objects.all()
     serializer_class = AcV2SemesterConfigSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2AdminOrReadOnly]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -2659,7 +2719,7 @@ class AcV2SemesterGroupViewSet(viewsets.ModelViewSet):
     """
     queryset = AcV2SemesterGroup.objects.all().prefetch_related('semesters')
     serializer_class = AcV2SemesterGroupSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2AdminOrReadOnly]
 
     def perform_create(self, serializer):
         serializer.save(updated_by=self.request.user)
@@ -2667,7 +2727,7 @@ class AcV2SemesterGroupViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)
 
-    @action(detail=True, methods=['POST'], permission_classes=[IsAuthenticated])
+    @action(detail=True, methods=['POST'], permission_classes=[IsAcV2AdminOrReadOnly])
     def reset_requests(self, request, pk=None):
         """
         Admin action: Cancel all pending edit requests for this group.
@@ -2753,7 +2813,7 @@ class AcV2SemesterGroupViewSet(viewsets.ModelViewSet):
                 status=500
             )
 
-    @action(detail=True, methods=['POST'], permission_classes=[IsAuthenticated])
+    @action(detail=True, methods=['POST'], permission_classes=[IsAcV2AdminOrReadOnly])
     def reset_marks(self, request, pk=None):
         """
         Admin action: Clear all marks and revert all exams to DRAFT status for this group.
@@ -2903,7 +2963,7 @@ class AcV2VersionViewSet(viewsets.ModelViewSet):
     """
     queryset = AcV2Version.objects.all().prefetch_related('academic_years')
     serializer_class = AcV2VersionSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2AdminOrReadOnly]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -2971,7 +3031,7 @@ class AcV2ClassTypeViewSet(viewsets.ModelViewSet):
     """
     queryset = AcV2ClassType.objects.filter(is_active=True)
     serializer_class = AcV2ClassTypeSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2AdminOrReadOnly]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -3119,7 +3179,7 @@ class AcV2CycleViewSet(viewsets.ModelViewSet):
     """
     queryset = AcV2Cycle.objects.all()
     serializer_class = AcV2CycleSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2AdminOrReadOnly]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -3175,7 +3235,7 @@ class AcV2CqiTokenViewSet(viewsets.ModelViewSet):
                              be deleted via the API.
     """
     serializer_class = AcV2CqiTokenSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2AdminOrReadOnly]
 
     def get_queryset(self):
         user = self.request.user
@@ -3244,7 +3304,7 @@ class AcV2QpTypeViewSet(viewsets.ModelViewSet):
     """
     queryset = AcV2QpType.objects.filter(is_active=True)
     serializer_class = AcV2QpTypeSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2AdminOrReadOnly]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -3277,7 +3337,7 @@ class AcV2CourseOutcomeViewSet(viewsets.ModelViewSet):
     """
     queryset = AcV2CourseOutcome.objects.filter(is_active=True)
     serializer_class = AcV2CourseOutcomeSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2AdminOrReadOnly]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -3309,7 +3369,7 @@ class AcV2QpPatternViewSet(viewsets.ModelViewSet):
     """
     queryset = AcV2QpPattern.objects.filter(is_active=True)
     serializer_class = AcV2QpPatternSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2AdminOrReadOnly]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -3406,7 +3466,7 @@ class AcV2QpPatternViewSet(viewsets.ModelViewSet):
 class AcV2CourseViewSet(viewsets.ModelViewSet):
     queryset = AcV2Course.objects.all()
     serializer_class = AcV2CourseSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2AdminOrReadOnly]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -3419,7 +3479,7 @@ class AcV2CourseViewSet(viewsets.ModelViewSet):
 class AcV2SectionViewSet(viewsets.ModelViewSet):
     queryset = AcV2Section.objects.all()
     serializer_class = AcV2SectionSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2AdminOrReadOnly]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -3441,7 +3501,7 @@ class AcV2SectionViewSet(viewsets.ModelViewSet):
 class AcV2ExamAssignmentViewSet(viewsets.ModelViewSet):
     queryset = AcV2ExamAssignment.objects.all()
     serializer_class = AcV2ExamAssignmentSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2Admin]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -3579,7 +3639,7 @@ class AcV2ExamAssignmentViewSet(viewsets.ModelViewSet):
 class AcV2StudentMarkViewSet(viewsets.ModelViewSet):
     queryset = AcV2StudentMark.objects.all()
     serializer_class = AcV2StudentMarkSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2Admin]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -3663,7 +3723,7 @@ class AcV2StudentMarkViewSet(viewsets.ModelViewSet):
 class AcV2EditRequestViewSet(viewsets.ModelViewSet):
     queryset = AcV2EditRequest.objects.all()
     serializer_class = AcV2EditRequestSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2AdminForGenericWrites]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -4019,7 +4079,7 @@ class AcV2CqiEditRequestViewSet(viewsets.ModelViewSet):
     """ViewSet for CQI edit requests."""
     queryset = AcV2CqiEditRequest.objects.all()
     serializer_class = AcV2CqiEditRequestSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2AdminForGenericWrites]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -4332,7 +4392,7 @@ class AcV2CqiEditRequestViewSet(viewsets.ModelViewSet):
 class AcV2InternalMarkViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = AcV2InternalMark.objects.all()
     serializer_class = AcV2InternalMarkSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2Admin]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -4372,7 +4432,7 @@ class AcV2InternalMarkViewSet(viewsets.ReadOnlyModelViewSet):
 class AcV2UserPatternOverrideViewSet(viewsets.ModelViewSet):
     queryset = AcV2UserPatternOverride.objects.all()
     serializer_class = AcV2UserPatternOverrideSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAcV2AdminOrReadOnly]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -4404,6 +4464,9 @@ def course_internal_summary(request, course_id):
     Get internal mark summary for a course.
     Shows class type, exam assignments, CO coverage, weight matrix.
     """
+    err = _require_admin(request)
+    if err:
+        return err
     course = get_object_or_404(AcV2Course, id=course_id)
 
     # Get class type info
@@ -8906,7 +8969,9 @@ def faculty_course_coattainment(request, ta_id):
     from academics.models import TeachingAssignment
     from .models import AcV2CoAttainment
 
-    ta = get_object_or_404(TeachingAssignment, pk=ta_id)
+    ta = get_object_or_404(TeachingAssignment.objects.select_related('staff'), pk=ta_id)
+    if not _has_admin_bypass_access(request.user) and getattr(ta.staff, 'user_id', None) != request.user.id:
+        return Response({'detail': 'You do not teach this course.'}, status=status.HTTP_403_FORBIDDEN)
 
     if request.method == 'GET':
         record = AcV2CoAttainment.objects.filter(teaching_assignment=ta).first()

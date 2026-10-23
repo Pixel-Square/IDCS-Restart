@@ -29,7 +29,7 @@ class SharedSectionAssignmentSyncTests(TestCase):
         )
 
         # Semester
-        self.semester = Semester.objects.create(number=1)
+        self.semester, _ = Semester.objects.get_or_create(number=1)
 
         # Shared Section
         self.section = Section.objects.create(

@@ -6,6 +6,7 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from .permissions import IsCoeUser
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -116,7 +117,7 @@ def seat_positions_for_pattern(rows, cols, pattern):
 class SeatingArrangementExcelView(APIView):
     """Generate and download seating arrangement Excel workbook."""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsCoeUser]
 
     def post(self, request):
         """
@@ -562,7 +563,7 @@ class PublishHallPlanView(APIView):
     """
     Publish seating plan so students can view their allocated hall & seat number in their IDCS portal.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsCoeUser]
 
     def post(self, request):
         import datetime

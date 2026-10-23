@@ -4,7 +4,7 @@ from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated
 import openpyxl
 from openpyxl.drawing.image import Image as OpenpyxlImage
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -38,6 +38,15 @@ from academics.models import (
 )
 from accounts.models import User, Role
 from academics.services import authority_resolver
+from erp.upload_security import validate_upload
+from .permissions import (
+    CanReportIncident,
+    IsDisciplineAdmin,
+    IsDisciplineCommittee,
+    can_report_incident,
+    is_discipline_admin,
+    is_discipline_committee,
+)
 
 
 def is_user_approver_for_incident(user, log: DisciplineIncidentLog, target_role: str = None) -> bool:
@@ -175,6 +184,8 @@ class DisciplineApprovalFlowConfigView(APIView):
         })
 
     def post(self, request):
+        if not is_discipline_admin(request.user):
+            return Response({'error': 'Discipline administrator access is required.'}, status=status.HTTP_403_FORBIDDEN)
         roles = request.data.get('roles', [])
         if not isinstance(roles, list) or len(roles) == 0:
             return Response({'error': 'At least one approver role must be in the flow.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -199,8 +210,8 @@ class DisciplineCategoriesView(APIView):
     """
     def get_permissions(self):
         if self.request.method == 'GET':
-            return [AllowAny()]
-        return [IsAuthenticated()]
+            return [IsAuthenticated()]
+        return [IsDisciplineAdmin()]
 
     def get(self, request):
         qs = DisciplineCategory.objects.all()
@@ -227,7 +238,11 @@ class DisciplineCategoryDetailView(APIView):
     """
     GET, PUT, PATCH, DELETE /api/discipline/categories/<id>/
     """
-    permission_classes = (IsAuthenticated,)
+
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [IsAuthenticated()]
+        return [IsDisciplineAdmin()]
 
     def get_object(self, pk):
         try:
@@ -267,11 +282,15 @@ class DisciplineIncidentLogsView(APIView):
     """
     GET /api/discipline/logs/ - List real incident logs with filters.
     POST /api/discipline/logs/ - Record a new student discipline incident.
+
+    Committee members see every incident; other staff only see their own submissions.
     """
-    permission_classes = (AllowAny,)
+    permission_classes = (CanReportIncident,)
 
     def get(self, request):
         qs = DisciplineIncidentLog.objects.select_related('student', 'category', 'reported_by').prefetch_related('actions').all()
+        if not is_discipline_committee(request.user):
+            qs = qs.filter(reported_by=request.user)
 
         search = request.query_params.get('search', '').strip()
         if search:
@@ -353,21 +372,10 @@ class DisciplineIncidentLogsView(APIView):
     def post(self, request):
         data = request.data.copy()
 
-        # Set reporting user details
-        if request.user.is_authenticated:
-            data['reported_by'] = request.user.id
-            full_reporter_name = f"{request.user.first_name} {request.user.last_name}".strip()
-            data['reported_by_name'] = data.get('reported_by_name') or full_reporter_name or request.user.username
-        else:
-            staff_user_val = data.get('reported_by_username') or data.get('username')
-            if staff_user_val:
-                from django.contrib.auth import get_user_model
-                User = get_user_model()
-                matched_user = User.objects.filter(username=staff_user_val).first()
-                if matched_user:
-                    data['reported_by'] = matched_user.id
-                    full_name = f"{matched_user.first_name} {matched_user.last_name}".strip()
-                    data['reported_by_name'] = data.get('reported_by_name') or full_name or matched_user.username
+        # The reporter is always the authenticated caller, never a client-supplied username.
+        data['reported_by'] = request.user.id
+        full_reporter_name = f"{request.user.first_name} {request.user.last_name}".strip()
+        data['reported_by_name'] = full_reporter_name or request.user.username
 
         # Sanitize student ID if passed as 0, null, or string
         student_val = data.get('student')
@@ -412,7 +420,7 @@ class DisciplineIncidentLogsView(APIView):
 
         file_obj = request.FILES.get('incident_document') or request.FILES.get('attachment') or request.FILES.get('file')
         if file_obj:
-            data['incident_document'] = file_obj
+            data['incident_document'] = validate_upload(file_obj, field='incident_document')
 
         # Support base64 image data from camera snapshot or canvas capture
         raw_doc = data.get('incident_document')
@@ -425,9 +433,13 @@ class DisciplineIncidentLogsView(APIView):
                 if ext == 'jpeg':
                     ext = 'jpg'
                 file_name = f"incident_{timezone.now().strftime('%Y%m%d_%H%M%S')}.{ext}"
-                data['incident_document'] = ContentFile(base64.b64decode(imgstr), name=file_name)
+                snapshot = ContentFile(base64.b64decode(imgstr), name=file_name)
             except Exception:
-                pass
+                snapshot = None
+            if snapshot is None:
+                data.pop('incident_document', None)
+            else:
+                data['incident_document'] = validate_upload(snapshot, field='incident_document')
 
         cat_id = data.get('category')
         cat_ids = data.get('category_ids')
@@ -509,8 +521,19 @@ class DisciplineIncidentLogsView(APIView):
 class DisciplineIncidentLogDetailView(APIView):
     """
     GET, PUT, PATCH, DELETE /api/discipline/logs/<id>/
+
+    Read: committee, the reporter, the student concerned, or the current approver.
+    Edit: committee. Delete: discipline administrators.
     """
     permission_classes = (IsAuthenticated,)
+
+    @staticmethod
+    def _can_view(user, log):
+        if is_discipline_committee(user) or log.reported_by_id == user.id:
+            return True
+        if log.student_id and getattr(log.student, 'user_id', None) == user.id:
+            return True
+        return is_user_approver_for_incident(user, log)
 
     def get_object(self, pk):
         try:
@@ -520,12 +543,14 @@ class DisciplineIncidentLogDetailView(APIView):
 
     def get(self, request, pk):
         log = self.get_object(pk)
-        if not log:
+        if not log or not self._can_view(request.user, log):
             return Response({'error': 'Incident log not found'}, status=status.HTTP_404_NOT_FOUND)
         serializer = DisciplineIncidentLogSerializer(log)
         return Response(serializer.data)
 
     def put(self, request, pk):
+        if not is_discipline_committee(request.user):
+            return Response({'error': 'Discipline committee access is required.'}, status=status.HTTP_403_FORBIDDEN)
         log = self.get_object(pk)
         if not log:
             return Response({'error': 'Incident log not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -539,6 +564,8 @@ class DisciplineIncidentLogDetailView(APIView):
         return self.put(request, pk)
 
     def delete(self, request, pk):
+        if not is_discipline_admin(request.user):
+            return Response({'error': 'Discipline administrator access is required.'}, status=status.HTTP_403_FORBIDDEN)
         log = self.get_object(pk)
         if not log:
             return Response({'error': 'Incident log not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -740,21 +767,29 @@ class DisciplineStudentUploadReceiptView(APIView):
 
     def post(self, request, pk):
         try:
-            log = DisciplineIncidentLog.objects.get(pk=pk)
+            log = DisciplineIncidentLog.objects.select_related('student').get(pk=pk)
         except DisciplineIncidentLog.DoesNotExist:
+            return Response({'error': 'Incident log not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Only the student the incident belongs to (or an administrator) may upload.
+        owner_id = getattr(log.student, 'user_id', None) if log.student_id else None
+        if owner_id != request.user.id and not is_discipline_admin(request.user):
             return Response({'error': 'Incident log not found'}, status=status.HTTP_404_NOT_FOUND)
 
         file_obj = request.FILES.get('receipt_document')
         notes = request.data.get('receipt_notes', '')
 
         if file_obj:
+            validate_upload(file_obj, field='receipt_document')
             log.receipt_document = file_obj
-            log.receipt_document_url = f"/media/discipline/receipts/{file_obj.name}"
 
         log.receipt_notes = notes
         log.receipt_uploaded_at = timezone.now()
         log.status = 'RECEIPT_UPLOADED'
         log.save()
+        if file_obj:
+            log.receipt_document_url = log.receipt_document.url
+            log.save(update_fields=['receipt_document_url'])
 
         doc_url = log.receipt_document.url if log.receipt_document else log.receipt_document_url
 
@@ -801,7 +836,7 @@ class DisciplineStudentDirectoryView(APIView):
     GET /api/discipline/students/ - Stream and query real active students from DB with barcodes,
     avatars, batches, sections, and departments.
     """
-    permission_classes = (AllowAny,)
+    permission_classes = (CanReportIncident,)
 
     def get(self, request):
         qs = StudentProfile.objects.select_related(
@@ -896,7 +931,7 @@ class DisciplineStudentExportExcelWithBarcodesView(APIView):
     Generates an Excel spreadsheet containing rendered visual barcode images embedded directly in the Barcode column.
     Accepts student_ids (array) or filters in POST payload.
     """
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (IsDisciplineCommittee,)
 
     def post(self, request):
         student_ids = request.data.get('student_ids', [])
@@ -1079,7 +1114,7 @@ class DisciplineStudentExportBarcodeImagesZipView(APIView):
     File name of each image: <register_number>.png
     Image content: ONLY the barcode bars (no register number text below/around).
     """
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (IsDisciplineCommittee,)
 
     def post(self, request):
         import zipfile
@@ -1229,6 +1264,9 @@ class DisciplineStudentAuthoritiesView(APIView):
         reg_no = request.query_params.get('reg_no')
         user = request.user
         student = None
+        if reg_no and not can_report_incident(user):
+            # Students may only look up their own approval chain.
+            reg_no = None
         if reg_no:
             student = StudentProfile.objects.filter(
                 Q(reg_no__iexact=reg_no) | Q(user__username__iexact=reg_no)

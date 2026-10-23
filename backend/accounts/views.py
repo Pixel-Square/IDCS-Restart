@@ -1,11 +1,10 @@
-from rest_framework import generics, permissions, status
+from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from django.contrib.auth import get_user_model
 from .serializers import (
     UserSerializer,
-    RegisterSerializer,
     MeSerializer,
     IdentifierTokenObtainPairSerializer,
     NotificationTemplateSerializer,
@@ -47,11 +46,6 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = IdentifierTokenObtainPairSerializer
     throttle_classes = (ScopedRateThrottle,)
     throttle_scope = 'auth'
-
-
-class RegisterView(generics.CreateAPIView):
-    serializer_class = RegisterSerializer
-    permission_classes = (permissions.AllowAny,)
 
 
 class MeView(APIView):
@@ -183,6 +177,8 @@ class MobileOtpRequestView(APIView):
     # Bypass authentication completely to avoid 401 errors from expired tokens
     authentication_classes = []
     permission_classes = (permissions.AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'otp'
 
     def post(self, request):
         """Proxy OTP request to Node.js WhatsApp service."""
@@ -528,9 +524,14 @@ class ChangePasswordView(APIView):
         if current_password == new_password:
             return Response({'detail': 'New password must be different from current password.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Validate password strength (minimum 6 characters)
-        if len(new_password) < 6:
-            return Response({'detail': 'New password must be at least 6 characters long.'}, status=status.HTTP_400_BAD_REQUEST)
+        # Validate password complexity and strength
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        try:
+            validate_password(new_password, user=request.user)
+        except DjangoValidationError as e:
+            msg = e.messages[0] if getattr(e, 'messages', None) else 'Password does not meet complexity requirements.'
+            return Response({'detail': msg}, status=status.HTTP_400_BAD_REQUEST)
 
         # Set new password
         request.user.set_password(new_password)

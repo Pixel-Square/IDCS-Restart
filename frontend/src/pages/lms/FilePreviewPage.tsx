@@ -42,6 +42,35 @@ function escapeHtml(input: string): string {
     .replace(/'/g, '&#39;')
 }
 
+function sanitizeHtml(dirtyHtml: string): string {
+  if (!dirtyHtml) return ''
+  try {
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(dirtyHtml, 'text/html')
+
+    const dangerousTags = ['script', 'iframe', 'object', 'embed', 'form', 'link', 'style', 'base', 'meta']
+    dangerousTags.forEach((tag) => {
+      doc.querySelectorAll(tag).forEach((el) => el.remove())
+    })
+
+    const elements = doc.querySelectorAll('*')
+    elements.forEach((el) => {
+      for (let i = el.attributes.length - 1; i >= 0; i--) {
+        const attr = el.attributes[i]
+        const name = attr.name.toLowerCase()
+        const val = attr.value.trim().toLowerCase()
+        if (name.startsWith('on') || val.startsWith('javascript:') || val.startsWith('data:text/html')) {
+          el.removeAttribute(attr.name)
+        }
+      }
+    })
+
+    return doc.body.innerHTML
+  } catch {
+    return escapeHtml(dirtyHtml)
+  }
+}
+
 function worksheetToHtml(sheet: XLSX.WorkSheet | null): string {
   if (!sheet) return '<p>No worksheet found.</p>'
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as Array<Array<string | number | boolean | null>>
@@ -138,7 +167,7 @@ export default function FilePreviewPage() {
         if (ext === '.docx') {
           const result = await mammoth.convertToHtml({ arrayBuffer: await blob.arrayBuffer() })
           if (!active) return
-          setState({ mode: 'html', title: filename, contentType, htmlContent: result.value || '<p>No content</p>' })
+          setState({ mode: 'html', title: filename, contentType, htmlContent: sanitizeHtml(result.value || '<p>No content</p>') })
           return
         }
 
@@ -225,7 +254,7 @@ export default function FilePreviewPage() {
         ) : null}
 
         {state.mode === 'html' ? (
-          <div className="rounded-lg border border-slate-200 bg-white p-4 overflow-auto prose max-w-none" dangerouslySetInnerHTML={{ __html: state.htmlContent || '' }} />
+          <div className="rounded-lg border border-slate-200 bg-white p-4 overflow-auto prose max-w-none" dangerouslySetInnerHTML={{ __html: sanitizeHtml(state.htmlContent || '') }} />
         ) : null}
 
         {state.mode === 'pptx-text' ? (

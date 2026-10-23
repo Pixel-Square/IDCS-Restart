@@ -379,17 +379,26 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
     return segments;
   }
 
+  function escapeDiagramHtml(str: string): string {
+    return String(str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   function MermaidDiagram({ code }: { code: string }) {
     const [svg, setSvg] = useState('');
 
     useEffect(() => {
       let mounted = true;
       const id = `mermaid-${Math.random().toString(36).slice(2)}`;
-      mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
+      mermaid.initialize({ startOnLoad: false, securityLevel: 'strict' });
       mermaid.render(id, code).then((result: any) => {
         if (mounted) setSvg(result.svg || '');
       }).catch(() => {
-        if (mounted) setSvg(`<pre>${code}</pre>`);
+        if (mounted) setSvg(`<pre>${escapeDiagramHtml(code)}</pre>`);
       });
       return () => {
         mounted = false;

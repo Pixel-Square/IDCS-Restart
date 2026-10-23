@@ -6,6 +6,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import permissions
+from rest_framework.throttling import ScopedRateThrottle
 from django.contrib.auth import get_user_model
 from accounts.serializers_impersonation import (
     SuperuserImpersonationSerializer,
@@ -45,6 +46,8 @@ class SuperuserImpersonateView(APIView):
 
     authentication_classes = []  # Don't require authentication for login attempt
     permission_classes = [permissions.AllowAny]
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'auth'
 
     def post(self, request):
         serializer = SuperuserImpersonationSerializer(

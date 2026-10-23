@@ -1,143 +1,151 @@
 import React, { useEffect, useState } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useParams } from "react-router-dom";
 import { derivePrimaryRole, getMe } from "./services/auth";
 import { seedUCState } from "./utils/underConstruction";
 import Navbar from "./components/navigation/Navbar";
 import DashboardSidebar from './components/layout/DashboardSidebar';
 import { useSidebar } from './components/layout/SidebarContext';
-import TimetableEditor from './pages/advisor/TimetableEditor';
-import HodTimetableEditor from './pages/iqac/TimetableEditor';
-import TimetableAdminPage from './pages/timetable/admin/TimetableAdminPage';
-import ObeRequestsPage from './pages/iqac/ObeRequestsPage';
-import IQACEventApprovalPage from './pages/iqac/IQACEventApprovalPage';
-import AcademicControllerPage from './pages/iqac/AcademicControllerPage';
-import AcademicControllerCoursePage from './pages/iqac/AcademicControllerCoursePage';
-import AcademicControllerCourseMarksPage from './pages/iqac/AcademicControllerCourseMarksPage';
-import AcademicControllerCourseOBEPage from './pages/iqac/AcademicControllerCourseOBEPage';
-import IQACQuestionBankLogsPage from './pages/iqac/IQACQuestionBankLogsPage';
-import IQACQuestionBankPage from './pages/iqac/IQACQuestionBankPage';
-import InternalMarkPage from './pages/iqac/InternalMarkPage';
-import OBERequestsPage from './pages/obe/OBERequestsPage';
-import OBEDueDatesPage from './pages/obe/OBEDueDatesPage';
 import ProtectedRoute from './components/ProtectedRoute';
-import HomePage from "./components/containers/HomePage";
-import Login from './pages/auth/Login';
-import DashboardPage from "./pages/dashboard/Dashboard";
-import SystemTransitionsPage from './pages/dashboard/SystemTransitionsPage';
-import ProfilePage from "./pages/profile/Profile";
-import SettingsPage from './pages/settings/SettingsPage';
-import WhatsAppSenderPage from './pages/settings/WhatsAppSenderPage';
-import UnderConstructionManagerPage from './pages/settings/UnderConstructionManagerPage';
 import UCGate from './components/UCGate';
-import MasterList from './pages/curriculum/MasterList';
-import MasterEditor from './pages/curriculum/MasterEditor';
-import DeptList from './pages/curriculum/DeptList';
-import ElectiveImport from './pages/curriculum/ElectiveImport';
-import AcademicPage from './pages/AcademicPage';
-import QuestionImportPage from "./pages/tools/QuestionImportPage";
-import OBEPage from './pages/obe/OBEPage';
-import CourseOBEPage from './pages/CourseOBEPage';
-import COTargetPage from './pages/lca/COTargetPage';
-import { useParams } from 'react-router-dom';
-import OBERequestPage from './pages/obe/OBERequestPage';
-import AdvisorAssignments from './pages/hod/AdvisorAssignments';
-import TeachingAssignmentsPage from './pages/hod/TeachingAssignments';
-import ObeEditRequestsPage from './pages/hod/ObeEditRequestsPage';
-import StudentsPage from './pages/staff/Students';
-import StudentCompletionPage from './pages/iqac/StudentCompletionPage';
-import StudentHostelPage from './pages/hostel/StudentHostelPage';
-import HostelAdminPage from './pages/hostel/HostelAdminPage';
-import HostelModulesPage from './pages/hostel/HostelModulesPage';
-import StudentTimetable from './pages/student/TimetableView';
-import StaffTimetable from './pages/staff/TimetableView';
-import AssignedSubjectsPage from './pages/staff/AssignedSubjects';
-import PeriodAttendance from './pages/staff/PeriodAttendance';
-import AttendanceAnalytics from './pages/staff/AttendanceAnalytics';
-// SwapRequestsPage removed — swap requests handled via modal
-import StudentAttendancePage from './pages/student/Attendance';
-import StudentAcademics from './pages/student/Academics';
-import MentorAssign from './pages/advisor/MentorAssign';
-import NotificationsPage from './pages/Notifications';
-import AnnouncementsPage from './pages/announcements/AnnouncementsPage';
-import QueriesPage from './pages/queries/QueriesPage';
-import FeedbackPage from './pages/feedback/FeedbackPage';
-import StaffsPage from './pages/StaffsPage';
-import MasterTeachingAssignmentPage from './pages/iqac/MasterTeachingAssignmentPage';
-import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarRedirect';
-import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
-import { AcademicCalendarAdminPage } from './pages/academicCalendar/admin';
-import BrandingLayout from './pages/branding/BrandingLayout';
-import HodResultAnalysisPage from './pages/hod/HodResultAnalysisPage';
-import HodEventsListPage from './pages/hod/events/HodEventsListPage';
-import HodEventCreatePage from './pages/hod/events/HodEventCreatePage';
-import CanvaDesignEditorPage from './pages/hod/events/CanvaDesignEditorPage';
-import PosterMakerPage from './pages/events/PosterMakerPage';
-import PBASSubmissionPage from './pages/staff/PBASSubmissionPage';
-import PBASManagerPage from './pages/iqac/PBASManagerPage';
-import PBASAdminPage from './pages/pbas/admin/PBASAdminPage';
-import PBASApprovalsPage from './pages/pbas/approvals/PBASApprovalsPage';
-import { StaffAttendanceUpload } from './pages/PS';
-import { MyAttendance } from './pages/staff';
-import HODStaffAttendancePage from './pages/hod/StaffAttendance';
-import FacultyAttendancePage from './pages/faculty/Attendance';
-import PSStaffAttendanceViewPage from './pages/PS/StaffAttendanceView';
-import RequestTemplatesPage from './pages/hr/RequestTemplatesPage';
-import OrganizationStaffAttendanceAnalytics from './pages/hr/OrganizationStaffAttendanceAnalytics';
-import ManageGatePage from './pages/hr/ManageGatePage';
-import GatePassLogsPage from './pages/hr/GatePassLogsPage';
-import StaffValidationPage from './pages/hr/StaffValidationPage';
-import StaffSalaryPage from './pages/hr/StaffSalaryPage';
-import ExtStaffProfilesPage from './pages/EXTStaff/ExtStaffProfilesPage';
-import SalaryPage from './pages/staff/SalaryPage';
-import MyRequestsPage from './pages/staff-requests/MyRequestsPage';
-import PendingApprovalsPage from './pages/staff-requests/PendingApprovalsPage';
-import ApplicationsAdminPage from './pages/iqac/ApplicationsAdminPage';
-import ApplicationsInboxPage from './pages/applications/ApplicationsInboxPage';
-import ApplicationsPage from './pages/applications/ApplicationsPage';
-import ApplicationFormPage from './pages/applications/ApplicationFormPage';
-import ApplicationDetailPage from './pages/applications/ApplicationDetailPage';
-import CoePortalPage from './pages/COE/CoePortalPage';
-import StudentsList from './pages/COE/StudentsList';
-import CourseList from './pages/COE/CourseList';
-import ArrearList from './pages/COE/ArrearList';
-import BundleAllocation from './pages/COE/BundleAllocation';
-import BundleBarcodeView from './pages/COE/BundleBarcodeView';
-import OnePageReport from './pages/COE/OnePageReport';
-import IDCSScanTestPage from './pages/IDCSScan/TestPage';
-import BarScan from './pages/COE/BarScan';
-import BarScanMarkEntry from './pages/COE/BarScanMarkEntry';
-import IDCSScanGatepassPage from './pages/IDCSScan/GatepassPage';
-import FingerprintEnrollPage from './pages/IDCSScan/FingerprintEnrollPage';
-import BioSecureAdminPage from './pages/biosecure/admin/BioSecureAdminPage';
-import BioSecureAdminLogsPage from './pages/biosecure/admin/BioSecureAdminLogsPage';
-import BioSecureStudentLogsPage from './pages/biosecure/student/BioSecureStudentLogsPage';
-import StudentsBarCode from './pages/DisciplineComittie/admin/StudentsBarCode';
-import ConfigPage from './pages/DisciplineComittie/admin/ConfigPage';
-import LogsPage from './pages/DisciplineComittie/admin/LogsPage';
-import DCAdminPage from './pages/DisciplineComittie/admin/DCAdminPage';
-import StaffDisciplinePage from './pages/DisciplineComittie/staff/StaffDisciplinePage';
-import StudentDisciplinePage from './pages/DisciplineComittie/student/StudentDisciplinePage';
-import RFReaderAssignCardsPage from './pages/RFReader/AssignCardsPage';
-import RFReaderCreateGatePage from './pages/RFReader/CreateGatePage';
-import RFReaderTestStudentsPage from './pages/RFReader/TestStudentsPage';
-import RFReaderAddStudentsRFPage from './pages/RFReader/AddStudentsRFPage';
-import RFReaderGateScanPage from './pages/RFReader/GateScanPage';
-import RFReaderCardsDataPage from './pages/RFReader/CardsDataPage';
-import BulkEntryPage from './pages/RFReader/BulkEntryPage';
-import AttendanceAnalyticsRequestsPage from './pages/attendance/AttendanceAnalyticsRequestsPage';
-import RequestsPage from './pages/requests/RequestsPage';
-import ProfileImageUpdateRequestsPage from './pages/requests/ProfileImageUpdateRequestsPage';
-import MyProposalsPage from './pages/events/MyProposalsPage';
-import ProposalApprovalPage from './pages/events/ProposalApprovalPage';
-import CreditsPage from './pages/CreditsPage';
-import RetrivalPage from './pages/COE/RetrivalPage';
-import LmsPage from './pages/lms/LmsPage';
-import FilePreviewPage from './pages/lms/FilePreviewPage';
-import AuditManagementPage from './pages/audits/AuditManagementPage';
-import AuditEntryPage from './pages/audits/AuditEntryPage';
-import AuditATRPage from './pages/audits/AuditATRPage';
 import { LazyErrorBoundary } from './components/LazyErrorBoundary';
 import { safeLazy } from './utils/safeLazy';
+
+// Route-based lazy-loaded pages
+const TimetableEditor = safeLazy(() => import('./pages/advisor/TimetableEditor'), 'TimetableEditor');
+const HodTimetableEditor = safeLazy(() => import('./pages/iqac/TimetableEditor'), 'HodTimetableEditor');
+const TimetableAdminPage = safeLazy(() => import('./pages/timetable/admin/TimetableAdminPage'), 'TimetableAdminPage');
+const ObeRequestsPage = safeLazy(() => import('./pages/iqac/ObeRequestsPage'), 'ObeRequestsPage');
+const IQACEventApprovalPage = safeLazy(() => import('./pages/iqac/IQACEventApprovalPage'), 'IQACEventApprovalPage');
+const AcademicControllerPage = safeLazy(() => import('./pages/iqac/AcademicControllerPage'), 'AcademicControllerPage');
+const AcademicControllerCoursePage = safeLazy(() => import('./pages/iqac/AcademicControllerCoursePage'), 'AcademicControllerCoursePage');
+const AcademicControllerCourseMarksPage = safeLazy(() => import('./pages/iqac/AcademicControllerCourseMarksPage'), 'AcademicControllerCourseMarksPage');
+const AcademicControllerCourseOBEPage = safeLazy(() => import('./pages/iqac/AcademicControllerCourseOBEPage'), 'AcademicControllerCourseOBEPage');
+const IQACQuestionBankLogsPage = safeLazy(() => import('./pages/iqac/IQACQuestionBankLogsPage'), 'IQACQuestionBankLogsPage');
+const IQACQuestionBankPage = safeLazy(() => import('./pages/iqac/IQACQuestionBankPage'), 'IQACQuestionBankPage');
+const InternalMarkPage = safeLazy(() => import('./pages/iqac/InternalMarkPage'), 'InternalMarkPage');
+const OBERequestsPage = safeLazy(() => import('./pages/obe/OBERequestsPage'), 'OBERequestsPage');
+const OBEDueDatesPage = safeLazy(() => import('./pages/obe/OBEDueDatesPage'), 'OBEDueDatesPage');
+
+const HomePage = safeLazy(() => import('./components/containers/HomePage'), 'HomePage');
+const Login = safeLazy(() => import('./pages/auth/Login'), 'Login');
+const DashboardPage = safeLazy(() => import('./pages/dashboard/Dashboard'), 'DashboardPage');
+const SystemTransitionsPage = safeLazy(() => import('./pages/dashboard/SystemTransitionsPage'), 'SystemTransitionsPage');
+const ProfilePage = safeLazy(() => import('./pages/profile/Profile'), 'ProfilePage');
+const SettingsPage = safeLazy(() => import('./pages/settings/SettingsPage'), 'SettingsPage');
+const WhatsAppSenderPage = safeLazy(() => import('./pages/settings/WhatsAppSenderPage'), 'WhatsAppSenderPage');
+const UnderConstructionManagerPage = safeLazy(() => import('./pages/settings/UnderConstructionManagerPage'), 'UnderConstructionManagerPage');
+
+const MasterList = safeLazy(() => import('./pages/curriculum/MasterList'), 'MasterList');
+const MasterEditor = safeLazy(() => import('./pages/curriculum/MasterEditor'), 'MasterEditor');
+const DeptList = safeLazy(() => import('./pages/curriculum/DeptList'), 'DeptList');
+const ElectiveImport = safeLazy(() => import('./pages/curriculum/ElectiveImport'), 'ElectiveImport');
+const AcademicPage = safeLazy(() => import('./pages/AcademicPage'), 'AcademicPage');
+const QuestionImportPage = safeLazy(() => import('./pages/tools/QuestionImportPage'), 'QuestionImportPage');
+const OBEPage = safeLazy(() => import('./pages/obe/OBEPage'), 'OBEPage');
+const CourseOBEPage = safeLazy(() => import('./pages/CourseOBEPage'), 'CourseOBEPage');
+const COTargetPage = safeLazy(() => import('./pages/lca/COTargetPage'), 'COTargetPage');
+
+const OBERequestPage = safeLazy(() => import('./pages/obe/OBERequestPage'), 'OBERequestPage');
+const AdvisorAssignments = safeLazy(() => import('./pages/hod/AdvisorAssignments'), 'AdvisorAssignments');
+const TeachingAssignmentsPage = safeLazy(() => import('./pages/hod/TeachingAssignments'), 'TeachingAssignmentsPage');
+const ObeEditRequestsPage = safeLazy(() => import('./pages/hod/ObeEditRequestsPage'), 'ObeEditRequestsPage');
+const StudentsPage = safeLazy(() => import('./pages/staff/Students'), 'StudentsPage');
+const StudentCompletionPage = safeLazy(() => import('./pages/iqac/StudentCompletionPage'), 'StudentCompletionPage');
+const StudentHostelPage = safeLazy(() => import('./pages/hostel/StudentHostelPage'), 'StudentHostelPage');
+const HostelAdminPage = safeLazy(() => import('./pages/hostel/HostelAdminPage'), 'HostelAdminPage');
+const HostelModulesPage = safeLazy(() => import('./pages/hostel/HostelModulesPage'), 'HostelModulesPage');
+const StudentTimetable = safeLazy(() => import('./pages/student/TimetableView'), 'StudentTimetable');
+const StaffTimetable = safeLazy(() => import('./pages/staff/TimetableView'), 'StaffTimetable');
+const AssignedSubjectsPage = safeLazy(() => import('./pages/staff/AssignedSubjects'), 'AssignedSubjectsPage');
+const PeriodAttendance = safeLazy(() => import('./pages/staff/PeriodAttendance'), 'PeriodAttendance');
+const AttendanceAnalytics = safeLazy(() => import('./pages/staff/AttendanceAnalytics'), 'AttendanceAnalytics');
+
+const StudentAttendancePage = safeLazy(() => import('./pages/student/Attendance'), 'StudentAttendancePage');
+const StudentAcademics = safeLazy(() => import('./pages/student/Academics'), 'StudentAcademics');
+const MentorAssign = safeLazy(() => import('./pages/advisor/MentorAssign'), 'MentorAssign');
+const NotificationsPage = safeLazy(() => import('./pages/Notifications'), 'NotificationsPage');
+const AnnouncementsPage = safeLazy(() => import('./pages/announcements/AnnouncementsPage'), 'AnnouncementsPage');
+const QueriesPage = safeLazy(() => import('./pages/queries/QueriesPage'), 'QueriesPage');
+const FeedbackPage = safeLazy(() => import('./pages/feedback/FeedbackPage'), 'FeedbackPage');
+const StaffsPage = safeLazy(() => import('./pages/StaffsPage'), 'StaffsPage');
+const MasterTeachingAssignmentPage = safeLazy(() => import('./pages/iqac/MasterTeachingAssignmentPage'), 'MasterTeachingAssignmentPage');
+const AcademicCalendarRedirect = safeLazy(() => import('./pages/academicCalendar/AcademicCalendarRedirect'), 'AcademicCalendarRedirect');
+const AcademicCalendarPage = safeLazy(() => import('./pages/academicCalendar/AcademicCalendarPage'), 'AcademicCalendarPage');
+const AcademicCalendarAdminPage = safeLazy(() => import('./pages/academicCalendar/admin'), 'AcademicCalendarAdminPage');
+const BrandingLayout = safeLazy(() => import('./pages/branding/BrandingLayout'), 'BrandingLayout');
+
+const HodResultAnalysisPage = safeLazy(() => import('./pages/hod/HodResultAnalysisPage'), 'HodResultAnalysisPage');
+const HodEventsListPage = safeLazy(() => import('./pages/hod/events/HodEventsListPage'), 'HodEventsListPage');
+const HodEventCreatePage = safeLazy(() => import('./pages/hod/events/HodEventCreatePage'), 'HodEventCreatePage');
+const CanvaDesignEditorPage = safeLazy(() => import('./pages/hod/events/CanvaDesignEditorPage'), 'CanvaDesignEditorPage');
+const PosterMakerPage = safeLazy(() => import('./pages/events/PosterMakerPage'), 'PosterMakerPage');
+const PBASSubmissionPage = safeLazy(() => import('./pages/staff/PBASSubmissionPage'), 'PBASSubmissionPage');
+const PBASManagerPage = safeLazy(() => import('./pages/iqac/PBASManagerPage'), 'PBASManagerPage');
+const PBASAdminPage = safeLazy(() => import('./pages/pbas/admin/PBASAdminPage'), 'PBASAdminPage');
+const PBASApprovalsPage = safeLazy(() => import('./pages/pbas/approvals/PBASApprovalsPage'), 'PBASApprovalsPage');
+
+const StaffAttendanceUpload = safeLazy(() => import('./pages/PS'), 'StaffAttendanceUpload');
+const MyAttendance = safeLazy(() => import('./pages/staff'), 'MyAttendance');
+const HODStaffAttendancePage = safeLazy(() => import('./pages/hod/StaffAttendance'), 'HODStaffAttendancePage');
+const FacultyAttendancePage = safeLazy(() => import('./pages/faculty/Attendance'), 'FacultyAttendancePage');
+const PSStaffAttendanceViewPage = safeLazy(() => import('./pages/PS/StaffAttendanceView'), 'PSStaffAttendanceViewPage');
+const RequestTemplatesPage = safeLazy(() => import('./pages/hr/RequestTemplatesPage'), 'RequestTemplatesPage');
+const OrganizationStaffAttendanceAnalytics = safeLazy(() => import('./pages/hr/OrganizationStaffAttendanceAnalytics'), 'OrganizationStaffAttendanceAnalytics');
+const ManageGatePage = safeLazy(() => import('./pages/hr/ManageGatePage'), 'ManageGatePage');
+const GatePassLogsPage = safeLazy(() => import('./pages/hr/GatePassLogsPage'), 'GatePassLogsPage');
+const StaffValidationPage = safeLazy(() => import('./pages/hr/StaffValidationPage'), 'StaffValidationPage');
+const StaffSalaryPage = safeLazy(() => import('./pages/hr/StaffSalaryPage'), 'StaffSalaryPage');
+const ExtStaffProfilesPage = safeLazy(() => import('./pages/EXTStaff/ExtStaffProfilesPage'), 'ExtStaffProfilesPage');
+const SalaryPage = safeLazy(() => import('./pages/staff/SalaryPage'), 'SalaryPage');
+const MyRequestsPage = safeLazy(() => import('./pages/staff-requests/MyRequestsPage'), 'MyRequestsPage');
+const PendingApprovalsPage = safeLazy(() => import('./pages/staff-requests/PendingApprovalsPage'), 'PendingApprovalsPage');
+
+const ApplicationsAdminPage = safeLazy(() => import('./pages/iqac/ApplicationsAdminPage'), 'ApplicationsAdminPage');
+const ApplicationsInboxPage = safeLazy(() => import('./pages/applications/ApplicationsInboxPage'), 'ApplicationsInboxPage');
+const ApplicationsPage = safeLazy(() => import('./pages/applications/ApplicationsPage'), 'ApplicationsPage');
+const ApplicationFormPage = safeLazy(() => import('./pages/applications/ApplicationFormPage'), 'ApplicationFormPage');
+const ApplicationDetailPage = safeLazy(() => import('./pages/applications/ApplicationDetailPage'), 'ApplicationDetailPage');
+const CoePortalPage = safeLazy(() => import('./pages/COE/CoePortalPage'), 'CoePortalPage');
+const StudentsList = safeLazy(() => import('./pages/COE/StudentsList'), 'StudentsList');
+const CourseList = safeLazy(() => import('./pages/COE/CourseList'), 'CourseList');
+const ArrearList = safeLazy(() => import('./pages/COE/ArrearList'), 'ArrearList');
+const BundleAllocation = safeLazy(() => import('./pages/COE/BundleAllocation'), 'BundleAllocation');
+const BundleBarcodeView = safeLazy(() => import('./pages/COE/BundleBarcodeView'), 'BundleBarcodeView');
+const OnePageReport = safeLazy(() => import('./pages/COE/OnePageReport'), 'OnePageReport');
+const IDCSScanTestPage = safeLazy(() => import('./pages/IDCSScan/TestPage'), 'IDCSScanTestPage');
+const BarScan = safeLazy(() => import('./pages/COE/BarScan'), 'BarScan');
+const BarScanMarkEntry = safeLazy(() => import('./pages/COE/BarScanMarkEntry'), 'BarScanMarkEntry');
+const IDCSScanGatepassPage = safeLazy(() => import('./pages/IDCSScan/GatepassPage'), 'IDCSScanGatepassPage');
+const FingerprintEnrollPage = safeLazy(() => import('./pages/IDCSScan/FingerprintEnrollPage'), 'FingerprintEnrollPage');
+const BioSecureAdminPage = safeLazy(() => import('./pages/biosecure/admin/BioSecureAdminPage'), 'BioSecureAdminPage');
+const BioSecureAdminLogsPage = safeLazy(() => import('./pages/biosecure/admin/BioSecureAdminLogsPage'), 'BioSecureAdminLogsPage');
+const BioSecureStudentLogsPage = safeLazy(() => import('./pages/biosecure/student/BioSecureStudentLogsPage'), 'BioSecureStudentLogsPage');
+
+const StudentsBarCode = safeLazy(() => import('./pages/DisciplineComittie/admin/StudentsBarCode'), 'StudentsBarCode');
+const ConfigPage = safeLazy(() => import('./pages/DisciplineComittie/admin/ConfigPage'), 'ConfigPage');
+const LogsPage = safeLazy(() => import('./pages/DisciplineComittie/admin/LogsPage'), 'LogsPage');
+const DCAdminPage = safeLazy(() => import('./pages/DisciplineComittie/admin/DCAdminPage'), 'DCAdminPage');
+const StaffDisciplinePage = safeLazy(() => import('./pages/DisciplineComittie/staff/StaffDisciplinePage'), 'StaffDisciplinePage');
+const StudentDisciplinePage = safeLazy(() => import('./pages/DisciplineComittie/student/StudentDisciplinePage'), 'StudentDisciplinePage');
+const RFReaderAssignCardsPage = safeLazy(() => import('./pages/RFReader/AssignCardsPage'), 'RFReaderAssignCardsPage');
+const RFReaderCreateGatePage = safeLazy(() => import('./pages/RFReader/CreateGatePage'), 'RFReaderCreateGatePage');
+const RFReaderTestStudentsPage = safeLazy(() => import('./pages/RFReader/TestStudentsPage'), 'RFReaderTestStudentsPage');
+const RFReaderAddStudentsRFPage = safeLazy(() => import('./pages/RFReader/AddStudentsRFPage'), 'RFReaderAddStudentsRFPage');
+const RFReaderGateScanPage = safeLazy(() => import('./pages/RFReader/GateScanPage'), 'RFReaderGateScanPage');
+const RFReaderCardsDataPage = safeLazy(() => import('./pages/RFReader/CardsDataPage'), 'RFReaderCardsDataPage');
+const BulkEntryPage = safeLazy(() => import('./pages/RFReader/BulkEntryPage'), 'BulkEntryPage');
+const AttendanceAnalyticsRequestsPage = safeLazy(() => import('./pages/attendance/AttendanceAnalyticsRequestsPage'), 'AttendanceAnalyticsRequestsPage');
+const RequestsPage = safeLazy(() => import('./pages/requests/RequestsPage'), 'RequestsPage');
+const ProfileImageUpdateRequestsPage = safeLazy(() => import('./pages/requests/ProfileImageUpdateRequestsPage'), 'ProfileImageUpdateRequestsPage');
+const MyProposalsPage = safeLazy(() => import('./pages/events/MyProposalsPage'), 'MyProposalsPage');
+const ProposalApprovalPage = safeLazy(() => import('./pages/events/ProposalApprovalPage'), 'ProposalApprovalPage');
+const CreditsPage = safeLazy(() => import('./pages/CreditsPage'), 'CreditsPage');
+const RetrivalPage = safeLazy(() => import('./pages/COE/RetrivalPage'), 'RetrivalPage');
+const LmsPage = safeLazy(() => import('./pages/lms/LmsPage'), 'LmsPage');
+const FilePreviewPage = safeLazy(() => import('./pages/lms/FilePreviewPage'), 'FilePreviewPage');
+const AuditManagementPage = safeLazy(() => import('./pages/audits/AuditManagementPage'), 'AuditManagementPage');
+const AuditEntryPage = safeLazy(() => import('./pages/audits/AuditEntryPage'), 'AuditEntryPage');
+const AuditATRPage = safeLazy(() => import('./pages/audits/AuditATRPage'), 'AuditATRPage');
 
 // Academic 2.1 - Lazy load pages for code splitting
 const AcV2VersionManagementPage = safeLazy(() => import('./pages/Academic 2.1/admin/version/VersionManagementPage'), 'VersionManagementPage');
@@ -302,14 +310,18 @@ export default function App() {
   // ── Branding role: isolated layout, no Navbar / DashboardSidebar ────────
   if (user && isBrandingUser) {
     return (
-      <Routes>
-        <Route
-          path="/branding/*"
-          element={<ProtectedRoute user={user} requiredPermissions={["branding.access"]} element={<BrandingLayout user={user} />} />}
-        />
-        {/* Any other path → redirect into branding dashboard */}
-        <Route path="*" element={<Navigate to="/branding" replace />} />
-      </Routes>
+      <LazyErrorBoundary>
+        <React.Suspense fallback={<div className="flex justify-center items-center h-screen"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div></div>}>
+          <Routes>
+            <Route
+              path="/branding/*"
+              element={<ProtectedRoute user={user} requiredPermissions={["branding.access"]} element={<BrandingLayout user={user} />} />}
+            />
+            {/* Any other path → redirect into branding dashboard */}
+            <Route path="*" element={<Navigate to="/branding" replace />} />
+          </Routes>
+        </React.Suspense>
+      </LazyErrorBoundary>
     );
   }
   // ────────────────────────────────────────────────────────────────────────
@@ -329,7 +341,9 @@ export default function App() {
           >
             <UCGate user={user}>
             <div className="app-main-zoom">
-              <Routes>
+              <LazyErrorBoundary>
+                <React.Suspense fallback={<div className="flex justify-center items-center min-h-[50vh]"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div></div>}>
+                  <Routes>
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/login" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
@@ -1614,19 +1628,25 @@ export default function App() {
                 <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
                 {/* Prevent regular users from accessing Branding-only routes */}
                 <Route path="/branding/*" element={<Navigate to="/dashboard" replace />} />
-              </Routes>
+                  </Routes>
+                </React.Suspense>
+              </LazyErrorBoundary>
             </div>
             </UCGate>
           </main>
         </div>
       ) : (
         <div className="pt-16">
-          <Routes>
-            <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/credits" element={<CreditsPage />} />
-            <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
-          </Routes>
+          <LazyErrorBoundary>
+            <React.Suspense fallback={<div className="flex justify-center items-center min-h-[50vh]"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div></div>}>
+              <Routes>
+                <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
+                <Route path="/login" element={<Login />} />
+                <Route path="/credits" element={<CreditsPage />} />
+                <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
+              </Routes>
+            </React.Suspense>
+          </LazyErrorBoundary>
         </div>
 
       )}

@@ -11,6 +11,7 @@ from django.db.models import Avg, Sum, Min, Max, Count, Q
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
+from rest_framework.exceptions import APIException
 
 from academics.models import (
     Department, AcademicYear, Subject, StudentProfile, DailyAttendanceRecord,
@@ -34,7 +35,7 @@ class SubjectWiseAnalysisView(APIView):
     section-wise metrics, per-student rows and comparison charts.
     """
 
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         try:
@@ -52,9 +53,11 @@ class SubjectWiseAnalysisView(APIView):
                 request, auth_ctx, scope, dept_code, req_batch, req_sem,
                 req_sec, req_exam, faculty_pk, subject_code,
             )
+        except APIException:
+            raise
         except Exception as e:
             logger.exception("Error in SubjectWiseAnalysisView: %s", e)
-            return Response({"error": str(e)}, status=status.HTTP_200_OK)
+            return Response({"error": "Unable to load analytics. Please try again."}, status=status.HTTP_200_OK)
 
     def _analyze(self, request, auth_ctx, scope, dept_code, req_batch,
                  req_sem, req_sec, req_exam, faculty_pk, subject_code):
@@ -98,6 +101,9 @@ class SubjectWiseAnalysisView(APIView):
                 | Q(staff__department__code__iexact=dept_code)
                 | Q(staff__department__short_name__iexact=dept_code)
             )
+        elif not scope["is_college_wide"]:
+            # No department in scope: never fall through to the whole college.
+            ta_qs = ta_qs.filter(staff__user_id=getattr(request.user, "id", None))
         if req_batch:
             _ay_ids = list(AcademicYear.objects.filter(name__startswith=req_batch).values_list("id", flat=True))
             if not _ay_ids:
@@ -207,7 +213,7 @@ class SubjectWiseAnalysisView(APIView):
                     ta.staff.department_id,
                     ta.section.batch.course.department_id if ta.section_id else None,
                 }
-                if any(d and d in allowed_dept_ids for d in ta_dept_ids):
+                if any(d and str(d) in allowed_dept_ids for d in ta_dept_ids):
                     ok = True
                     break
             if not ok:

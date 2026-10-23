@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import CoeKeyValueStore
+from .permissions import IsCoeUser
 
 
 def _sanitize_nptel_ece_sem8_course_bundle_map(data):
@@ -61,6 +62,7 @@ class CoeKeyValueStoreView(APIView):
     POST { key, data }      → { saved: true }
     DELETE ?key=<store_name> → { deleted: true }
     """
+    permission_classes = [IsCoeUser]
 
     def get(self, request):
         key = (request.query_params.get('key') or '').strip()

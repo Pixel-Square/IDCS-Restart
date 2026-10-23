@@ -233,3 +233,67 @@ manual cross-role access testing using student, teacher, HOD, accounts and admin
 
 Payment/fee flows, result publication, attendance, hostel allocation, the Flutter client and
 the Electron gate app were not reviewed here.
+
+---
+
+## Step 10: Implementation of Security Patches (Phase 1 Fixes)
+
+Completed Phase 1 security remediation across backend and frontend components:
+
+1. **COE Endpoint BFLA Hardening:**
+   - Created `backend/COE/permissions.py` implementing `IsCoeUser` enforcing `superuser`, `coe@krct.ac.in`, `coe.portal.access` permission, or `COE` role.
+   - Patched `backend/COE/marks_views.py`: Enforced `IsCoeUser` on `CoeStudentMarksView` (GET, POST, DELETE) and `CoeStudentMarksBulkView`. Wrapped bulk mark writes in `transaction.atomic()`.
+   - Patched `backend/COE/views_save.py`: Enforced `IsCoeUser` on `CoeSaveExamDummies` and `CoeResetExamDummies`.
+   - Patched `backend/COE/assignments_views.py`: Enforced `IsAuthenticated` on GET and `IsCoeUser` on POST.
+   - Patched `backend/COE/kv_views.py`: Enforced `IsCoeUser` on `CoeKeyValueStoreView`.
+
+2. **Password Policy & Validation Enforcement:**
+   - Configured `AUTH_PASSWORD_VALIDATORS` in `backend/erp/settings.py` with standard similarity, length (min 8 chars), common password, and numeric validators.
+   - Patched `backend/accounts/views.py` (`ChangePasswordView`): Replaced weak `len(new_password) < 6` check with `django.contrib.auth.password_validation.validate_password(new_password, user=request.user)`.
+
+3. **Superuser Impersonation & Rate Limiting:**
+   - Configured `DEFAULT_THROTTLE_CLASSES` (`AnonRateThrottle`, `UserRateThrottle`) in `backend/erp/settings.py` with scopes for `anon` (120/min), `user` (1200/min), `auth` (10/min), and `student_import` (20/hour).
+   - Patched `backend/accounts/views_impersonate.py` (`SuperuserImpersonateView`): Applied `ScopedRateThrottle` with scope `'auth'` to rate limit impersonation login attempts and prevent credential brute force.
+
+4. **Student Profile IDOR Protection:**
+   - Patched `backend/academics/views.py` (`StudentProfileUpdateView`):
+     - Removed generic `'STAFF'` wildcard from `_check_allowed()`.
+     - Replaced non-existent `MentorMentee` with `StudentMentorMap`.
+     - Enforced fine-grained object-level authorization checking student self-access, HOD department alignment, active Section Advisor assignment (`SectionAdvisor`), and active Mentor assignment (`StudentMentorMap` / `mentor_id`).
+
+5. **Windows Test Runner Charmap Crash Fix:**
+   - Patched `backend/staff_requests/migrations/0011_load_default_templates.py`: Replaced unicode checkmarks (`✓`) with standard `[OK]` to eliminate `UnicodeEncodeError: 'charmap'` crashes on Windows CP1252 consoles.
+
+6. **Frontend Stored DOM XSS Hardening:**
+   - Patched `frontend/src/pages/QuestionBankPage.tsx`: Initialized Mermaid with `securityLevel: 'strict'` and HTML-escaped diagram definitions in `.catch()` fallback blocks.
+   - Patched `frontend/src/pages/lms/FilePreviewPage.tsx`: Added DOMParser-based `sanitizeHtml` to sanitize Word/Docx Mammoth HTML before setting state and rendering into `dangerouslySetInnerHTML`.
+
+---
+
+## Step 11: Automated Functional & Regression Testing of Fixes
+
+Conducted comprehensive automated test execution to verify Phase 1 security fixes and assert zero regressions:
+
+1. **Dedicated Phase 1 Security Regression Suite (`backend/accounts/tests_security_phase1.py`):**
+   - `test_coe_permission_blocks_unauthorized_users`: **PASSED** (anonymous, student, and generic staff blocked; COE user and superuser authorized).
+   - `test_student_profile_update_view_blocks_unauthorized_staff`: **PASSED** (generic staff forbidden with 403 on GET/PATCH).
+   - `test_student_profile_update_view_allows_self_access`: **PASSED** (student accessing own profile succeeds with 200 OK).
+   - `test_student_profile_update_view_allows_assigned_advisor`: **PASSED** (active SectionAdvisor accessing their section student succeeds with 200 OK).
+   - `test_change_password_enforces_complexity_and_length`: **PASSED** (short, numeric, and identical passwords rejected with 400 Bad Request; valid strong passwords succeed with 200 OK).
+   - *Result: 5/5 passed (100% pass rate).*
+
+2. **Core App Regression Test Suites:**
+   - `academics.tests_batch_setup`: **6/6 PASSED** (`OK`).
+   - `academics.tests_sync_assignments`: **1/1 PASSED** (`OK`).
+   - `academics.tests.test_gender_inference`: **6/6 PASSED** (`OK`).
+   - `pbas.tests`: **4/4 PASSED** (`OK`).
+   - `backend/manage.py check`: **0 errors**.
+
+3. **Frontend Build & Static Type Check:**
+   - `npx tsc --noEmit`: **0 errors**.
+   - `npm run build`: **0 errors**, production bundle generated in 1m 3s with output synced to `build/`.
+
+4. **Environment Stability Verification:**
+   - Windows CP1252 charmap encoding crash eradicated across test runner and migrations.
+
+

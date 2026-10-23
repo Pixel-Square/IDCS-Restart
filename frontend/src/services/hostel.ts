@@ -653,6 +653,14 @@ export const getAllocations = (params: Record<string, unknown> = {}) =>
   req<Paged<Allocation> | Allocation[]>(`/allocations/${qs(params)}`);
 export const createAllocation = (payload: Record<string, unknown>) =>
   req<Allocation>('/allocations/', json(payload));
+export const autoAllocate = (payload: Record<string, unknown>) =>
+  req<{
+    requested: number;
+    allocated: number;
+    skipped: number;
+    allocations: Array<{ student: number; reg_no: string; name: string; allocation: Allocation }>;
+    errors: Array<{ student?: number; reg_no?: string; reason: string }>;
+  }>('/allocations/auto/', json(payload));
 export const transferAllocation = (id: number, payload: Record<string, unknown>) =>
   req<Allocation>(`/allocations/${id}/transfer/`, json(payload));
 export const vacateAllocation = (id: number, payload: Record<string, unknown> = {}) =>

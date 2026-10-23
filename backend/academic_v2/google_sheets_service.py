@@ -1617,6 +1617,22 @@ def create_google_spreadsheet(
     }
 
 
+_WEBHOOK_TOKEN_SALT = 'academic_v2.google_sheets.webhook'
+
+
+def webhook_token_for_section(section_id) -> str:
+    """Per-section secret the generated Apps Script sends with every webhook push."""
+    from django.utils.crypto import salted_hmac
+    return salted_hmac(_WEBHOOK_TOKEN_SALT, str(section_id).strip(), algorithm='sha256').hexdigest()
+
+
+def verify_webhook_token(section_id, token) -> bool:
+    from django.utils.crypto import constant_time_compare
+    if not token:
+        return False
+    return constant_time_compare(str(token), webhook_token_for_section(section_id))
+
+
 def _build_apps_script_source(
     *,
     backend_url: str,
@@ -1640,6 +1656,7 @@ def _build_apps_script_source(
 
 var BACKEND_URL = "{backend_url}";
 var SECTION_ID = "{section_id}";
+var WEBHOOK_TOKEN = "{webhook_token_for_section(section_id)}";
 var EXAM_CONFIGS = {configs_json};
 
 // ---------- Triggers ----------
@@ -1727,6 +1744,7 @@ function pushExamData(cfg) {{
 
   var payload = {{
     sectionId: SECTION_ID,
+    token: WEBHOOK_TOKEN,
     examAssignmentId: cfg.examId,
     sheetTab: tabName,
     rows: rows

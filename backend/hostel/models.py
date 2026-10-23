@@ -1197,6 +1197,23 @@ class MessMenu(TimeStampedModel):
         (MEAL_DINNER, 'Dinner'),
     )
 
+    DAY_MONDAY = 'MONDAY'
+    DAY_TUESDAY = 'TUESDAY'
+    DAY_WEDNESDAY = 'WEDNESDAY'
+    DAY_THURSDAY = 'THURSDAY'
+    DAY_FRIDAY = 'FRIDAY'
+    DAY_SATURDAY = 'SATURDAY'
+    DAY_SUNDAY = 'SUNDAY'
+    DAY_CHOICES = (
+        (DAY_MONDAY, 'Monday'),
+        (DAY_TUESDAY, 'Tuesday'),
+        (DAY_WEDNESDAY, 'Wednesday'),
+        (DAY_THURSDAY, 'Thursday'),
+        (DAY_FRIDAY, 'Friday'),
+        (DAY_SATURDAY, 'Saturday'),
+        (DAY_SUNDAY, 'Sunday'),
+    )
+
     building = models.ForeignKey(
         Building,
         on_delete=models.CASCADE,
@@ -1206,7 +1223,10 @@ class MessMenu(TimeStampedModel):
     )
     date = models.DateField(default=timezone.localdate, db_index=True)
     meal_type = models.CharField(max_length=16, choices=MEAL_CHOICES)
-    items = models.TextField(help_text='Menu items, one per line or comma separated.')
+    day_of_week = models.CharField(max_length=10, choices=DAY_CHOICES, blank=True, default='', db_index=True)
+    effective_date = models.DateField(null=True, blank=True, db_index=True)
+    menu_items = models.JSONField(default=list, blank=True, help_text='Structured menu item list.')
+    items = models.TextField(blank=True, default='', help_text='Menu items, one per line or comma separated.')
     is_published = models.BooleanField(default=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -1272,6 +1292,17 @@ class MessPreference(TimeStampedModel):
 
 
 class MessFeedback(TimeStampedModel):
+    CATEGORY_QUALITY = 'QUALITY'
+    CATEGORY_HYGIENE = 'HYGIENE'
+    CATEGORY_QUANTITY = 'QUANTITY'
+    CATEGORY_OTHER = 'OTHER'
+    CATEGORY_CHOICES = (
+        (CATEGORY_QUALITY, 'Quality'),
+        (CATEGORY_HYGIENE, 'Hygiene'),
+        (CATEGORY_QUANTITY, 'Quantity'),
+        (CATEGORY_OTHER, 'Other'),
+    )
+
     student = models.ForeignKey(
         'academics.StudentProfile',
         on_delete=models.CASCADE,
@@ -1279,6 +1310,7 @@ class MessFeedback(TimeStampedModel):
     )
     date = models.DateField(default=timezone.localdate)
     meal_type = models.CharField(max_length=16, choices=MessMenu.MEAL_CHOICES)
+    category = models.CharField(max_length=16, choices=CATEGORY_CHOICES, default=CATEGORY_QUALITY, db_index=True)
     rating = models.PositiveSmallIntegerField(help_text='1 (poor) to 5 (excellent)')
     comments = models.TextField(blank=True, default='')
 
@@ -1344,6 +1376,41 @@ class MessRequest(TimeStampedModel):
         return f'{self.student.reg_no}: {self.request_type} ({self.status})'
 
 
+class MealBooking(TimeStampedModel):
+    MEAL_BREAKFAST = 'BREAKFAST'
+    MEAL_LUNCH = 'LUNCH'
+    MEAL_SNACKS = 'SNACKS'
+    MEAL_DINNER = 'DINNER'
+    MEAL_TYPE_CHOICES = (
+        (MEAL_BREAKFAST, 'Breakfast'),
+        (MEAL_LUNCH, 'Lunch'),
+        (MEAL_SNACKS, 'Snacks'),
+        (MEAL_DINNER, 'Dinner'),
+    )
+
+    student = models.ForeignKey(
+        'academics.StudentProfile',
+        on_delete=models.CASCADE,
+        related_name='hostel_meal_bookings',
+    )
+    date = models.DateField(default=timezone.localdate, db_index=True)
+    meal_type = models.CharField(max_length=16, choices=MEAL_TYPE_CHOICES, db_index=True)
+    is_opted_in = models.BooleanField(default=True, db_index=True)
+    remarks = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        db_table = 'hostel_meal_booking'
+        ordering = ('-date', 'meal_type')
+        verbose_name = 'Meal Booking'
+        verbose_name_plural = 'Meal Bookings'
+        constraints = [
+            models.UniqueConstraint(fields=('student', 'date', 'meal_type'), name='uniq_meal_booking_per_student_meal'),
+        ]
+
+    def __str__(self):
+        return f'{self.student.reg_no} {self.date} {self.meal_type}'
+
+
 # ---------------------------------------------------------------------------
 # Visitors, leave and movement
 # ---------------------------------------------------------------------------
@@ -1365,7 +1432,7 @@ class Visitor(TimeStampedModel):
         related_name='hostel_visitors',
     )
     visitor_name = models.CharField(max_length=150)
-    contact_number = models.CharField(max_length=32, blank=True, default='')
+    phone_number = models.CharField(max_length=32, blank=True, default='')
     id_proof_type = models.CharField(max_length=64, blank=True, default='')
     id_proof_number = models.CharField(max_length=64, blank=True, default='')
     purpose = models.CharField(max_length=255, blank=True, default='')
@@ -1381,7 +1448,22 @@ class Visitor(TimeStampedModel):
         blank=True,
         related_name='hostel_visitors_approved',
     )
+    logged_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='hostel_visitors_logged',
+    )
     remarks = models.TextField(blank=True, default='')
+
+    @property
+    def contact_number(self):
+        return self.phone_number
+
+    @contact_number.setter
+    def contact_number(self, value):
+        self.phone_number = value
 
     class Meta:
         db_table = 'hostel_visitor'
@@ -1491,6 +1573,157 @@ class LateEntry(TimeStampedModel):
         return f'{self.student.reg_no} {self.date}'
 
 
+class GatePass(TimeStampedModel):
+    PASS_LOCAL_OUTING = 'LOCAL_OUTING'
+    PASS_HOME_LEAVE = 'HOME_LEAVE'
+    PASS_EMERGENCY = 'EMERGENCY'
+    PASS_NIGHT_OUT = 'NIGHT_OUT'
+    PASS_TYPE_CHOICES = (
+        (PASS_LOCAL_OUTING, 'Local Outing'),
+        (PASS_HOME_LEAVE, 'Home Leave'),
+        (PASS_EMERGENCY, 'Emergency'),
+        (PASS_NIGHT_OUT, 'Night Out'),
+    )
+
+    STATUS_PENDING = 'PENDING'
+    STATUS_APPROVED = 'APPROVED'
+    STATUS_REJECTED = 'REJECTED'
+    STATUS_COMPLETED = 'COMPLETED'
+    STATUS_CANCELLED = 'CANCELLED'
+    STATUS_EXPIRED = 'EXPIRED'
+    STATUS_CHOICES = (
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_APPROVED, 'Approved'),
+        (STATUS_REJECTED, 'Rejected'),
+        (STATUS_COMPLETED, 'Completed'),
+        (STATUS_CANCELLED, 'Cancelled'),
+        (STATUS_EXPIRED, 'Expired'),
+    )
+
+    student = models.ForeignKey(
+        'academics.StudentProfile',
+        on_delete=models.CASCADE,
+        related_name='hostel_gate_passes',
+    )
+    pass_type = models.CharField(
+        max_length=20,
+        choices=PASS_TYPE_CHOICES,
+        default=PASS_LOCAL_OUTING,
+        db_index=True,
+    )
+    from_date = models.DateField(default=timezone.localdate)
+    expected_out_time = models.DateTimeField()
+    to_date = models.DateField(default=timezone.localdate)
+    expected_in_time = models.DateTimeField()
+    reason = models.TextField()
+    destination = models.CharField(max_length=255, blank=True, default='')
+    guardian_contact = models.CharField(max_length=32, blank=True, default='')
+    status = models.CharField(
+        max_length=16,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+        db_index=True,
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='hostel_gate_passes_approved',
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    warden_remarks = models.TextField(blank=True, default='')
+    actual_out_time = models.DateTimeField(null=True, blank=True)
+    actual_in_time = models.DateTimeField(null=True, blank=True)
+    security_guard_out = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='hostel_gate_passes_gate_out',
+    )
+    security_guard_in = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='hostel_gate_passes_gate_in',
+    )
+    is_late_entry = models.BooleanField(default=False, db_index=True)
+    qr_token = models.CharField(max_length=48, unique=True, db_index=True)
+    application = models.OneToOneField(
+        'applications.Application',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='hostel_gate_pass',
+        help_text='Optional link to the legacy applications gate pass.',
+    )
+    leave_request = models.OneToOneField(
+        StudentLeaveRequest,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='gate_pass',
+        help_text='Optional link to a multi-day leave request.',
+    )
+
+    class Meta:
+        db_table = 'hostel_gate_pass'
+        ordering = ('-from_date', '-id')
+        verbose_name = 'Gate Pass'
+        verbose_name_plural = 'Gate Passes'
+        indexes = [
+            models.Index(fields=['student', 'status'], name='hostel_gatepass_student_status'),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.qr_token:
+            import uuid
+            self.qr_token = f"GP-{uuid.uuid4().hex[:12].upper()}"
+        super().save(*args, **kwargs)
+
+    @property
+    def is_expired(self) -> bool:
+        if self.status in (self.STATUS_COMPLETED, self.STATUS_CANCELLED, self.STATUS_REJECTED):
+            return False
+        if self.expected_in_time and timezone.now() > self.expected_in_time and not self.actual_out_time:
+            return True
+        return False
+
+    @property
+    def is_valid_at_gate(self) -> bool:
+        if self.status != self.STATUS_APPROVED:
+            return False
+        if self.actual_in_time:
+            return False
+        if not self.actual_out_time:
+            return not self.is_expired
+        return True
+
+    @property
+    def qr_payload(self) -> str:
+        return self.qr_token
+
+    def qr_image_data_uri(self) -> str:
+        try:
+            import io
+            import base64
+            import qrcode
+            qr = qrcode.QRCode(box_size=4, border=1)
+            qr.add_data(self.qr_token)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
+        except Exception:
+            return ""
+
+    def __str__(self):
+        return f"{self.student.reg_no} [{self.pass_type}] ({self.status})"
+
+
 # ---------------------------------------------------------------------------
 # Inventory & assets
 # ---------------------------------------------------------------------------
@@ -1508,13 +1741,38 @@ class Asset(TimeStampedModel):
         (CONDITION_REPAIR, 'Under Repair'),
     )
 
+    CATEGORY_FURNITURE = 'FURNITURE'
+    CATEGORY_ELECTRICAL = 'ELECTRICAL'
+    CATEGORY_COMMON_FACILITY = 'COMMON_FACILITY'
+    CATEGORY_OTHER = 'OTHER'
+    CATEGORY_CHOICES = (
+        (CATEGORY_FURNITURE, 'Furniture'),
+        (CATEGORY_ELECTRICAL, 'Electrical'),
+        (CATEGORY_COMMON_FACILITY, 'Common Facility'),
+        (CATEGORY_OTHER, 'Other'),
+    )
+
+    STATUS_GOOD = 'GOOD'
+    STATUS_NEEDS_REPAIR = 'NEEDS_REPAIR'
+    STATUS_DAMAGED = 'DAMAGED'
+    STATUS_DISPOSED = 'DISPOSED'
+    STATUS_CHOICES = (
+        (STATUS_GOOD, 'Good'),
+        (STATUS_NEEDS_REPAIR, 'Needs Repair'),
+        (STATUS_DAMAGED, 'Damaged'),
+        (STATUS_DISPOSED, 'Disposed'),
+    )
+
     asset_code = models.CharField(max_length=64, unique=True)
     name = models.CharField(max_length=150)
+    category = models.CharField(max_length=24, choices=CATEGORY_CHOICES, default=CATEGORY_FURNITURE, db_index=True)
+    cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     building = models.ForeignKey(Building, on_delete=models.SET_NULL, null=True, blank=True, related_name='assets')
     floor = models.ForeignKey(Floor, on_delete=models.SET_NULL, null=True, blank=True, related_name='assets')
     room = models.ForeignKey(Room, on_delete=models.SET_NULL, null=True, blank=True, related_name='assets')
     quantity = models.PositiveIntegerField(default=1)
     condition = models.CharField(max_length=16, choices=CONDITION_CHOICES, default=CONDITION_GOOD, db_index=True)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_GOOD, db_index=True)
     custodian = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -1605,18 +1863,31 @@ class HostelNotice(TimeStampedModel):
     AUDIENCE_DAY_SCHOLARS = 'DAY_SCHOLARS'
     AUDIENCE_BUS_USERS = 'BUS_USERS'
     AUDIENCE_BUILDING = 'BUILDING'
+    AUDIENCE_YEAR = 'YEAR'
     AUDIENCE_CHOICES = (
         (AUDIENCE_ALL, 'All Students'),
         (AUDIENCE_HOSTELLERS, 'Hostellers'),
         (AUDIENCE_DAY_SCHOLARS, 'Day Scholars'),
         (AUDIENCE_BUS_USERS, 'College Bus Users'),
         (AUDIENCE_BUILDING, 'Specific Building'),
+        (AUDIENCE_YEAR, 'Specific Year'),
+    )
+
+    PRIORITY_NORMAL = 'NORMAL'
+    PRIORITY_URGENT = 'URGENT'
+    PRIORITY_EMERGENCY = 'EMERGENCY'
+    PRIORITY_CHOICES = (
+        (PRIORITY_NORMAL, 'Normal'),
+        (PRIORITY_URGENT, 'Urgent'),
+        (PRIORITY_EMERGENCY, 'Emergency'),
     )
 
     title = models.CharField(max_length=200)
     body = models.TextField()
     notice_type = models.CharField(max_length=16, choices=TYPE_CHOICES, default=TYPE_GENERAL, db_index=True)
     audience = models.CharField(max_length=16, choices=AUDIENCE_CHOICES, default=AUDIENCE_ALL, db_index=True)
+    priority = models.CharField(max_length=16, choices=PRIORITY_CHOICES, default=PRIORITY_NORMAL, db_index=True)
+    target_year = models.PositiveSmallIntegerField(blank=True, null=True)
     building = models.ForeignKey(
         Building,
         on_delete=models.SET_NULL,

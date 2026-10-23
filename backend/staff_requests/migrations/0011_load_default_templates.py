@@ -21,7 +21,7 @@ def load_default_templates(apps, schema_editor):
     # Delete old templates and recreate with fresh 10
     print('Clearing old templates...')
     RequestTemplate.objects.all().delete()
-    print('✓ Cleared old templates')
+    print('[OK] Cleared old templates')
 
     # Common form schemas
     # Insert `others_category` before `reason` so fresh installs include the dropdown
@@ -275,9 +275,9 @@ def load_default_templates(apps, schema_editor):
         )
 
         if created:
-            print(f'  ✓ Created: {template.name}')
+            print(f'  [OK] Created: {template.name}')
         else:
-            print(f'  ✓ Updated: {template.name}')
+            print(f'  [OK] Updated: {template.name}')
 
         # Delete existing approval steps and create new ones
         ApprovalStep.objects.filter(template=template).delete()
@@ -290,7 +290,7 @@ def load_default_templates(apps, schema_editor):
                 approver_role=approver_role
             )
 
-    print('✓ Successfully created/updated 10 default templates (5 normal + 5 SPL)')
+    print('[OK] Successfully created/updated 10 default templates (5 normal + 5 SPL)')
 
 
 class Migration(migrations.Migration):

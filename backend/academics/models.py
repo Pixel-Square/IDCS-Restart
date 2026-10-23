@@ -784,7 +784,7 @@ class StudentSectionAssignment(models.Model):
         (SECTION_TYPE_SECONDARY, 'Secondary (Dept-Core)'),
     ]
 
-    student = models.ForeignKey(StudentProfile, on_delete=models.CASCADE, related_name='section_assignments')
+    student = models.ForeignKey(StudentProfile, on_delete=models.PROTECT, related_name='section_assignments')
     section = models.ForeignKey(Section, on_delete=models.PROTECT, related_name='student_assignments')
     section_type = models.CharField(
         max_length=16,
@@ -903,7 +903,7 @@ class StudentCourseEnrollment(models.Model):
     Records which students are enrolled in which courses for academic records
     and announcement targeting purposes.
     """
-    student = models.ForeignKey('StudentProfile', on_delete=models.CASCADE, related_name='course_enrollments')
+    student = models.ForeignKey('StudentProfile', on_delete=models.PROTECT, related_name='course_enrollments')
     course = models.ForeignKey('Course', on_delete=models.CASCADE, related_name='student_enrollments')
     enrolled_at = models.DateTimeField(auto_now_add=True)
 
@@ -1576,7 +1576,7 @@ class PeriodAttendanceSwapRecord(models.Model):
 
 class PeriodAttendanceRecord(models.Model):
     session = models.ForeignKey(PeriodAttendanceSession, on_delete=models.CASCADE, related_name='records')
-    student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='period_attendance_records')
+    student = models.ForeignKey('academics.StudentProfile', on_delete=models.PROTECT, related_name='period_attendance_records')
     status = models.CharField(max_length=8, choices=PERIOD_ATTENDANCE_STATUS_CHOICES)
     marked_at = models.DateTimeField(auto_now=True)
     marked_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
@@ -1694,7 +1694,7 @@ class DailyAttendanceRecord(models.Model):
     )
 
     session = models.ForeignKey(DailyAttendanceSession, on_delete=models.CASCADE, related_name='records')
-    student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='daily_attendance_records')
+    student = models.ForeignKey('academics.StudentProfile', on_delete=models.PROTECT, related_name='daily_attendance_records')
     status = models.CharField(max_length=8, choices=DAILY_ATTENDANCE_STATUS_CHOICES, default='A')
     marked_at = models.DateTimeField(auto_now=True)
     marked_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='marked_daily_attendance')

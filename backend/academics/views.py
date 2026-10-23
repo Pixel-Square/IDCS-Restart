@@ -41,6 +41,7 @@ from .models import (
     SpecialCourseAssessmentEditRequest,
     Semester,
     MixedSection,
+    StudentMentorMap,
 )
 from OBE.models import (
     Cia1Mark,
@@ -9590,34 +9591,62 @@ class StudentProfileUpdateView(APIView):
     """Retrieve and update editable student details (username/email/status/section/address/parent contacts/transport)."""
     permission_classes = (IsAuthenticated,)
 
-    def _check_allowed(self, user) -> bool:
+    def _check_allowed(self, user, student=None) -> bool:
         if not user or not user.is_authenticated:
             return False
         if getattr(user, 'is_superuser', False):
             return True
         perms = set(get_user_permissions(user) or [])
-        if perms.intersection({
-            'students.view_all_students',
-            'students.view_department_students',
-            'academics.view_my_students',
-            'academics.view_mentees',
-            'students.edit',
-            'students.view',
-        }):
+        if perms.intersection({'students.view_all_students', 'students.edit'}):
             return True
-        if hasattr(user, 'roles') and user.roles.filter(name__in=['ADVISOR', 'MENTOR', 'HOD', 'PRINCIPAL', 'IQAC', 'STAFF']).exists():
+        user_roles = set(user.roles.values_list('name', flat=True)) if hasattr(user, 'roles') else set()
+        if user_roles.intersection({'PRINCIPAL', 'IQAC'}):
             return True
-        if SectionAdvisor.objects.filter(advisor__user=user, is_active=True).exists():
-            return True
-        if MentorMentee.objects.filter(mentor__user=user, is_active=True).exists():
-            return True
-        return False
+
+        # If specific student is provided, enforce fine-grained object-level scope
+        if student:
+            # Self-access (student accessing own profile)
+            if getattr(student, 'user_id', None) == user.id:
+                return True
+
+            # HOD verification (same department as student)
+            if 'HOD' in user_roles or 'students.view_department_students' in perms:
+                staff_dept = getattr(getattr(user, 'staff_profile', None), 'department', None)
+                section_obj = getattr(student, 'section', None)
+                batch = getattr(section_obj, 'batch', None) if section_obj else None
+                course = getattr(batch, 'course', None) if batch else None
+                student_dept = (
+                    (getattr(course, 'department', None) if course else None)
+                    or (getattr(batch, 'department', None) if batch else None)
+                    or getattr(student, 'home_department', None)
+                )
+                if staff_dept and student_dept and staff_dept.id == student_dept.id:
+                    return True
+
+            # Section Advisor verification (assigned to student's section)
+            if getattr(student, 'section_id', None):
+                if SectionAdvisor.objects.filter(section_id=student.section_id, advisor__user=user, is_active=True).exists():
+                    return True
+
+            # Mentor verification (assigned mentor)
+            user_staff_id = getattr(getattr(user, 'staff_profile', None), 'id', None)
+            if getattr(student, 'mentor_id', None) and user_staff_id and student.mentor_id == user_staff_id:
+                return True
+            if StudentMentorMap.objects.filter(student=student, mentor__user=user, is_active=True).exists():
+                return True
+
+            return False
+
+        # Fallback broad check if student record not yet loaded
+        return bool(
+            user_roles.intersection({'HOD', 'ADVISOR', 'MENTOR'})
+            or perms.intersection({'students.view_department_students', 'academics.view_my_students', 'academics.view_mentees'})
+            or SectionAdvisor.objects.filter(advisor__user=user, is_active=True).exists()
+            or StudentMentorMap.objects.filter(mentor__user=user, is_active=True).exists()
+        )
 
     def get(self, request, student_id: int):
         user = request.user
-        if not self._check_allowed(user):
-            return Response({'error': 'Permission denied'}, status=403)
-
         student = StudentProfile.objects.select_related(
             'user',
             'section__batch__course__department',
@@ -9627,6 +9656,9 @@ class StudentProfileUpdateView(APIView):
         ).filter(pk=student_id).first()
         if not student:
             return Response({'error': 'Student not found'}, status=404)
+
+        if not self._check_allowed(user, student=student):
+            return Response({'error': 'Permission denied'}, status=403)
 
         user_obj = student.user
         section_obj = getattr(student, 'section', None)
@@ -9740,9 +9772,6 @@ class StudentProfileUpdateView(APIView):
 
     def patch(self, request, student_id: int):
         user = request.user
-        if not self._check_allowed(user):
-            return Response({'error': 'Permission denied'}, status=403)
-
         student = StudentProfile.objects.select_related(
             'user',
             'section__batch__course__department',
@@ -9751,6 +9780,9 @@ class StudentProfileUpdateView(APIView):
         ).filter(pk=student_id).first()
         if not student:
             return Response({'error': 'Student not found'}, status=404)
+
+        if not self._check_allowed(user, student=student):
+            return Response({'error': 'Permission denied'}, status=403)
 
         data = request.data or {}
         user_obj = student.user
@@ -10003,9 +10035,26 @@ class StudentProfileUpdateView(APIView):
         }, status=200)
 
 
+def _SuperuserOr(permission_cls):
+    """Wrap a permission class so superusers always pass it."""
+    class _Wrapped(permission_cls):
+        def has_permission(self, request, view):
+            user = getattr(request, 'user', None)
+            if user and getattr(user, 'is_superuser', False):
+                return True
+            return super().has_permission(request, view)
+    return _Wrapped
+
+
 class BatchYearViewSet(viewsets.ModelViewSet):
     """CRUD for common BatchYear labels (e.g. '2023') that are department-agnostic."""
     permission_classes = (IsAuthenticated,)
+
+    def get_permissions(self):
+        if self.request.method in ('GET', 'HEAD', 'OPTIONS'):
+            return [IsAuthenticated()]
+        from .permissions import IsIQAC
+        return [_SuperuserOr(IsIQAC)()]
 
     def get_serializer_class(self):
         from rest_framework import serializers
