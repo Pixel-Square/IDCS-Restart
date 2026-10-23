@@ -5,6 +5,51 @@ Scope: `backend/academics/student_import_views.py` (1,002 lines) and the setting
 (`backend/erp/settings.py`). Reviewed statically; no live testing was performed.
 Classification: contains security findings — do not distribute outside the maintainers.
 
+## Remediation status
+
+Updated 2026-10-18. All eleven findings are addressed.
+
+| # | Finding | Status | Where |
+|---|---------|--------|-------|
+| 1 | Over-broad authorization | Fixed | `_has_import_permission()` now requires `students.bulk_import`; migration `academics/0106` creates it and grants it to every role that already had `students.view_all_students` |
+| 2 | No password policy | Fixed | `AUTH_PASSWORD_VALIDATORS` populated (`erp/settings.py`); `validate_password()` enforced for created and existing students; sample password removed from the template |
+| 3 | Silent email change | Fixed | Bulk import no longer writes `user.email`; the response reports a warning instead |
+| 4 | Upload size / row cap | Fixed | 10 MB file cap, 5,000 row cap, streaming UTF-8 CSV parsing, `.xlsx` archive part/size guards |
+| 5 | Error detail leakage | Fixed | Parse, template and row failures return generic text plus a correlation ref; details go to the server log |
+| 6 | Transaction handling | Fixed | Each row runs in its own savepoint; credential checks run before any write, so a failed row leaves nothing behind |
+| 7 | Uncontrolled reference data | Fixed | Unknown transport modes are rejected; `ModeOfTransportation` rows are only created for the four known values |
+| 8 | Username race | Fixed | Collision loop is bounded and an `IntegrityError` on user creation is reported per row instead of aborting the import. Usernames stay name-based by design; changing that affects how students log in |
+| 9 | File type validation | Fixed | `.xls` rejected with a clear message; `.xlsx` must be a real ZIP archive within part/size limits |
+| 10 | Permission/throttle defaults | Fixed | `DEFAULT_PERMISSION_CLASSES = IsAuthenticated`; scoped throttles on token issue (`10/min`, env-overridable) and student import (`20/hour`) |
+| 11 | Password validators | Fixed | `AUTH_PASSWORD_VALIDATORS` enabled with a 10-character minimum |
+
+Deployment notes:
+
+- Run `python manage.py migrate` to apply `academics.0106`. It creates the
+  `students.bulk_import` permission and copies the role grants from
+  `students.view_all_students`, so IQAC/HAA/AP keep working and plain staff accounts lose
+  access. Adjust role grants afterwards through the permission admin if needed.
+- Users must log out and back in before the new permission appears in their JWT/session
+  payload; until then the Import button stays hidden.
+- Imported passwords must now be at least 10 characters, not entirely numeric, not a common
+  password, and not similar to the student's name or email. Rows that fail are rejected
+  individually with a per-row error.
+- Email corrections can no longer be done through the importer. Use the verified
+  profile-change flow; the import response lists a warning for each skipped value.
+- `DEFAULT_PERMISSION_CLASSES` closes endpoints that previously inherited DRF's `AllowAny`
+  default. The affected ones in `COE/` (key-value store, student marks, course selections,
+  external staff, hall-attendance PDF) are already called with `fetchWithAuth` by the SPA;
+  any third-party or kiosk integration calling them without a JWT must now authenticate or
+  the view must declare `AllowAny` explicitly. The four genuinely public endpoints
+  (college search/list, Google Sheets OAuth callback and webhook) now declare
+  `@permission_classes([AllowAny])` so their behaviour is unchanged.
+- Throttle rates are configurable through `THROTTLE_AUTH_RATE` and
+  `THROTTLE_STUDENT_IMPORT_RATE`.
+- `.xls` uploads are rejected; the template and the SPA already use `.xlsx`/`.csv`.
+- The Django-admin importer in `backend/academics/admin.py` (lines 401/476) still assigns
+  `reg_no` as the default password without validation. It is admin-only, but it is the same
+  pattern and should get the same treatment in a follow-up.
+
 ## Summary
 
 | # | Severity | Location | Vulnerability | Confidence |

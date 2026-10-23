@@ -162,6 +162,8 @@ class MeSerializer(serializers.Serializer):
     pbas_scores = serializers.SerializerMethodField()
     under_construction = serializers.SerializerMethodField()
     is_superuser = serializers.BooleanField(read_only=True)
+    hostel_facility = serializers.SerializerMethodField()
+    hostel_allocation = serializers.SerializerMethodField()
 
     @staticmethod
     def _safe_related_profile(obj, attr_name):
@@ -176,6 +178,38 @@ class MeSerializer(serializers.Serializer):
             return SiteConfiguration.get().under_construction or {}
         except Exception:
             return {}
+
+    def get_hostel_facility(self, obj):
+        """Current Hostel / Day Scholar / College Bus selection (read-only)."""
+        try:
+            student = getattr(obj, 'student_profile', None)
+            if student is None:
+                return None
+            facility = getattr(student, 'hostel_facility', None)
+            if facility is None:
+                return None
+            from hostel.serializers import StudentFacilityProfileSerializer
+
+            return StudentFacilityProfileSerializer(facility).data
+        except Exception:
+            return None
+
+    def get_hostel_allocation(self, obj):
+        """Current active hostel room allocation for student (read-only)."""
+        try:
+            student = getattr(obj, 'student_profile', None)
+            if student is None:
+                return None
+            from hostel.models import RoomAllocation
+            from hostel.serializers import RoomAllocationSerializer
+            alloc = RoomAllocation.objects.filter(
+                student=student, status='ACTIVE'
+            ).select_related('room', 'room__building', 'room__floor', 'bed').first()
+            if alloc:
+                return RoomAllocationSerializer(alloc).data
+            return None
+        except Exception:
+            return None
 
     def get_profile_image_updated(self, obj):
         try:
@@ -339,9 +373,14 @@ class MeSerializer(serializers.Serializer):
                     'name': getattr(department, 'name', None),
                 } if department else None,
                 'status': sp.status,
+                'gender': getattr(sp, 'gender', '') or '',
+                'dept_roll_no': getattr(sp, 'dept_roll_no', '') or '',
+                'section_roll_no': getattr(sp, 'section_roll_no', '') or '',
+                'degree': getattr(sp, 'degree', '') or '',
                 'address_line1': getattr(sp, 'address_line1', '') or '',
                 'address_line2': getattr(sp, 'address_line2', '') or '',
                 'address_line3': getattr(sp, 'address_line3', '') or '',
+                'address_line4': getattr(sp, 'address_line4', '') or '',
                 'district': getattr(sp, 'district', '') or '',
                 'pincode': getattr(sp, 'pincode', '') or '',
                 'father_name': getattr(sp, 'father_name', '') or '',
@@ -354,6 +393,31 @@ class MeSerializer(serializers.Serializer):
                 'mode_of_transportation': getattr(sp.mode_of_transportation, 'name', '') if getattr(sp, 'mode_of_transportation', None) else '',
                 'mode_of_transportation_id': getattr(sp, 'mode_of_transportation_id', None),
                 'boarding_point': getattr(sp, 'boarding_point', '') or '',
+                'mentor': (
+                    {
+                        'id': getattr(sp.mentor, 'id', None),
+                        'staff_id': getattr(sp.mentor, 'staff_id', ''),
+                        'name': f"{getattr(getattr(sp.mentor, 'user', None), 'first_name', '')} {getattr(getattr(sp.mentor, 'user', None), 'last_name', '')}".strip() or getattr(getattr(sp.mentor, 'user', None), 'username', ''),
+                        'email': getattr(getattr(sp.mentor, 'user', None), 'email', ''),
+                    }
+                    if getattr(sp, 'mentor', None)
+                    else (
+                        lambda: (
+                            lambda active_mm: (
+                                {
+                                    'id': active_mm.mentor.id,
+                                    'staff_id': active_mm.mentor.staff_id,
+                                    'name': f"{getattr(active_mm.mentor.user, 'first_name', '')} {getattr(active_mm.mentor.user, 'last_name', '')}".strip() or getattr(active_mm.mentor.user, 'username', ''),
+                                    'email': getattr(active_mm.mentor.user, 'email', ''),
+                                }
+                                if active_mm
+                                else None
+                            )
+                        )(sp.mentor_mappings.filter(is_active=True).select_related('mentor__user').first())
+                    )()
+                ),
+                'hostel_allocation': self.get_hostel_allocation(obj),
+                'hostel_facility': self.get_hostel_facility(obj),
             }
         st = self._safe_related_profile(obj, 'staff_profile')
         if st is not None:

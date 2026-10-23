@@ -52,6 +52,9 @@ urlpatterns = [
     path('api/coder/', include('coder.urls')),
     path('api/discipline/', include('discipline.urls')),
     path('api/audits/', include('audits.urls')),
+    # Hostel / Student Facilities module (also exposed under /api/v1/)
+    path('api/hostel/', include('hostel.urls')),
+    path('api/v1/hostel/', include('hostel.urls')),
 ]
 
 # Admin dashboard data endpoint (counts for models) - always available

@@ -9,6 +9,7 @@ from django.utils import timezone
 from datetime import date
 from django.utils.translation import gettext_lazy as _
 from accounts.models import Role
+import re
 import secrets
 
 
@@ -501,6 +502,43 @@ STUDENT_STATUS_CHOICES = (
     ('DEBAR', 'Debar'),
 )
 
+GENDER_CHOICES = (
+    ('MALE', 'Male'),
+    ('FEMALE', 'Female'),
+    ('OTHER', 'Other'),
+)
+
+# Registration numbers issued from the 2023 batch onwards encode gender in the
+# 13th character: '1' = male, '2' = female. Older batches use a different
+# format, so the rule must never be applied to them.
+GENDER_FROM_REG_NO_DIGITS = {'1': 'MALE', '2': 'FEMALE'}
+GENDER_INFERENCE_MIN_BATCH_YEAR = 2023
+
+
+def batch_start_year(batch):
+    """Parse the starting year of a batch label such as '2024' or '24'."""
+    match = re.match(r'^\s*(\d{4}|\d{2})', str(batch or ''))
+    if not match:
+        return None
+    year = int(match.group(1))
+    return year + 2000 if year < 100 else year
+
+
+def gender_from_reg_no(reg_no) -> str:
+    """Return MALE/FEMALE from the 13th character of a registration number."""
+    text = str(reg_no or '').strip()
+    if len(text) < 13:
+        return ''
+    return GENDER_FROM_REG_NO_DIGITS.get(text[12], '')
+
+
+def infer_gender_from_reg_no(reg_no, batch, *, minimum_batch_year=GENDER_INFERENCE_MIN_BATCH_YEAR) -> str:
+    """Infer gender for 2023+ batches only; older batches return an empty string."""
+    year = batch_start_year(batch)
+    if year is None or year < minimum_batch_year:
+        return ''
+    return gender_from_reg_no(reg_no)
+
 
 class ModeOfTransportation(models.Model):
     name = models.CharField(max_length=64, unique=True)
@@ -554,10 +592,26 @@ class StudentProfile(models.Model):
     profile_image = models.ImageField(upload_to='profile_images/', null=True, blank=True)
     is_photo_verified = models.BooleanField(default=False, help_text='Profile photo verified by advisor/staff')
 
+    # Roll Numbers & Academic Identifiers
+    dept_roll_no = models.CharField(max_length=64, blank=True, default='', db_index=True, help_text='Department Roll Number')
+    section_roll_no = models.CharField(max_length=64, blank=True, default='', db_index=True, help_text='Section Roll Number')
+    degree = models.CharField(max_length=64, blank=True, default='', help_text='Degree programme, e.g. B.E. / B.Tech')
+
+    # Mentor assignment
+    mentor = models.ForeignKey(
+        'StaffProfile',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='mentored_student_profiles',
+        help_text='Assigned Mentor',
+    )
+
     # Address Details
     address_line1 = models.CharField(max_length=255, blank=True, default='', help_text='Permanent address line 1')
     address_line2 = models.CharField(max_length=255, blank=True, default='', help_text='Permanent address line 2')
     address_line3 = models.CharField(max_length=255, blank=True, default='', help_text='Permanent address line 3')
+    address_line4 = models.CharField(max_length=255, blank=True, default='', help_text='Permanent address line 4')
     district = models.CharField(max_length=128, blank=True, default='', help_text='District')
     pincode = models.CharField(max_length=20, blank=True, default='', help_text='Postal Pincode')
 
@@ -570,6 +624,14 @@ class StudentProfile(models.Model):
     # Personal Details (DOB & Blood Group)
     dob = models.DateField(null=True, blank=True, help_text='Date of Birth (YYYY-MM-DD)')
     blood_group = models.CharField(max_length=16, blank=True, default='', help_text='Blood Group (e.g. A+, B+, etc.)')
+    gender = models.CharField(
+        max_length=10,
+        choices=GENDER_CHOICES,
+        blank=True,
+        default='',
+        db_index=True,
+        help_text='Gender — required for gender-based hostel allocation.',
+    )
 
     # Mode of Transportation & Boarding Point
     mode_of_transportation = models.ForeignKey(
@@ -651,6 +713,13 @@ class StudentProfile(models.Model):
                 old = None
             if old and old.reg_no != self.reg_no:
                 raise ValidationError('Student reg_no is immutable and cannot be changed.')
+
+        # Derive gender from the registration number for 2023+ batches when it
+        # has not been supplied explicitly. Manually recorded values win.
+        if not self.gender:
+            inferred = infer_gender_from_reg_no(self.reg_no, self.batch)
+            if inferred:
+                self.gender = inferred
 
         # run full clean to enforce validations
         self.full_clean()

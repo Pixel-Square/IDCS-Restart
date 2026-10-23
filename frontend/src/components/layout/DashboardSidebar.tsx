@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, Fingerprint, BarChart3, Link2, PieChart, TrendingUp, Eye, QrCode, ShieldAlert, Settings2, RefreshCw } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, Fingerprint, BarChart3, Link2, PieChart, TrendingUp, Eye, QrCode, ShieldAlert, Settings2, RefreshCw, BedDouble, Building2 } from 'lucide-react';
 
 import { useSidebar } from './SidebarContext';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
@@ -100,6 +100,10 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   discipline_admin_config: Settings2,
   discipline_admin_logs: ClipboardList,
   discipline_staff_portal: ShieldAlert,
+  // Hostel & Student Facilities
+  hostel_portal: BedDouble,
+  hostel_registration: BedDouble,
+  hostel_admin: Building2,
 };
 
 export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: string; user?: any }) {
@@ -772,6 +776,38 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
   }
 
 
+
+  // Hostel & Student Facilities
+  const canAccessHostelAdmin =
+    isIqac ||
+    rolesUpper.includes('ADMIN') ||
+    rolesUpper.includes('PRINCIPAL') ||
+    rolesUpper.includes('COLLEGE_ADMIN') ||
+    rolesUpper.includes('HOSTEL_ADMIN') ||
+    Boolean(flags.can_manage_hostel) ||
+    Boolean(flags.can_admin_hostel) ||
+    rolesUpper.some((role) =>
+      ['WARDEN', 'DEPUTY_WARDEN', 'MATRON', 'MAINTENANCE_STAFF', 'MESS_COORDINATOR', 'TRANSPORT_COORDINATOR', 'SECURITY_STAFF'].includes(role),
+    );
+
+  if (canAccessHostelAdmin && !items.some((item) => item.key === 'hostel_admin')) {
+    items.push({ key: 'hostel_admin', label: 'Hostel Admin', to: '/hostel/admin' });
+  }
+  if (canAccessHostelAdmin && !items.some((item) => item.key === 'hostel_modules')) {
+    items.push({ key: 'hostel_modules', label: 'Hostel Operations', to: '/hostel/modules' });
+  }
+
+  const isStudentForHostel = Boolean(flags.is_student || rolesUpper.includes('STUDENT'));
+  if (isStudentForHostel) {
+    if (flags.hostel_page_access && !items.some((item) => item.key === 'hostel_portal')) {
+      items.push({ key: 'hostel_portal', label: 'My Hostel', to: '/student/hostel' });
+    } else if (!flags.hostel_page_access && !items.some((item) => item.key === 'hostel_registration')) {
+      items.push({ key: 'hostel_registration', label: 'Hostel Registration', to: '/student/hostel' });
+    }
+    if (flags.hostel_page_access && !items.some((item) => item.key === 'hostel_modules')) {
+      items.push({ key: 'hostel_modules', label: 'Mess & Movement', to: '/student/hostel/modules' });
+    }
+  }
 
   // Add Token Raise for all users at the end (no permission check needed)
   items.push({ key: 'queries', label: 'Raise Token ', to: '/queries' });

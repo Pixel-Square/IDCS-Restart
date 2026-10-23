@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getMe, requestMobileOtp, verifyMobileOtp, removeMobileNumber, changePassword, getCachedMe } from '../../services/auth';
-import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2, Key, Eye, EyeOff, Edit2, Save, X, Camera, CreditCard, XCircle, Award, MapPin, Bus, Users, Sparkles, AlertCircle, Navigation, Heart, Calendar } from 'lucide-react';
+import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2, Key, Eye, EyeOff, Edit2, Save, X, Camera, CreditCard, XCircle, Award, MapPin, Bus, Users, Sparkles, AlertCircle, Navigation, Heart, Calendar, BedDouble, GraduationCap, BookOpen, Hash } from 'lucide-react';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import { ModalPortal } from '../../components/ModalPortal';
 import logo from '../../assets/idcs-logo.png';
@@ -197,6 +197,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     address_line1: '',
     address_line2: '',
     address_line3: '',
+    address_line4: '',
     district: '',
     pincode: '',
   });
@@ -398,6 +399,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       address_line1: String(prof.address_line1 || ''),
       address_line2: String(prof.address_line2 || ''),
       address_line3: String(prof.address_line3 || ''),
+      address_line4: String(prof.address_line4 || ''),
       district: String(prof.district || ''),
       pincode: String(prof.pincode || ''),
     });
@@ -1035,6 +1037,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
           address_line1: addressDraft.address_line1.trim(),
           address_line2: addressDraft.address_line2.trim(),
           address_line3: addressDraft.address_line3.trim(),
+          address_line4: addressDraft.address_line4.trim(),
           district: addressDraft.district.trim(),
           pincode: addressDraft.pincode.trim(),
         }),
@@ -1059,6 +1062,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       address_line1: String(prof.address_line1 || ''),
       address_line2: String(prof.address_line2 || ''),
       address_line3: String(prof.address_line3 || ''),
+      address_line4: String(prof.address_line4 || ''),
       district: String(prof.district || ''),
       pincode: String(prof.pincode || ''),
     });
@@ -1890,9 +1894,187 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
               </div>
             </div>
 
-            {/* Student Specific Field Groups: Personal, Parents Info, Parents Contacts, Transport, Address */}
+            {/* Student Specific Field Groups: Academic Info, Hostel, Personal, Parents Info, Parents Contacts, Transport, Address */}
             {user.profile_type === 'STUDENT' && (
               <>
+                {/* Group 0: Academic & Enrollment Identifiers */}
+                <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow lg:col-span-2 border-l-4 border-indigo-600">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                      <GraduationCap className="w-5 h-5 text-indigo-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <div className="text-sm font-semibold text-gray-800">Academic & Enrollment Identifiers</div>
+                          <div className="text-xs text-gray-500">Degree, roll numbers, mentor & batch info</div>
+                        </div>
+                        {Boolean((user as any)?.profile?.degree) && (
+                          <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            {(user as any)?.profile?.degree}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 text-sm">
+                        <div>
+                          <span className="text-xs text-gray-500 block">Registration No:</span>
+                          <span className="font-bold text-gray-900 font-mono">
+                            {(user as any)?.profile?.student_id || (user as any)?.profile?.register_number || (user as any)?.username || '—'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-gray-500 block">Department Roll No:</span>
+                          <span className="font-semibold text-indigo-700 font-mono">
+                            {(user as any)?.profile?.dept_roll_no || '—'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-gray-500 block">Section Roll No:</span>
+                          <span className="font-semibold text-indigo-700 font-mono">
+                            {(user as any)?.profile?.section_roll_no || '—'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-gray-500 block">Gender:</span>
+                          <span className="font-medium text-gray-900 capitalize">
+                            {(user as any)?.profile?.gender || '—'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-gray-500 block">Degree:</span>
+                          <span className="font-medium text-gray-900">
+                            {(user as any)?.profile?.degree || '—'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-gray-500 block">Batch:</span>
+                          <span className="font-medium text-gray-900">
+                            {(user as any)?.profile?.batch?.name || (user as any)?.profile?.batch || '—'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-gray-500 block">Section:</span>
+                          <span className="font-medium text-gray-900">
+                            {(user as any)?.profile?.section?.name || (user as any)?.profile?.section || '—'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-gray-500 block">Assigned Mentor:</span>
+                          <span className="font-medium text-gray-900">
+                            {(() => {
+                              const m = (user as any)?.profile?.mentor;
+                              if (!m) return '—';
+                              if (typeof m === 'string') return m;
+                              return m.name || m.staff_id || 'Assigned';
+                            })()}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Hostel & Room Allocation Card */}
+                {(() => {
+                  const prof = (user as any)?.profile || {};
+                  const alloc = prof.hostel_allocation || (user as any)?.hostel_allocation;
+                  const facility = prof.hostel_facility;
+                  const mot = String(prof.mode_of_transportation || '').toLowerCase();
+                  const isHosteller = facility?.residence_category === 'HOSTELLER' || mot.includes('hostel');
+
+                  return (
+                    <div className={`bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow lg:col-span-2 border-l-4 ${
+                      alloc ? 'border-emerald-500' : isHosteller ? 'border-blue-500' : 'border-slate-300'
+                    }`}>
+                      <div className="flex items-start gap-3">
+                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                          alloc ? 'bg-emerald-100 text-emerald-600' : isHosteller ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-600'
+                        }`}>
+                          <BedDouble className="w-5 h-5" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+                            <div>
+                              <div className="text-sm font-semibold text-gray-800">Hostel & Accommodation Details</div>
+                              <div className="text-xs text-gray-500">Room allocation and residential status</div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {alloc ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  Room Allocated
+                                </span>
+                              ) : isHosteller ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                  Hosteller · Awaiting Room
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-50 text-slate-700 border border-slate-200">
+                                  Day Scholar
+                                </span>
+                              )}
+                              <a
+                                href="/student/hostel"
+                                className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:underline ml-1"
+                              >
+                                Hostel Portal →
+                              </a>
+                            </div>
+                          </div>
+
+                          {alloc ? (
+                            <div className="mt-3 p-3.5 bg-emerald-50/60 border border-emerald-200 rounded-lg grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                              <div>
+                                <span className="text-xs text-emerald-800/80 block font-medium">Building</span>
+                                <span className="font-bold text-gray-900">
+                                  {alloc.building_name || alloc.building_code || 'Hostel'}
+                                  {alloc.building_code && alloc.building_name !== alloc.building_code ? ` (${alloc.building_code})` : ''}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-xs text-emerald-800/80 block font-medium">Room No</span>
+                                <span className="font-black text-emerald-700 text-base">
+                                  {alloc.room_number || '—'}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-xs text-emerald-800/80 block font-medium">Floor</span>
+                                <span className="font-semibold text-gray-900">
+                                  {alloc.floor_number !== undefined && alloc.floor_number !== null ? `Floor ${alloc.floor_number}` : '—'}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-xs text-emerald-800/80 block font-medium">Bed Assigned</span>
+                                <span className="font-semibold text-gray-900">
+                                  {alloc.bed_number ? `Bed ${alloc.bed_number}` : 'Standard Bed'}
+                                </span>
+                              </div>
+                              {alloc.start_date && (
+                                <div className="col-span-2 sm:col-span-4 text-xs text-gray-500 pt-1.5 border-t border-emerald-100 flex items-center justify-between">
+                                  <span>Allocated since: <strong>{new Date(alloc.start_date).toLocaleDateString()}</strong></span>
+                                  <span className="text-emerald-700 font-medium">Status: Active</span>
+                                </div>
+                              )}
+                            </div>
+                          ) : isHosteller ? (
+                            <div className="mt-2 text-sm text-gray-600 bg-blue-50/60 border border-blue-200 rounded-lg p-3">
+                              <p className="font-medium text-blue-900">Registered as Hosteller</p>
+                              <p className="text-xs text-blue-700 mt-0.5">
+                                Your hosteller profile is active and pending room allocation in the Hostel Portal. Once the warden allocates a room, your room, building, and bed details will appear here and on your dashboard.
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="mt-2 text-xs text-gray-500">
+                              Registered as Day Scholar. If you require on-campus accommodation, visit the Hostel Portal to apply.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Group 1: Personal Details (Date of Birth & Blood Group) */}
                 <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow lg:col-span-1 border-l-4 border-rose-500">
                   <div className="flex items-start gap-3">
@@ -2374,6 +2556,18 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                             />
                           </div>
 
+                          <div>
+                            <label className="text-xs font-semibold text-gray-600">Address Line 4 (Optional)</label>
+                            <input
+                              type="text"
+                              value={addressDraft.address_line4}
+                              onChange={(e) => setAddressDraft((d) => ({ ...d, address_line4: e.target.value }))}
+                              placeholder="City / State / Landmark info"
+                              className="w-full mt-1 px-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              disabled={addressSaving}
+                            />
+                          </div>
+
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <div>
                               <label className="text-xs font-semibold text-gray-600">District</label>
@@ -2429,6 +2623,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                               {(user as any)?.profile?.address_line1 && <div>{(user as any)?.profile?.address_line1}</div>}
                               {(user as any)?.profile?.address_line2 && <div>{(user as any)?.profile?.address_line2}</div>}
                               {(user as any)?.profile?.address_line3 && <div>{(user as any)?.profile?.address_line3}</div>}
+                              {(user as any)?.profile?.address_line4 && <div>{(user as any)?.profile?.address_line4}</div>}
                               <div className="text-gray-600 font-medium">
                                 {[
                                   (user as any)?.profile?.district,

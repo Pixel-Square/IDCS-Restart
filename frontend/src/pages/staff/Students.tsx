@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import fetchWithAuth from '../../services/fetchAuth'
-import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart, RefreshCw, Edit2, X, Search, Upload, Download, FileText, AlertCircle, CheckCircle2, CheckSquare, Camera, Image as ImageIcon, Phone, Bus, MapPin, ShieldCheck, Clock } from 'lucide-react'
+import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart, RefreshCw, Edit2, X, Search, Upload, Download, FileText, AlertCircle, CheckCircle2, CheckSquare, Camera, Image as ImageIcon, Phone, Bus, MapPin, ShieldCheck, Clock, Layers } from 'lucide-react'
 
 
 // Cache key and expiry time (versioned to ensure fresh profile images are loaded)
@@ -110,6 +110,11 @@ type Student = {
   mode_of_transportation?: string;
   mode_of_transportation_id?: number | null;
   boarding_point?: string;
+  dept_roll_no?: string;
+  section_roll_no?: string;
+  degree?: string;
+  gender?: string;
+  address_line4?: string;
 }
 
 type SectionMeta = {
@@ -186,8 +191,27 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     updated: number
     errors: string[]
     total_errors: number
+    warnings?: string[]
+    total_warnings?: number
+    duplicate_reg_count?: number
+    duplicate_reg_rows?: string[]
+    used_dept_roll_as_reg_no?: boolean
   } | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
+  const [useDeptRollAsRegNo, setUseDeptRollAsRegNo] = useState(false)
+
+  // New batch modal state
+  const [isBatchModalOpen, setIsBatchModalOpen] = useState(false)
+  const [batchSaving, setBatchSaving] = useState(false)
+  const [batchError, setBatchError] = useState<string | null>(null)
+  const [batchResult, setBatchResult] = useState<any>(null)
+  const [batchForm, setBatchForm] = useState({
+    name: '2026',
+    department: '',
+    start_year: '2026',
+    end_year: '2030',
+    sections: 'A,B,C,D,E,F,G,H,I,J,K,L',
+  })
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1092,10 +1116,15 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
         address_line1: editFormData.address_line1 || '',
         address_line2: editFormData.address_line2 || '',
         address_line3: editFormData.address_line3 || '',
+        address_line4: editFormData.address_line4 || '',
         district: editFormData.district || '',
         pincode: editFormData.pincode || '',
         mode_of_transportation_id: editFormData.mode_of_transportation_id ?? null,
         boarding_point: editFormData.boarding_point || '',
+        dept_roll_no: editFormData.dept_roll_no || '',
+        section_roll_no: editFormData.section_roll_no || '',
+        degree: editFormData.degree || '',
+        gender: editFormData.gender || '',
         is_photo_verified: Boolean(editFormData.is_photo_verified),
       }
 
@@ -1216,6 +1245,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     try {
       const formData = new FormData()
       formData.append('file', importFile)
+      formData.append('use_dept_roll_as_reg_no', useDeptRollAsRegNo ? 'true' : 'false')
       const res = await fetchWithAuth('/api/academics/students/import/', {
         method: 'POST',
         body: formData,
@@ -1273,9 +1303,72 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     setImportFile(null)
     setImportResult(null)
     setImportError(null)
+    setUseDeptRollAsRegNo(false)
   }
 
-  const canImport = hasPermission('students.view_all_students')
+  const openBatchModal = () => {
+    const shDept = allDepartments.find(d => {
+      const label = `${d.short_name || ''} ${d.code || ''}`.toUpperCase()
+      return label.includes('S&H') || label.includes('S & H')
+    })
+    setBatchForm(current => ({
+      ...current,
+      department: shDept ? String(shDept.id) : current.department,
+    }))
+    setBatchError(null)
+    setBatchResult(null)
+    setIsBatchModalOpen(true)
+  }
+
+  const handleCreateBatch = async () => {
+    setBatchError(null)
+    setBatchResult(null)
+    if (!batchForm.name.trim()) {
+      setBatchError('Batch name is required.')
+      return
+    }
+    if (!batchForm.department) {
+      setBatchError('Select the department that manages this batch (S&H for year-1).')
+      return
+    }
+    setBatchSaving(true)
+    try {
+      const sections = batchForm.sections
+        .split(',')
+        .map(section => section.trim().toUpperCase())
+        .filter(Boolean)
+      const response = await fetchWithAuth('/api/academics/batches/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: batchForm.name.trim(),
+          department: Number(batchForm.department),
+          start_year: batchForm.start_year ? Number(batchForm.start_year) : null,
+          end_year: batchForm.end_year ? Number(batchForm.end_year) : null,
+          sections,
+          is_active: true,
+        }),
+      })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) {
+        throw new Error(
+          data?.detail ||
+          data?.error ||
+          (data && typeof data === 'object' ? JSON.stringify(data) : '') ||
+          `Failed to create batch (${response.status}).`,
+        )
+      }
+      setBatchResult(data)
+      await fetchAllBatches()
+      await fetchSectionsOrStudents(true)
+    } catch (error: any) {
+      setBatchError(error?.message || 'Failed to create the batch.')
+    } finally {
+      setBatchSaving(false)
+    }
+  }
+
+  const canImport = hasPermission('students.bulk_import')
 
   const totalLabel = `${currentSectionList.length} sections`
   const hasContent = currentSectionList.length > 0
@@ -1303,6 +1396,16 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
               >
                 <CheckSquare className="w-4 h-4 text-emerald-600" />
                 <span className="hidden sm:inline">Completion</span>
+              </button>
+            )}
+            {canImport && (
+              <button
+                onClick={openBatchModal}
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors"
+                title="Create a new batch and its sections"
+              >
+                <Layers className="w-4 h-4" />
+                <span className="hidden sm:inline">New Batch</span>
               </button>
             )}
             {canImport && (
@@ -2268,8 +2371,8 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                 </div>
               </div>
 
-              {/* Department + Section */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Department + Section + Degree */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-1.5">Department</label>
                   <input
@@ -2293,6 +2396,56 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                         {section.label}
                       </option>
                     ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1.5">Degree</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. B.E, B.Tech"
+                    value={editFormData.degree || ''}
+                    onChange={(e) => handleEditChange('degree', e.target.value)}
+                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900 bg-white"
+                  />
+                </div>
+              </div>
+
+              {/* Department Roll No, Section Roll No & Gender */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1.5">Department Roll No</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 21CS045"
+                    value={editFormData.dept_roll_no || ''}
+                    onChange={(e) => handleEditChange('dept_roll_no', e.target.value)}
+                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900 bg-white font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1.5">Section Roll No</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. A-23"
+                    value={editFormData.section_roll_no || ''}
+                    onChange={(e) => handleEditChange('section_roll_no', e.target.value)}
+                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900 bg-white font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1.5">Gender (M/F)</label>
+                  <select
+                    value={editFormData.gender || ''}
+                    onChange={(e) => handleEditChange('gender', e.target.value)}
+                    className="w-full px-3.5 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900 bg-white"
+                  >
+                    <option value="">-- Select Gender --</option>
+                    <option value="MALE">Male</option>
+                    <option value="FEMALE">Female</option>
+                    <option value="OTHER">Other</option>
                   </select>
                 </div>
               </div>
@@ -2552,6 +2705,17 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                   </div>
 
                   <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Address Line 4 (City / Additional)</label>
+                    <input
+                      type="text"
+                      placeholder="City / Area / Additional"
+                      value={editFormData.address_line4 || ''}
+                      onChange={(e) => handleEditChange('address_line4', e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm text-slate-900 bg-white"
+                    />
+                  </div>
+
+                  <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">District</label>
                     <input
                       type="text"
@@ -2598,6 +2762,144 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
         </div>
       )}
 
+      {/* New Batch Modal */}
+      {isBatchModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+              <div className="flex items-center gap-3">
+                <div className="bg-emerald-100 p-2 rounded-lg">
+                  <Layers className="w-5 h-5 text-emerald-600" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">New Batch</h2>
+                  <p className="text-xs text-slate-500">Create the cohort and its sections before importing students</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsBatchModalOpen(false)}
+                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                    Batch name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={batchForm.name}
+                    onChange={e => setBatchForm({ ...batchForm, name: e.target.value })}
+                    placeholder="2026"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                  />
+                  <p className="mt-1 text-xs text-slate-500">
+                    Must match the <code>batch</code> column in the import file (e.g. <code>2026</code>).
+                  </p>
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                    Managing department <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={batchForm.department}
+                    onChange={e => setBatchForm({ ...batchForm, department: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                  >
+                    <option value="">-- Select department --</option>
+                    {allDepartments.map(dept => (
+                      <option key={dept.id} value={dept.id}>
+                        {dept.short_name || dept.code} — {dept.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-slate-500">
+                    For a year-1 cohort select <strong>S&amp;H</strong>. For a regular course-based batch use the API with <code>course</code>.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Start year</label>
+                  <input
+                    type="number"
+                    value={batchForm.start_year}
+                    onChange={e => setBatchForm({ ...batchForm, start_year: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">End year</label>
+                  <input
+                    type="number"
+                    value={batchForm.end_year}
+                    onChange={e => setBatchForm({ ...batchForm, end_year: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Sections</label>
+                  <input
+                    type="text"
+                    value={batchForm.sections}
+                    onChange={e => setBatchForm({ ...batchForm, sections: e.target.value })}
+                    placeholder="A,B,C,D,E,F,G,H,I,J,K,L"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                  />
+                  <p className="mt-1 text-xs text-slate-500">
+                    Comma separated. Existing sections are kept; missing ones are created.
+                  </p>
+                </div>
+              </div>
+
+              {batchError && (
+                <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{batchError}</span>
+                </div>
+              )}
+
+              {batchResult && (
+                <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
+                  <p className="font-medium">{batchResult.message || 'Batch ready.'}</p>
+                  <p className="mt-0.5 text-xs">
+                    Batch: <strong>{batchResult.batch?.name}</strong>
+                    {batchResult.sections?.length ? (
+                      <> · Sections: <strong>{batchResult.sections.map((s: any) => s.name).join(', ')}</strong></>
+                    ) : null}
+                  </p>
+                  <p className="mt-1 text-xs text-green-700">
+                    The batch is now available in the Batch dropdown. You can import the student file.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3 rounded-b-xl">
+              <button
+                onClick={() => setIsBatchModalOpen(false)}
+                disabled={batchSaving}
+                className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-200 hover:bg-slate-300 rounded-lg transition-colors disabled:opacity-50"
+              >
+                Close
+              </button>
+              <button
+                onClick={handleCreateBatch}
+                disabled={batchSaving || !batchForm.name.trim() || !batchForm.department}
+                className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {batchSaving ? <><Loader2 className="w-4 h-4 animate-spin" /> Creating…</> : <><Layers className="w-4 h-4" /> Create Batch</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Import Students Modal */}
       {isImportOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -2627,15 +2929,15 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
               <div className="bg-slate-50 rounded-lg p-4 flex items-start gap-3">
                 <Download className="w-5 h-5 text-slate-500 mt-0.5 shrink-0" />
                 <div className="flex-1">
-                  <p className="text-sm font-medium text-slate-700">Download Template</p>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Template columns: student_reg_no, name, department, section, email, password, batch, status, core_department
+                  <p className="text-sm font-medium text-slate-700">Download Template (30 Columns)</p>
+                  <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                    Includes all 30 standard columns: <code>student_reg_no, name, department, section, email, password, batch, status, core_department, M/F, deptrollno, secrollnum, fathername, DOB, DD, MM, YYYY, ADD1, ADD2, ADD3, ADDRES4, pincode, fathermobile, bloodgroup, Dept, degree, MOT, Boardingpoint, batch, MENTOR</code>.
                     <br />
-                    Password column is used to set/update login password during import.
+                    • <strong>Hostellers</strong>: Set MOT to <em>Hosteller</em> — automatically registers student in the Hostel Portal for room allocation.
                     <br />
-                    Password is required for new students and for users who currently have no usable password.
+                    • <strong>Mentors</strong>: Enter mentor Staff ID, Name, or Email to assign student mentor automatically.
                     <br />
-                    Valid status values: ACTIVE, INACTIVE, ALUMNI, DEBAR
+                    • Valid status values: <code>ACTIVE, INACTIVE, ALUMNI, DEBAR</code>.
                   </p>
                 </div>
                 <button
@@ -2680,6 +2982,26 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                 </label>
               </div>
 
+              <label className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 accent-amber-600"
+                  checked={useDeptRollAsRegNo}
+                  onChange={e => setUseDeptRollAsRegNo(e.target.checked)}
+                />
+                <span className="text-xs text-amber-900">
+                  <span className="block text-sm font-semibold">Use Department Roll No as registration number</span>
+                  Enable this when the Excel <code>student_reg_no</code> column contains duplicates or rounded
+                  16-digit numbers. Each student will be stored with their <code>deptrollno</code>
+                  {' '}(e.g. <code>ADA26001</code>) as the unique registration number.
+                </span>
+              </label>
+
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
+                The <code>batch</code> and <code>section</code> values in the file must already exist.
+                Use <strong>New Batch</strong> above to create them before importing.
+              </div>
+
               {/* Error message */}
               {importError && (
                 <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
@@ -2708,6 +3030,24 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                       </p>
                     </div>
                   </div>
+                  {(importResult.duplicate_reg_count || 0) > 0 && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                      <p className="font-semibold">
+                        {importResult.duplicate_reg_count} row(s) used a duplicate registration number.
+                      </p>
+                      <p className="mt-0.5">
+                        Those rows updated the same student instead of creating new ones. Enable
+                        “Use Department Roll No as registration number” and import again to create every student.
+                      </p>
+                      {importResult.duplicate_reg_rows?.length ? (
+                        <ul className="mt-1 max-h-24 overflow-y-auto space-y-0.5">
+                          {importResult.duplicate_reg_rows.map((row, index) => (
+                            <li key={index}>• {row}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  )}
                   {importResult.errors.length > 0 && (
                     <div className="max-h-36 overflow-y-auto rounded-lg border border-red-200 bg-red-50 p-3">
                       <p className="text-xs font-semibold text-red-700 mb-1">
@@ -2716,6 +3056,18 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                       <ul className="space-y-1">
                         {importResult.errors.map((err, i) => (
                           <li key={i} className="text-xs text-red-600">• {err}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {(importResult.warnings?.length || 0) > 0 && (
+                    <div className="max-h-36 overflow-y-auto rounded-lg border border-amber-200 bg-amber-50 p-3">
+                      <p className="text-xs font-semibold text-amber-800 mb-1">
+                        Warnings {importResult.total_warnings && importResult.total_warnings > 50 ? `(showing first 50 of ${importResult.total_warnings})` : ''}:
+                      </p>
+                      <ul className="space-y-1">
+                        {importResult.warnings?.map((warning, i) => (
+                          <li key={i} className="text-xs text-amber-700">• {warning}</li>
                         ))}
                       </ul>
                     </div>

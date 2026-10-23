@@ -45,6 +45,9 @@ import TeachingAssignmentsPage from './pages/hod/TeachingAssignments';
 import ObeEditRequestsPage from './pages/hod/ObeEditRequestsPage';
 import StudentsPage from './pages/staff/Students';
 import StudentCompletionPage from './pages/iqac/StudentCompletionPage';
+import StudentHostelPage from './pages/hostel/StudentHostelPage';
+import HostelAdminPage from './pages/hostel/HostelAdminPage';
+import HostelModulesPage from './pages/hostel/HostelModulesPage';
 import StudentTimetable from './pages/student/TimetableView';
 import StaffTimetable from './pages/staff/TimetableView';
 import AssignedSubjectsPage from './pages/staff/AssignedSubjects';
@@ -728,6 +731,43 @@ export default function App() {
                 <Route
                   path="/student/academics"
                   element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentAcademics />} />}
+                />
+                {/* Hostel & Student Facilities */}
+                <Route
+                  path="/student/hostel"
+                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentHostelPage />} />}
+                />
+                <Route
+                  path="/student/hostel/modules"
+                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<HostelModulesPage />} />}
+                />
+                <Route
+                  path="/hostel/modules"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={[
+                        'IQAC', 'ADMIN', 'PRINCIPAL', 'COLLEGE_ADMIN', 'HOSTEL_ADMIN',
+                        'WARDEN', 'DEPUTY_WARDEN', 'MATRON', 'MAINTENANCE_STAFF',
+                        'MESS_COORDINATOR', 'TRANSPORT_COORDINATOR', 'SECURITY_STAFF',
+                      ]}
+                      element={<HostelModulesPage />}
+                    />
+                  }
+                />
+                <Route
+                  path="/hostel/admin"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={[
+                        'IQAC', 'ADMIN', 'PRINCIPAL', 'COLLEGE_ADMIN', 'HOSTEL_ADMIN',
+                        'WARDEN', 'DEPUTY_WARDEN', 'MATRON', 'MAINTENANCE_STAFF',
+                        'MESS_COORDINATOR', 'TRANSPORT_COORDINATOR', 'SECURITY_STAFF',
+                      ]}
+                      element={<HostelAdminPage />}
+                    />
+                  }
                 />
                 {/* Student PBAS route removed */}
                 {/* Attendance pages removed */}

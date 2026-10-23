@@ -4,7 +4,7 @@ Academic 2.1 API Views
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes, action
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from django.conf import settings
 from django.http import HttpResponse
@@ -426,6 +426,7 @@ def google_sheets_oauth_start(request):
 
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def google_sheets_oauth_callback(request):
     state = request.GET.get('state')
     expected_state = request.session.get('google_sheets_oauth_state')
@@ -945,6 +946,7 @@ def google_sheets_derive_mark_manager(request):
 
 
 @api_view(['POST'])
+@permission_classes([AllowAny])
 @csrf_exempt
 def google_sheets_webhook(request):
     """Webhook endpoint called by the Google Apps Script in a linked sheet.

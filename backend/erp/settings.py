@@ -87,6 +87,7 @@ INSTALLED_APPS = [
     'coder.apps.CoderConfig',
     'discipline.apps.DisciplineConfig',
     'audits.apps.AuditsConfig',
+    'hostel.apps.HostelConfig',
 ]
 # Staff requests dynamic forms & workflow engine
 INSTALLED_APPS.append('staff_requests')
@@ -194,7 +195,21 @@ CACHES = {
 SESSION_ENGINE = os.getenv('SESSION_ENGINE', 'django.contrib.sessions.backends.cached_db')
 SESSION_CACHE_ALIAS = 'default'
 
-AUTH_PASSWORD_VALIDATORS = []
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        'OPTIONS': {'min_length': 10},
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+    },
+]
 
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'Asia/Kolkata'
@@ -241,6 +256,13 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'auth': os.getenv('THROTTLE_AUTH_RATE', '10/min'),
+        'student_import': os.getenv('THROTTLE_STUDENT_IMPORT_RATE', '20/hour'),
+    },
     'EXCEPTION_HANDLER': 'curriculum.views.custom_exception_handler',
 }
 

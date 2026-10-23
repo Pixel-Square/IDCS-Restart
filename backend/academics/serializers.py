@@ -5,6 +5,7 @@ from django.utils import timezone
 from .models import TeachingAssignment
 from .models import SpecialCourseAssessmentEditRequest
 from academics.models import Subject, Section, Semester, MixedSection
+from academics.models import Batch, BatchYear, Course, Department
 from accounts.utils import get_user_permissions
 from academics.models import SectionAdvisor, StaffProfile
 from academics.models import AcademicYear
@@ -1039,9 +1040,14 @@ class StudentSimpleSerializer(serializers.Serializer):
     profile_image = serializers.CharField(allow_null=True, required=False)
     is_photo_verified = serializers.BooleanField(default=False, required=False)
     mobile_number = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
+    dept_roll_no = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
+    section_roll_no = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
+    degree = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
+    gender = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
     address_line1 = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
     address_line2 = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
     address_line3 = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
+    address_line4 = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
     district = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
     pincode = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
     father_name = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
@@ -1749,3 +1755,101 @@ class ExtStaffProfileSerializer(serializers.ModelSerializer):
             if _ExtStaffProfile.objects.filter(user=user).exists():
                 raise serializers.ValidationError({'user_id': 'This user already has an External Staff Profile.'})
         return attrs
+
+
+class BatchCreateSerializer(serializers.Serializer):
+    """Create (or re-use) a cohort and optionally its sections."""
+
+    name = serializers.CharField(max_length=32)
+    course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all(), required=False, allow_null=True)
+    department = serializers.PrimaryKeyRelatedField(queryset=Department.objects.all(), required=False, allow_null=True)
+    start_year = serializers.IntegerField(required=False, allow_null=True, min_value=2000, max_value=2100)
+    end_year = serializers.IntegerField(required=False, allow_null=True, min_value=2000, max_value=2100)
+    regulation = serializers.IntegerField(required=False, allow_null=True)
+    is_active = serializers.BooleanField(required=False, default=True)
+    sections = serializers.ListField(
+        child=serializers.CharField(max_length=8),
+        required=False,
+        default=list,
+        help_text='Section names to create, e.g. ["A", "B"].',
+    )
+    semester = serializers.PrimaryKeyRelatedField(queryset=Semester.objects.all(), required=False, allow_null=True)
+    managing_department = serializers.PrimaryKeyRelatedField(
+        queryset=Department.objects.all(), required=False, allow_null=True,
+    )
+
+    def validate_name(self, value):
+        value = str(value or '').strip()
+        if not value:
+            raise serializers.ValidationError('Batch name is required.')
+        return value
+
+    def validate_sections(self, value):
+        cleaned = []
+        for raw in value or []:
+            name = str(raw or '').strip().upper()
+            if name and name not in cleaned:
+                cleaned.append(name)
+        return cleaned
+
+    def validate(self, attrs):
+        course = attrs.get('course')
+        department = attrs.get('department')
+        if not course and not department:
+            raise serializers.ValidationError(
+                {'department': 'Provide either a course (regular degree) or a department (S&H/year-1).'}
+            )
+        start_year = attrs.get('start_year')
+        end_year = attrs.get('end_year')
+        name = attrs.get('name', '')
+        # Derive years from a name like "2026-2030" when not supplied.
+        if (start_year is None or end_year is None) and '-' in name:
+            parts = [part.strip() for part in name.split('-')]
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                start_year = start_year or int(parts[0])
+                end_year = end_year or int(parts[1])
+                attrs['start_year'] = start_year
+                attrs['end_year'] = end_year
+        if start_year and end_year and end_year < start_year:
+            raise serializers.ValidationError({'end_year': 'End year cannot be before the start year.'})
+        return attrs
+
+
+class SectionCreateSerializer(serializers.Serializer):
+    batch = serializers.PrimaryKeyRelatedField(queryset=Batch.objects.all())
+    name = serializers.CharField(max_length=8)
+    semester = serializers.PrimaryKeyRelatedField(queryset=Semester.objects.all(), required=False, allow_null=True)
+    managing_department = serializers.PrimaryKeyRelatedField(
+        queryset=Department.objects.all(), required=False, allow_null=True,
+    )
+
+    def validate_name(self, value):
+        value = str(value or '').strip().upper()
+        if not value:
+            raise serializers.ValidationError('Section name is required.')
+        return value
+
+
+class BatchDetailSerializer(serializers.ModelSerializer):
+    department = serializers.SerializerMethodField()
+    sections = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Batch
+        fields = (
+            'id', 'name', 'batch_year', 'course', 'department', 'start_year',
+            'end_year', 'regulation', 'is_active', 'sections',
+        )
+
+    def get_department(self, obj):
+        dept = obj.effective_department
+        if dept is None:
+            return None
+        return {'id': dept.id, 'code': dept.code, 'name': dept.name, 'short_name': dept.short_name}
+
+    def get_sections(self, obj):
+        return [
+            {'id': section.id, 'name': section.name, 'semester': section.semester_id}
+            for section in obj.sections.all().order_by('name')
+        ]
+

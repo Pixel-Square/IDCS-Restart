@@ -4,7 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
 from django.db import models
@@ -62,6 +62,7 @@ from .serializers import (
     TeachingAssignmentSerializer,
     StudentSimpleSerializer,
 )
+from .serializers import BatchCreateSerializer, BatchDetailSerializer, SectionCreateSerializer
 from .serializers import AcademicYearSerializer
 from .serializers import PeriodAttendanceSessionSerializer, BulkPeriodAttendanceSerializer, AttendanceUnlockRequestSerializer
 from accounts.utils import get_user_permissions
@@ -8121,11 +8122,16 @@ class MentorMyMenteesView(APIView):
                         'has_mentor': True,
                         'mentor_id': staff_profile.id,
                         'mentor_name': user.username,
+                        'dept_roll_no': getattr(st, 'dept_roll_no', '') or '',
+                        'section_roll_no': getattr(st, 'section_roll_no', '') or '',
+                        'degree': getattr(st, 'degree', '') or '',
+                        'gender': getattr(st, 'gender', '') or '',
                         'is_photo_verified': bool(getattr(st, 'is_photo_verified', False)),
                         'mobile_number': getattr(st, 'mobile_number', '') or (getattr(st.user, 'mobile_no', '') if getattr(st, 'user', None) else '') or '',
                         'address_line1': getattr(st, 'address_line1', '') or '',
                         'address_line2': getattr(st, 'address_line2', '') or '',
                         'address_line3': getattr(st, 'address_line3', '') or '',
+                        'address_line4': getattr(st, 'address_line4', '') or '',
                         'district': getattr(st, 'district', '') or '',
                         'father_name': getattr(st, 'father_name', '') or '',
                         'mother_name': getattr(st, 'mother_name', '') or '',
@@ -9527,11 +9533,22 @@ class AllStudentsView(APIView):
                     'department_code': getattr(dept, 'code', None) if dept else None,
                     'department_name': getattr(dept, 'name', None) if dept else None,
                     'batch': getattr(batch, 'name', None),
+                    'dept_roll_no': getattr(st, 'dept_roll_no', '') or '',
+                    'section_roll_no': getattr(st, 'section_roll_no', '') or '',
+                    'degree': getattr(st, 'degree', '') or '',
+                    'gender': getattr(st, 'gender', '') or '',
+                    'mentor_id': getattr(getattr(st, 'mentor', None), 'id', None),
+                    'mentor_name': (
+                        f"{getattr(getattr(st.mentor, 'user', None), 'first_name', '')} {getattr(getattr(st.mentor, 'user', None), 'last_name', '')}".strip() or getattr(getattr(st.mentor, 'user', None), 'username', '')
+                        if getattr(st, 'mentor', None)
+                        else ''
+                    ),
                     'is_photo_verified': bool(getattr(st, 'is_photo_verified', False)),
                     'mobile_number': getattr(st, 'mobile_number', '') or (getattr(user_obj, 'mobile_no', '') if user_obj else '') or '',
                     'address_line1': getattr(st, 'address_line1', '') or '',
                     'address_line2': getattr(st, 'address_line2', '') or '',
                     'address_line3': getattr(st, 'address_line3', '') or '',
+                    'address_line4': getattr(st, 'address_line4', '') or '',
                     'district': getattr(st, 'district', '') or '',
                     'pincode': getattr(st, 'pincode', '') or '',
                     'father_name': getattr(st, 'father_name', '') or '',
@@ -9647,9 +9664,14 @@ class StudentProfileUpdateView(APIView):
                     else None
                 )
             ),
+            'dept_roll_no': getattr(student, 'dept_roll_no', '') or '',
+            'section_roll_no': getattr(student, 'section_roll_no', '') or '',
+            'degree': getattr(student, 'degree', '') or '',
+            'gender': getattr(student, 'gender', '') or '',
             'address_line1': getattr(student, 'address_line1', '') or '',
             'address_line2': getattr(student, 'address_line2', '') or '',
             'address_line3': getattr(student, 'address_line3', '') or '',
+            'address_line4': getattr(student, 'address_line4', '') or '',
             'district': getattr(student, 'district', '') or '',
             'pincode': getattr(student, 'pincode', '') or '',
             'father_name': getattr(student, 'father_name', '') or '',
@@ -9662,6 +9684,58 @@ class StudentProfileUpdateView(APIView):
             'mode_of_transportation': getattr(student.mode_of_transportation, 'name', '') if getattr(student, 'mode_of_transportation', None) else '',
             'mode_of_transportation_id': getattr(student, 'mode_of_transportation_id', None),
             'boarding_point': getattr(student, 'boarding_point', '') or '',
+            'mentor': (
+                {
+                    'id': student.mentor.id,
+                    'staff_id': student.mentor.staff_id,
+                    'name': f"{getattr(student.mentor.user, 'first_name', '')} {getattr(student.mentor.user, 'last_name', '')}".strip() or getattr(student.mentor.user, 'username', ''),
+                    'email': getattr(student.mentor.user, 'email', ''),
+                }
+                if getattr(student, 'mentor', None)
+                else (
+                    lambda: (
+                        lambda active_mm: (
+                            {
+                                'id': active_mm.mentor.id,
+                                'staff_id': active_mm.mentor.staff_id,
+                                'name': f"{getattr(active_mm.mentor.user, 'first_name', '')} {getattr(active_mm.mentor.user, 'last_name', '')}".strip() or getattr(active_mm.mentor.user, 'username', ''),
+                                'email': getattr(active_mm.mentor.user, 'email', ''),
+                            }
+                            if active_mm
+                            else None
+                        )
+                    )(student.mentor_mappings.filter(is_active=True).select_related('mentor__user').first())
+                )()
+            ),
+            'hostel_allocation': (
+                lambda: (
+                    lambda alloc: (
+                        {
+                            'id': alloc.id,
+                            'building_name': alloc.room.building.name,
+                            'building_code': alloc.room.building.code,
+                            'floor_number': alloc.room.floor.floor_number,
+                            'room_number': alloc.room.room_number,
+                            'room_label': str(alloc.room),
+                            'bed_number': alloc.bed.bed_number if alloc.bed else '',
+                            'start_date': str(alloc.start_date) if alloc.start_date else '',
+                            'expected_end_date': str(alloc.expected_end_date) if alloc.expected_end_date else '',
+                            'status': alloc.status,
+                        }
+                        if alloc
+                        else None
+                    )
+                )(student.hostel_allocations.filter(status='ACTIVE').select_related('room', 'room__building', 'room__floor', 'bed').first())
+            )(),
+            'hostel_facility': (
+                {
+                    'residence_category': student.hostel_facility.residence_category,
+                    'uses_college_bus': bool(student.hostel_facility.uses_college_bus),
+                    'status': student.hostel_facility.status,
+                }
+                if hasattr(student, 'hostel_facility') and student.hostel_facility
+                else None
+            ),
         }, status=200)
 
     def patch(self, request, student_id: int):
@@ -9742,12 +9816,39 @@ class StudentProfileUpdateView(APIView):
             user_obj.mobile_no = mob
             user_obj.save(update_fields=['mobile_no'])
 
+        if 'dept_roll_no' in data:
+            student.dept_roll_no = str(data.get('dept_roll_no') or '').strip()
+        if 'section_roll_no' in data:
+            student.section_roll_no = str(data.get('section_roll_no') or '').strip()
+        if 'degree' in data:
+            student.degree = str(data.get('degree') or '').strip()
+        if 'gender' in data:
+            raw_g = str(data.get('gender') or '').strip().upper()
+            if raw_g in ('M', 'MALE'):
+                student.gender = 'MALE'
+            elif raw_g in ('F', 'FEMALE'):
+                student.gender = 'FEMALE'
+            elif raw_g:
+                student.gender = raw_g
+        if 'mentor_id' in data:
+            m_id = data.get('mentor_id')
+            if m_id:
+                from .models import StaffProfile, StudentMentorMap
+                st_profile = StaffProfile.objects.filter(pk=m_id).first()
+                student.mentor = st_profile
+                if st_profile:
+                    StudentMentorMap.objects.filter(student=student, is_active=True).update(is_active=False)
+                    StudentMentorMap.objects.update_or_create(student=student, is_active=True, defaults={'mentor': st_profile})
+            else:
+                student.mentor = None
         if 'address_line1' in data:
             student.address_line1 = str(data.get('address_line1') or '').strip()
         if 'address_line2' in data:
             student.address_line2 = str(data.get('address_line2') or '').strip()
         if 'address_line3' in data:
             student.address_line3 = str(data.get('address_line3') or '').strip()
+        if 'address_line4' in data:
+            student.address_line4 = str(data.get('address_line4') or '').strip()
         if 'district' in data:
             student.district = str(data.get('district') or '').strip()
         if 'pincode' in data:
@@ -9869,9 +9970,14 @@ class StudentProfileUpdateView(APIView):
                     else None
                 )
             ),
+            'dept_roll_no': getattr(student, 'dept_roll_no', '') or '',
+            'section_roll_no': getattr(student, 'section_roll_no', '') or '',
+            'degree': getattr(student, 'degree', '') or '',
+            'gender': getattr(student, 'gender', '') or '',
             'address_line1': getattr(student, 'address_line1', '') or '',
             'address_line2': getattr(student, 'address_line2', '') or '',
             'address_line3': getattr(student, 'address_line3', '') or '',
+            'address_line4': getattr(student, 'address_line4', '') or '',
             'district': getattr(student, 'district', '') or '',
             'pincode': getattr(student, 'pincode', '') or '',
             'father_name': getattr(student, 'father_name', '') or '',
@@ -9884,6 +9990,16 @@ class StudentProfileUpdateView(APIView):
             'mode_of_transportation': getattr(student.mode_of_transportation, 'name', '') if getattr(student, 'mode_of_transportation', None) else '',
             'mode_of_transportation_id': getattr(student, 'mode_of_transportation_id', None),
             'boarding_point': getattr(student, 'boarding_point', '') or '',
+            'mentor': (
+                {
+                    'id': student.mentor.id,
+                    'staff_id': student.mentor.staff_id,
+                    'name': f"{getattr(student.mentor.user, 'first_name', '')} {getattr(student.mentor.user, 'last_name', '')}".strip() or getattr(student.mentor.user, 'username', ''),
+                    'email': getattr(student.mentor.user, 'email', ''),
+                }
+                if getattr(student, 'mentor', None)
+                else None
+            ),
         }, status=200)
 
 
@@ -9912,7 +10028,11 @@ class BatchListView(APIView):
 
     Used by frontend dropdowns that need per-department active flags.
     Returns: id, name, department_code, department_short_name, is_active
+
+    ``POST`` creates (or updates) a cohort and optionally its sections so new
+    batches can be prepared before importing students.
     """
+
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
@@ -9929,6 +10049,136 @@ class BatchListView(APIView):
                 'is_active': b.is_active,
             })
         return Response(results)
+
+    def post(self, request):
+        if not _can_manage_academic_masters(request.user):
+            return Response(
+                {'detail': 'You do not have permission to create batches.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        from .models import Batch, Section
+        serializer = BatchCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        regulation_id = data.get('regulation')
+        if regulation_id:
+            from curriculum.models import Regulation
+            if not Regulation.objects.filter(pk=regulation_id).exists():
+                raise ValidationError({'regulation': 'Regulation not found.'})
+
+        course = data.get('course')
+        department = data.get('department')
+        lookup = {'name': data['name']}
+        if course is not None:
+            lookup['course'] = course
+        else:
+            lookup['course'] = None
+            lookup['department'] = department
+
+        defaults = {'is_active': data.get('is_active', True)}
+        if data.get('start_year') is not None:
+            defaults['start_year'] = data['start_year']
+        if data.get('end_year') is not None:
+            defaults['end_year'] = data['end_year']
+        if regulation_id:
+            defaults['regulation_id'] = regulation_id
+        if department is not None and course is not None:
+            defaults['department'] = department
+
+        with transaction.atomic():
+            batch, created = Batch.objects.update_or_create(**lookup, defaults=defaults)
+            created_sections = []
+            for section_name in data.get('sections') or []:
+                section, section_created = Section.objects.get_or_create(
+                    batch=batch,
+                    name=section_name,
+                    defaults={
+                        'semester': data.get('semester'),
+                        'managing_department': data.get('managing_department'),
+                    },
+                )
+                created_sections.append({
+                    'id': section.id,
+                    'name': section.name,
+                    'semester': section.semester_id,
+                    'created': section_created,
+                })
+
+        return Response(
+            {
+                'created': created,
+                'batch': BatchDetailSerializer(batch).data,
+                'sections': created_sections,
+                'message': (
+                    'Batch created.' if created
+                    else 'Batch already existed; details were updated and missing sections added.'
+                ),
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+class SectionCreateView(APIView):
+    """Create one section under an existing batch."""
+
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        if not _can_manage_academic_masters(request.user):
+            return Response(
+                {'detail': 'You do not have permission to create sections.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        from .models import Section
+        serializer = SectionCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        section, created = Section.objects.get_or_create(
+            batch=data['batch'],
+            name=data['name'],
+            defaults={
+                'semester': data.get('semester'),
+                'managing_department': data.get('managing_department'),
+            },
+        )
+        return Response(
+            {
+                'created': created,
+                'section': {
+                    'id': section.id,
+                    'name': section.name,
+                    'batch': section.batch_id,
+                    'batch_name': section.batch.name,
+                    'semester': section.semester_id,
+                },
+                'message': 'Section created.' if created else 'Section already exists.',
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+def _can_manage_academic_masters(user) -> bool:
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if user.is_superuser or user.is_staff:
+        return True
+    perms = get_user_permissions(user)
+    if any(
+        permission in perms
+        for permission in (
+            'academics.add_batch',
+            'academics.add_section',
+            'academics.manage_academics',
+            'academics.edit_academics',
+            'students.view_all_students',
+        )
+    ):
+        return True
+    try:
+        roles = {str(name).upper() for name in user.roles.values_list('name', flat=True)}
+    except Exception:
+        roles = set()
+    return bool(roles & {'ADMIN', 'COLLEGE_ADMIN', 'PRINCIPAL', 'IQAC'})
 
 
 class AllStaffListView(APIView):

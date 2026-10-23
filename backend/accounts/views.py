@@ -1,5 +1,6 @@
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from django.contrib.auth import get_user_model
 from .serializers import (
@@ -44,6 +45,8 @@ User = get_user_model()
 class CustomTokenObtainPairView(TokenObtainPairView):
     # Uses identifier-based serializer (identifier may be email, student reg_no, or staff staff_id)
     serializer_class = IdentifierTokenObtainPairSerializer
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'auth'
 
 
 class RegisterView(generics.CreateAPIView):
@@ -736,11 +739,32 @@ class ProfileUpdateView(APIView):
             if 'address_line3' in request.data:
                 student_profile.address_line3 = str(request.data.get('address_line3') or '').strip()
                 student_profile_changed = True
+            if 'address_line4' in request.data:
+                student_profile.address_line4 = str(request.data.get('address_line4') or '').strip()
+                student_profile_changed = True
             if 'district' in request.data:
                 student_profile.district = str(request.data.get('district') or '').strip()
                 student_profile_changed = True
             if 'pincode' in request.data:
                 student_profile.pincode = str(request.data.get('pincode') or '').strip()
+                student_profile_changed = True
+            if 'dept_roll_no' in request.data:
+                student_profile.dept_roll_no = str(request.data.get('dept_roll_no') or '').strip()
+                student_profile_changed = True
+            if 'section_roll_no' in request.data:
+                student_profile.section_roll_no = str(request.data.get('section_roll_no') or '').strip()
+                student_profile_changed = True
+            if 'degree' in request.data:
+                student_profile.degree = str(request.data.get('degree') or '').strip()
+                student_profile_changed = True
+            if 'gender' in request.data:
+                raw_g = str(request.data.get('gender') or '').strip().upper()
+                if raw_g in ('M', 'MALE'):
+                    student_profile.gender = 'MALE'
+                elif raw_g in ('F', 'FEMALE'):
+                    student_profile.gender = 'FEMALE'
+                elif raw_g:
+                    student_profile.gender = raw_g
                 student_profile_changed = True
             if 'father_name' in request.data:
                 student_profile.father_name = str(request.data.get('father_name') or '').strip()

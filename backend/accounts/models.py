@@ -189,6 +189,16 @@ def validate_roles_for_user(user, roles):
         'DISCIPLINE_COMMITTEE_ADMIN',
         'DISCIPLINE COMMITTEE',
         'DISCIPLINECOMMITTEEADMIN',
+        # Hostel / student facilities module
+        'COLLEGE_ADMIN',
+        'HOSTEL_ADMIN',
+        'WARDEN',
+        'DEPUTY_WARDEN',
+        'MATRON',
+        'MAINTENANCE_STAFF',
+        'MESS_COORDINATOR',
+        'TRANSPORT_COORDINATOR',
+        'SECURITY_STAFF',
     }
 
     # External staff can only have EXT_STAFF role

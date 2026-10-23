@@ -29,3 +29,4 @@ sqlparse==0.5.5
 typing_extensions==4.15.0
 docker==7.1.0
 pypdf>=4.0.0
+qrcode==8.2
