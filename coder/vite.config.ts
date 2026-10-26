@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const proxyTarget = (process.env.VITE_CODER_PROXY_TARGET || 'https://db.zynix.us').replace(/\/$/, '')
+const proxyTarget = (process.env.VITE_CODER_PROXY_TARGET || 'https://db.krgi.co.in').replace(/\/$/, '')
 
 export default defineConfig({
   plugins: [react()],

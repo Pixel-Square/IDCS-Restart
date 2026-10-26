@@ -24,9 +24,42 @@ Related documents:
 | 11 | No JWT revocation on logout, no per-account lockout, no 2FA, tokens in `localStorage`, no CSP | OTP throttle done (2026-10-23) |
 | 12 | Many endpoints still return `str(exception)` to the client | Fixed only in the analytics views |
 | 13 | No backup automation or CI in the repo | |
+| ACC-01–06 | `accounts` Critical/High findings (default passwords, X-Forwarded-For throttle bypass, no lockout, impersonation, token storage/revocation, JWT in URLs) | `docs/security/PHASE-1-A-ACCOUNTS.md`, awaiting approval |
+| ACC-07–20 | `accounts` Medium/Low findings | same report |
+| D-04–D-06 | Plaintext fingerprint templates, bank details, Google OAuth secrets | Phase 0 report §6 |
 | — | `is_staff` still acts as an admin shortcut in `timetable/views.py` `TimetableAssignmentViewSet.perform_create` / `perform_update` and in the timetable template/special-timetable querysets | |
 | — | `faculty_exam_marks` GET pulls live from a linked Google Sheet without checking the exam lock | |
 | — | Pre-existing failing tests unrelated to the security work: `academic_v2.tests_qp_type_api` secure-delete (passes a code where the view expects a UUID pk); `timetable.tests_venue` (imports a missing `Venue` model); six `timetable.tests_section_timetable_view` tests (fake `SimpleNamespace` user breaks `UserRateThrottle`) | |
+
+---
+
+## 2026-10-23: Phase 1, module A (`accounts`) audit (report only)
+
+Status: **no application code changed.** Report: `docs/security/PHASE-1-A-ACCOUNTS.md` (ACC-01–ACC-20, each with location, exploit, proposed diff and test).
+
+- Critical ACC-01: `bulk_reset_passwords` sets student password = reg_no and staff = staff_id, prints them, and nothing forces a change; the admin importer defaults to reg_no. Production status unknown — the report includes a count-only check to run on the server.
+- High: ACC-02 (forged `X-Forwarded-For` bypasses every DRF rate limit), ACC-03 (no lockout; `/admin/` unthrottled), ACC-04 (IQAC can impersonate superusers; fail-open grants), ACC-05 (JWT in localStorage, no rotation/blacklist/logout; migration plan keeps bearer for KR Tracker/KR-GATE), ACC-06 (JWT in query strings).
+- Owner decisions recorded in the Phase 0 report §7: option A (one deployment per college), backups in India, gateway planned, mobile apps in production.
+
+## 2026-10-23: Replaced `zynix.us` hostnames with `krgi.co.in` (owner request)
+
+- `deploy/cloudflared-idcs.yml`: removed the `idcs/db.zynix.us` duplicates; `coe`, `jadmin`, `jback2`, `mayav`, `api` now use `*.krgi.co.in`. **Before deploying**, create the DNS routes (`cloudflared tunnel route dns <tunnel> <host>`) for any new `krgi.co.in` names. Note that `jadmin` (port 3001), `jback2` (8002) and `api` (8004) are other services, not IDCS.
+- Deleted `deploy/nginx_{coe,db,idcs}_zynix.conf`: the `krgi.co.in` equivalents already exist (`nginx_coe.conf`, `db.krgi.co.in.conf`, `idcs.krgi.co.in.conf`), and renaming would have created duplicate `server_name`s. On the server, remove the matching `sites-enabled` links and reload Nginx.
+- `backend/templates/db_dashboard.html`: favicon and logo now come from `static/images/logo.svg` instead of being hotlinked from `cloud.zynix.us`.
+- `frontend/vite.config.ts` (dev `allowedHosts`), `coder/vite.config.ts` (dev proxy default), comments in `erp/settings.py` and `reporting/services_v2_acv2.py`, and the docs `HOSTING_FIX_SUMMARY.md`, `ENGINEERING_PHYSICS_FIX.md`, `docs/POWERBI_COURSE_DASHBOARD_API.md`.
+- Left as vendor credit (not instance hostnames): the KR Tracker footer link to `https://zynix.us` and the `og:title` "KR Group - Zynix". The committed `KR Tracker/web/*.apk` builds still contain the old strings until rebuilt.
+- Also added `docs/security/compliance/processor-register-DRAFT.md`.
+
+---
+
+## 2026-10-23: Phase 0 discovery and Phase 0.5 tenancy audit (report only)
+
+Status: **no application code changed.** Report: `docs/security/PHASE-0-DISCOVERY-AND-TENANCY.md`.
+
+- Added `docs/security/phase0/` with schema-only inventories (`model-inventory.json`: 306 models; `route-inventory.json`: 3,498 routes / 749 DRF views) and the scripts that build them. No personal data was read.
+- Key results: the system is **single-tenant** (7/306 models have a nullable `college` FK; "current college" = first active `College` row). Auth is SimpleJWT in `localStorage`, with tokens also accepted in query strings. Plaintext bank details, fingerprint templates and Google OAuth secrets. No Aadhaar field.
+- New findings T-01–T-09 (tenancy) and D-01–D-14 (to formalise in Phase 1) are listed in the report.
+- Blocked on decisions: tenancy model (silo / shared-DB+RLS / schema-per-tenant), `zynix.us` ownership, hosting region, payment gateway, mobile clients.
 
 ---
 

@@ -53,7 +53,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       host: true,
-      allowedHosts: ['idcs.krgi.co.in', 'idcs.zynix.us'],
+      allowedHosts: ['idcs.krgi.co.in'],
       port: 80,
       // Dev convenience: when the frontend is served by Vite (often :80) and the
       // Django API is on a different port (often :8000), proxy `/api/...` so

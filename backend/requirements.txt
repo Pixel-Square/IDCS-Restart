@@ -5,6 +5,8 @@ django-redis
 django-cors-headers==4.9.0
 djangorestframework==3.16.1
 djangorestframework_simplejwt==5.5.1
+django-axes==8.0.0
+argon2-cffi==23.1.0
 et_xmlfile==2.0.0
 gunicorn==25.0.3
 cryptography==46.0.5

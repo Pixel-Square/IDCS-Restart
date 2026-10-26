@@ -2,22 +2,18 @@ tunnel: 6e7be884-4322-43cb-b93b-795c39be0c0c
 credentials-file: /home/iqac2/.cloudflared/6e7be884-4322-43cb-b93b-795c39be0c0c.json
 
 ingress:
-  - hostname: idcs.zynix.us
-    service: http://localhost:80
-  - hostname: db.zynix.us
-    service: http://localhost:80
   - hostname: idcs.krgi.co.in
     service: http://localhost:80
   - hostname: db.krgi.co.in
     service: http://localhost:80
-  - hostname: coe.zynix.us
+  - hostname: coe.krgi.co.in
     service: http://localhost:80
-  - hostname: jadmin.zynix.us
+  - hostname: jadmin.krgi.co.in
     service: http://localhost:3001
-  - hostname: jback2.zynix.us
+  - hostname: jback2.krgi.co.in
     service: http://localhost:8002
-  - hostname: mayav.zynix.us
+  - hostname: mayav.krgi.co.in
     service: http://localhost:80
-  - hostname: api.zynix.us
+  - hostname: api.krgi.co.in
     service: http://127.0.0.1:8004
   - service: http_status:404
