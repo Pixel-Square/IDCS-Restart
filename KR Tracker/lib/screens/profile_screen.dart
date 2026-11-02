@@ -157,10 +157,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(40),
                             child: () {
-                              final pUrl = state.profileImageUrl ??
+                              final rawUrl = state.profileImageUrl ??
                                   (state.studentId.isNotEmpty
-                                      ? 'https://db.krgi.co.in/media/profile_images/${state.studentId}.jpg'
+                                      ? 'https://db.krgi.co.in/api/media/profile_images/${state.studentId}.jpg'
                                       : null);
+                              final pUrl = rawUrl?.replaceFirst('db.krgi.co.in/media/', 'db.krgi.co.in/api/media/');
                               return (pUrl != null && pUrl.isNotEmpty)
                                   ? Image.network(
                                       pUrl,

@@ -813,7 +813,33 @@ const buildGeneratedSection = (
   // Filter out Group Allocation Exception Courses. Subjects with no staff are NOT filtered out —
   // they will appear in the timetable with an ⚠️ UNASSIGNED marker so the admin
   // can see exactly which subjects are missing a faculty assignment.
+  //
+  // IMPORTANT: A subject listed in allExceptionCourses (group/special-period exclusions) must NOT
+  // be filtered out if it ALSO has any of the following exception rules configured:
+  //   • Credit-Based Period Allocation exception (courseExceptions)
+  //   • Class Type Exception rule (classTypeExceptions)
+  // This applies to ALL subjects given exception rules — not just specific courses.
   const rawSubjects = [...(snapshot.subjectStaff || [])];
+
+  // Helper: true if this subject matches any Credit-Based course exception rule
+  const hasCourseExceptionRuleForSubject = (subject: any): boolean => {
+    const sCode = getSubjectCode(subject).toUpperCase();
+    const sName = getSubjectName(subject).toUpperCase();
+    return courseExceptions.some((rule) => {
+      const rCode = (rule.course_code || '').toUpperCase();
+      const rName = (rule.course_name || '').toUpperCase();
+      return (rCode && (sCode === rCode || sCode.includes(rCode))) || (rName && sName.includes(rName));
+    });
+  };
+
+  // Helper: true if this subject's class type matches any Class Type Exception rule
+  const hasClassTypeExceptionForSubject = (subject: any): boolean => {
+    const subjectClassType = normalizeClassType(subject?.class_type, subject).toUpperCase();
+    return classTypeExceptions.some(
+      (rule) => (rule.classType || '').toUpperCase() === subjectClassType
+    );
+  };
+
   const filteredSubjects = rawSubjects.filter((subject) => {
     if (!getSubjectLabel(subject)) return false;
 
@@ -833,7 +859,18 @@ const buildGeneratedSection = (
       const eName = (e.course_name || '').toUpperCase();
       return (eCode && sCode.includes(eCode)) || (eName && sName.includes(eName));
     });
-    return !isExcepted;
+
+    if (isExcepted) {
+      // Even if a subject is in the group/special-period exclusion list, it must still be
+      // scheduled if it has its own exception rule. This covers ALL subjects configured in
+      // the Exception Rules panel — Credit-Based course exceptions AND class-type exceptions.
+      if (hasCourseExceptionRuleForSubject(subject)) return true;
+      if (hasClassTypeExceptionForSubject(subject)) return true;
+      // No exception rule found for this subject — correctly exclude from normal scheduling.
+      return false;
+    }
+
+    return true;
   });
 
   // Schedule ALL subjects based on Priority 1: Course Exception, Priority 2: Class Type Exception, Priority 3: Credit-Based Allocation
@@ -849,6 +886,35 @@ const buildGeneratedSection = (
     const secKey = snapshot.sectionKey || '';
     const snapDept = (snapshot.department || '').toUpperCase();
     const snapYear = snapshot.year ? Number(snapshot.year) : null;
+    const snapSectionName = (snapshot.sectionName || '').toUpperCase();
+
+    // Helper to check if a dept string matches snapshot dept
+    const deptMatches = (selectedDepts: string[]) => {
+      if (!selectedDepts || selectedDepts.length === 0) return true; // no dept filter = match all
+      return selectedDepts.some((d) => {
+        const dUpper = d.toUpperCase();
+        if (dUpper === 'S&H') return snapDept.includes('SCIENCE') || snapDept.includes('S&H') || snapDept.includes('SH') || snapDept.includes('HUMANIT');
+        if (dUpper === 'AI&DS') return snapDept.includes('AI') && (snapDept.includes('DS') || snapDept.includes('DATA'));
+        if (dUpper === 'AIML') return snapDept.includes('AI') && (snapDept.includes('ML') || snapDept.includes('MACHINE'));
+        if (dUpper === 'CIVIL') return snapDept === 'CIVIL' || snapDept === 'CE' || snapDept === 'CIV' || snapDept.includes('CIVIL');
+        if (dUpper === 'MECH') return snapDept === 'MECH' || snapDept === 'ME' || snapDept === 'MEC' || snapDept.includes('MECH') || snapDept.includes('MECHANICAL');
+        return snapDept.includes(dUpper);
+      });
+    };
+
+    // Helper to check semester match
+    const semMatches = (ruleSem: number | null) => {
+      if (ruleSem === null) return true; // no semester filter = match all
+      if (snapYear !== null) {
+        const minSemForYear = (snapYear - 1) * 2 + 1;
+        const maxSemForYear = snapYear * 2;
+        if (ruleSem === minSemForYear || ruleSem === maxSemForYear) return true;
+      }
+      // Also try direct semester match from snapshot
+      const snapSem = (snapshot as any).semester;
+      if (snapSem !== undefined && snapSem !== null && Number(snapSem) === ruleSem) return true;
+      return false;
+    };
 
     return courseExceptions.find((rule) => {
       // 1. Course Code / Name Match
@@ -857,39 +923,48 @@ const buildGeneratedSection = (
       const courseMatched = (rCode && sCode === rCode) || (rCode && sCode.includes(rCode)) || (rName && sName.includes(rName));
       if (!courseMatched) return false;
 
-      // 2. Section Mapping Match
       const selectedSecKeys = rule.selected_section_keys || [];
       const selectedDepts = rule.selected_departments || [];
       const ruleSem = rule.semester !== null && rule.semester !== undefined ? Number(rule.semester) : null;
 
-      // If specific section keys are selected:
+      // 2a. If specific section keys are saved — try direct ID/key match first
       if (selectedSecKeys.length > 0) {
-        return selectedSecKeys.some((k) => k.includes(secIdStr) || (secKey && k.includes(secKey)));
-      }
+        const directMatch = selectedSecKeys.some((k) =>
+          k.includes(secIdStr) || (secKey && k.includes(secKey))
+        );
+        if (directMatch) return true;
 
-      // If specific departments are selected:
-      if (selectedDepts.length > 0) {
-        const deptMatches = selectedDepts.some((d) => {
-          const dUpper = d.toUpperCase();
-          if (dUpper === 'S&H') return snapDept.includes('SCIENCE') || snapDept.includes('S&H') || snapDept.includes('SH') || snapDept.includes('HUMANIT');
-          if (dUpper === 'AI&DS') return snapDept.includes('AI') && (snapDept.includes('DS') || snapDept.includes('DATA'));
-          if (dUpper === 'AIML') return snapDept.includes('AI') && (snapDept.includes('ML') || snapDept.includes('MACHINE'));
-          if (dUpper === 'CIVIL') return snapDept === 'CIVIL' || snapDept === 'CE' || snapDept === 'CIV' || snapDept.includes('CIVIL');
-          if (dUpper === 'MECH') return snapDept === 'MECH' || snapDept === 'ME' || snapDept === 'MEC' || snapDept.includes('MECH') || snapDept.includes('MECHANICAL');
-          return snapDept.includes(dUpper);
+        // 2b. Fallback: extract dept + section name from stored key (format: sec-{id}-{DEPT}-{Name})
+        //     and match against snapshot dept + name. This handles DB migration where section IDs differ.
+        const keyDeptNameMatch = selectedSecKeys.some((k) => {
+          // e.g. "sec-27-IT-A" → parts[2]="IT", parts[3]="A"
+          const parts = k.replace(/^(sec|mixed)-\d+-/, '').split('-');
+          if (parts.length >= 2) {
+            const keyDept = parts.slice(0, parts.length - 1).join('-').toUpperCase();
+            const keyName = parts[parts.length - 1].toUpperCase();
+            const nameMatches = snapSectionName.endsWith(`-${keyName}`) || snapSectionName === keyName || snapSectionName.endsWith(keyName);
+            const kDeptOk = deptMatches([keyDept]);
+            return kDeptOk && nameMatches;
+          }
+          return false;
         });
-        if (!deptMatches) return false;
+        if (keyDeptNameMatch) return true;
+
+        // 2c. Last fallback: if selectedDepts is also set, match by dept + semester
+        if (selectedDepts.length > 0) {
+          return deptMatches(selectedDepts) && semMatches(ruleSem);
+        }
+        return false;
       }
 
-      // If semester is specified:
+      // 3. If specific departments are selected (no section keys):
+      if (selectedDepts.length > 0) {
+        if (!deptMatches(selectedDepts)) return false;
+      }
+
+      // 4. If semester is specified:
       if (ruleSem !== null) {
-        // Map snapshot year to semester range or compare directly
-        if (snapYear !== null) {
-          const minSemForYear = (snapYear - 1) * 2 + 1;
-          const maxSemForYear = snapYear * 2;
-          const semMatches = ruleSem === minSemForYear || ruleSem === maxSemForYear;
-          if (!semMatches) return false;
-        }
+        if (!semMatches(ruleSem)) return false;
       }
 
       return true;
@@ -1495,7 +1570,7 @@ export default function TimetableGenerator({ templates, initialView = 'generator
   const [deletedPeriods, setDeletedPeriods] = useState<Record<string, string[]>>({});
   const [deletedPeriodDetails, setDeletedPeriodDetails] = useState<Record<string, UnfilledPeriodItem[]>>({});
   const [dragOverCellKey, setDragOverCellKey] = useState<string | null>(null);
-  const [activeNavSemester, setActiveNavSemester] = useState<number>(2);
+  const [activeNavSemester, setActiveNavSemester] = useState<number>(1);
   const [deleteConfirmModal, setDeleteConfirmModal] = useState<{
     isOpen: boolean;
     deletedCount: number;
@@ -1544,6 +1619,14 @@ export default function TimetableGenerator({ templates, initialView = 'generator
 
   const loadedSnapshotCount = Object.keys(sectionSnapshots).length;
   const canGenerateTimetable = Boolean(selectedTemplate);
+
+  // Auto-reset the active navigator semester whenever the selected template changes
+  // so ODD templates start at Semester 1 and EVEN templates start at Semester 2
+  useEffect(() => {
+    if (selectedTemplate) {
+      setActiveNavSemester(selectedTemplate.semesterType === 'odd' ? 1 : 2);
+    }
+  }, [selectedTemplate?.id, selectedTemplate?.semesterType]);
 
   useEffect(() => {
     async function loadStaff() {

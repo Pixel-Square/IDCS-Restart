@@ -507,10 +507,18 @@ const ArrearList: React.FC = () => {
                     />
                   </td>
                   <td style={{ border: '1px solid #ccc' }}>
-                    <input
+                    <select
                       value={row.sem}
                       onChange={(e) => updateRow(idx, 'sem', e.target.value)}
-                    />
+                      style={{ width: '100%', padding: '4px' }}
+                    >
+                      <option value="">Select Sem</option>
+                      {['SEM1', 'SEM2', 'SEM3', 'SEM4', 'SEM5', 'SEM6', 'SEM7', 'SEM8'].map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
                   </td>
                   <td style={{ border: '1px solid #ccc' }}>
                     <input

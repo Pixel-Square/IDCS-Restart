@@ -80,21 +80,28 @@ export default function StaffApprovalsPage() {
   const [processing, setProcessing] = useState<boolean>(false);
   const [actionSuccessMsg, setActionSuccessMsg] = useState<string | null>(null);
 
-  const loadApprovals = async () => {
-    setLoading(true);
+  const loadApprovals = async (isBackground = false) => {
+    if (!isBackground) setLoading(true);
     try {
       const data = await fetchDisciplineApprovals();
       setApprovals(data);
     } catch (e) {
       console.error('Failed to load approvals:', e);
     } finally {
-      setLoading(false);
+      if (!isBackground) setLoading(false);
     }
   };
 
   useEffect(() => {
     loadApprovals();
-  }, []);
+    // Auto-refresh pending approvals every 5s so incoming discipline referrals appear live
+    const interval = setInterval(() => {
+      if (!activeLog && !showTrailModal && !processing) {
+        loadApprovals(true);
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [activeLog, showTrailModal, processing]);
 
   const handleOpenActionModal = (log: DisciplineLog) => {
     setActiveLog(log);
@@ -236,7 +243,7 @@ export default function StaffApprovalsPage() {
 
         <div className="flex items-center gap-2">
           <button
-            onClick={loadApprovals}
+            onClick={() => loadApprovals(false)}
             disabled={loading}
             className="p-2.5 text-slate-600 hover:text-indigo-600 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 disabled:opacity-50 cursor-pointer"
           >
@@ -1015,7 +1022,9 @@ export default function StaffApprovalsPage() {
                     Approval Flow Pipeline & Stage Status
                   </span>
                   <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200/60">
-                    Step {Math.min((activeLog.current_step_index ?? 0) + 1, activeLog.flow_stages?.length ?? ((activeLog.flow_roles?.length ?? 1) + 1))} of {activeLog.flow_stages?.length ?? ((activeLog.flow_roles?.length ?? 1) + 1)}
+                    {activeLog.status === 'RESOLVED'
+                      ? 'Completed'
+                      : `Step ${Math.min((activeLog.current_step_index ?? 0) + 1, activeLog.flow_roles?.length ?? 1)} of ${activeLog.flow_roles?.length ?? 1}`}
                   </span>
                 </div>
 
@@ -1043,13 +1052,13 @@ export default function StaffApprovalsPage() {
                             <span className={`mt-1 text-[9px] font-extrabold uppercase tracking-tight ${
                               stage.is_done ? 'text-emerald-700' : stage.is_current ? 'text-amber-700 font-black' : 'text-slate-400'
                             }`}>
-                              {stage.status === 'SUBMITTED' ? 'Submitted' : stage.status === 'FORWARDED' ? 'Forwarded' : stage.status === 'PENDING' ? 'Pending' : stage.status === 'FINALIZER' ? 'Finalizer' : 'Upcoming'}
+                              {stage.status === 'SUBMITTED' ? 'Submitted' : stage.is_done ? (isLast ? 'Finalized' : 'Forwarded') : stage.is_current ? 'Pending' : (stage.status === 'FINALIZER' || isLast) ? 'Finalizer' : 'Upcoming'}
                             </span>
                             <span className="text-[10px] font-extrabold text-slate-900 leading-tight">
                               {stage.assigned_name}
                             </span>
                             <span className={`text-[8px] font-semibold px-1.5 py-0.2 rounded mt-0.5 ${
-                              isFirst || isLast ? 'text-slate-400' : 'text-indigo-700 bg-indigo-50'
+                              isFirst ? 'text-slate-400 bg-slate-50' : isLast ? 'text-purple-700 bg-purple-50' : 'text-indigo-700 bg-indigo-50'
                             }`}>
                               {stage.role_title}
                             </span>
@@ -1069,13 +1078,15 @@ export default function StaffApprovalsPage() {
                           <span className="text-[10px] font-extrabold text-slate-900 leading-tight">
                             {activeLog.reported_by_name || 'Reporting Staff'}
                           </span>
-                          <span className="text-[8px] font-semibold text-slate-400">
+                          <span className="text-[8px] font-semibold text-slate-400 bg-slate-50 px-1.5 py-0.2 rounded mt-0.5">
                             Submitter (Origin)
                           </span>
                         </div>
 
-                        {/* Intermediate Stages in Flow */}
+                        {/* Stages in Flow */}
                         {activeLog.flow_roles?.map((role, idx) => {
+                          const totalRoles = activeLog.flow_roles?.length ?? 0;
+                          const isLast = idx === totalRoles - 1;
                           const currIdx = activeLog.current_step_index ?? 0;
                           const isPast = idx < currIdx;
                           const isCurrent = idx === currIdx && activeLog.status !== 'RESOLVED';
@@ -1097,44 +1108,24 @@ export default function StaffApprovalsPage() {
                                   ? 'bg-amber-500 text-white animate-pulse ring-amber-100'
                                   : 'bg-slate-200 text-slate-500'
                               }`}>
-                                {isDone ? '✓' : isCurrent ? '🕒' : (idx + 2)}
+                                {isDone ? '✓' : isCurrent ? '🕒' : isLast ? '★' : (idx + 1)}
                               </div>
                               <span className={`mt-1 text-[9px] font-extrabold uppercase tracking-tight ${
                                 isDone ? 'text-emerald-700' : isCurrent ? 'text-amber-700 font-black' : 'text-slate-400'
                               }`}>
-                                {isDone ? 'Forwarded' : isCurrent ? 'Pending' : 'Upcoming'}
+                                {isDone ? (isLast ? 'Finalized' : 'Forwarded') : isCurrent ? 'Pending' : isLast ? 'Finalizer' : 'Upcoming'}
                               </span>
                               <span className="text-[10px] font-extrabold text-slate-900 leading-tight">
                                 {performerName}
                               </span>
-                              <span className="text-[8px] font-semibold text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded mt-0.5">
-                                {role.replace(/_/g, ' ')}
+                              <span className={`text-[8px] font-semibold px-1.5 py-0.2 rounded mt-0.5 ${
+                                isLast ? 'text-purple-700 bg-purple-50' : 'text-indigo-700 bg-indigo-50'
+                              }`}>
+                                {role.replace(/_/g, ' ')}{isLast ? ' (Finalizer)' : ''}
                               </span>
                             </div>
                           );
                         })}
-
-                        {/* Final Approver Node */}
-                        <div className="flex flex-col items-center min-w-[76px] text-center">
-                          <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shadow-xs ring-4 ring-white ${
-                            activeLog.status === 'RESOLVED'
-                              ? 'bg-emerald-600 text-white ring-emerald-100'
-                              : 'bg-slate-200 text-slate-500'
-                          }`}>
-                            ★
-                          </div>
-                          <span className={`mt-1 text-[9px] font-extrabold uppercase tracking-tight ${
-                            activeLog.status === 'RESOLVED' ? 'text-emerald-700' : 'text-slate-400'
-                          }`}>
-                            {activeLog.status === 'RESOLVED' ? 'Finalized' : 'Finalizer'}
-                          </span>
-                          <span className="text-[10px] font-extrabold text-slate-900 leading-tight">
-                            {activeLog.flow_authorities?.[activeLog.flow_roles?.[activeLog.flow_roles.length - 1]?.toUpperCase() ?? ''] || 'Final Approver'}
-                          </span>
-                          <span className="text-[8px] font-semibold text-slate-400">
-                            Clearance
-                          </span>
-                        </div>
                       </>
                     )}
                   </div>

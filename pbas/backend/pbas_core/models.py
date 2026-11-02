@@ -1,0 +1,182 @@
+import uuid
+from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.db import models
+from accounts.models import Department as AcademicDepartment, StaffProfile, StudentProfile, College
+from .utils import upload_to_pbas_submission
+
+class PBASCustomDepartment(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=255)
+    academic_department = models.OneToOneField(
+        AcademicDepartment,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name='pbas_department',
+    )
+    accesses = models.JSONField(default=list, blank=True)
+    show_in_submission = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='pbas_custom_departments_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+
+    def __str__(self) -> str:
+        return self.title
+
+class PBASApprovalFlow(models.Model):
+    staff_flow = models.JSONField(default=list, blank=True)
+    student_flow = models.JSONField(default=list, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'PBAS Approval Flow'
+        verbose_name_plural = 'PBAS Approval Flows'
+
+    def __str__(self) -> str:
+        return f"PBAS Approval Flow (Staff: {len(self.staff_flow)} roles, Student: {len(self.student_flow)} roles)"
+
+class PBASNode(models.Model):
+    class Audience(models.TextChoices):
+        FACULTY = 'faculty', 'Faculty'
+        STUDENT = 'student', 'Student'
+        BOTH = 'both', 'Both'
+
+    class InputMode(models.TextChoices):
+        UPLOAD = 'upload', 'Upload'
+        LINK = 'link', 'Link'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    department = models.ForeignKey(
+        PBASCustomDepartment,
+        related_name='nodes',
+        on_delete=models.CASCADE,
+    )
+    parent = models.ForeignKey(
+        'self',
+        null=True,
+        blank=True,
+        related_name='children',
+        on_delete=models.CASCADE,
+    )
+    label = models.CharField(max_length=500, default='', blank=True)
+    audience = models.CharField(max_length=16, choices=Audience.choices, default=Audience.BOTH)
+    input_mode = models.CharField(max_length=16, choices=InputMode.choices, default=InputMode.UPLOAD)
+    form_schema = models.JSONField(default=list, blank=True)
+    link = models.URLField(null=True, blank=True)
+    uploaded_name = models.CharField(max_length=255, null=True, blank=True)
+    limit = models.IntegerField(null=True, blank=True)
+    pbas_credit = models.IntegerField(null=True, blank=True)
+    mentor_credit = models.IntegerField(null=True, blank=True)
+    college_required = models.BooleanField(default=False)
+    position = models.IntegerField(default=0)
+    approvers = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name='pbas_approver_nodes')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('position', 'created_at')
+
+    def __str__(self) -> str:
+        return self.label or str(self.id)
+
+    @property
+    def is_leaf(self) -> bool:
+        try:
+            return not self.children.exists()
+        except Exception:
+            return False
+
+class PBASNodeApproverHistory(models.Model):
+    class Action(models.TextChoices):
+        ASSIGNED = 'assigned', 'Assigned'
+        REMOVED = 'removed', 'Removed'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    node = models.ForeignKey(PBASNode, on_delete=models.CASCADE, related_name='approver_history')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='+')
+    action = models.CharField(max_length=16, choices=Action.choices)
+    changed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='+')
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('-timestamp',)
+
+class PBASSubmission(models.Model):
+    class SubmissionType(models.TextChoices):
+        FORM = 'form', 'Form'
+        UPLOAD = 'upload', 'Upload'
+        LINK = 'link', 'Link'
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        APPROVED = 'approved', 'Approved'
+        REJECTED = 'rejected', 'Rejected'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    node = models.ForeignKey(PBASNode, on_delete=models.CASCADE, related_name='submissions')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='pbas_submissions')
+    submission_type = models.CharField(max_length=16, choices=SubmissionType.choices, default=SubmissionType.FORM)
+    form_data = models.JSONField(default=dict, blank=True)
+    link = models.URLField(null=True, blank=True)
+    file = models.FileField(null=True, blank=True, upload_to=upload_to_pbas_submission)
+    file_name = models.CharField(max_length=255, null=True, blank=True)
+    college = models.ForeignKey(College, null=True, blank=True, on_delete=models.SET_NULL, related_name='pbas_submissions')
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    current_step = models.CharField(max_length=64, default='', blank=True)
+    approval_history = models.JSONField(default=list, blank=True)
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='pbas_approved_submissions')
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+
+    def save(self, *args, **kwargs):
+        if self.file and not self.file_name:
+            try:
+                self.file_name = getattr(self.file, 'name', None)
+            except Exception:
+                pass
+        return super().save(*args, **kwargs)
+
+class PBASVerificationTicket(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        MENTOR_PENDING = 'mentor_pending', 'Mentor Pending'
+        DEPT_PENDING = 'dept_pending', 'Department Pending'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    submission = models.OneToOneField(PBASSubmission, on_delete=models.CASCADE, related_name='verification_ticket')
+    student = models.ForeignKey(StudentProfile, on_delete=models.CASCADE, related_name='pbas_verification_tickets')
+    mentor = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='pbas_verification_tickets')
+    department = models.ForeignKey(PBASCustomDepartment, on_delete=models.CASCADE, related_name='verification_tickets')
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.DRAFT)
+    forwarded_to_mentor_at = models.DateTimeField(null=True, blank=True)
+    forwarded_to_department_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+
+class PBASDuration(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=255)
+    start_date = models.DateField()
+    end_date = models.DateField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('-start_date',)
+
+    def __str__(self) -> str:
+        return f"{self.title} ({self.start_date} to {self.end_date})"

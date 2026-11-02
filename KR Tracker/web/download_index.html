@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Download KR Track - Official Mobile App</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    body {
+      min-height: 100vh;
+      background: radial-gradient(circle at 50% 0%, #1e1b4b 0%, #0f172a 50%, #020617 100%);
+      color: #f8fafc;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+    }
+    .card {
+      width: 100%;
+      max-width: 440px;
+      background: rgba(30, 41, 59, 0.7);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 32px;
+      padding: 36px 28px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 40px rgba(99, 102, 241, 0.15);
+      text-align: center;
+    }
+    .app-icon {
+      width: 88px;
+      height: 88px;
+      margin: 0 auto 20px;
+      background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%);
+      border-radius: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 12px 28px -4px rgba(99, 102, 241, 0.5);
+    }
+    .app-icon svg {
+      width: 46px;
+      height: 46px;
+      fill: none;
+      stroke: white;
+      stroke-width: 2.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: #34d399;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .badge-dot {
+      width: 6px;
+      height: 6px;
+      background: #10b981;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.8); }
+    }
+    h1 {
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      margin-bottom: 6px;
+      color: #ffffff;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: #94a3b8;
+      margin-bottom: 24px;
+      line-height: 1.5;
+    }
+    .features {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      margin-bottom: 28px;
+    }
+    .feature-chip {
+      padding: 6px 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #cbd5e1;
+    }
+    .btn-download {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      padding: 16px 24px;
+      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+      color: #ffffff;
+      text-decoration: none;
+      font-size: 15px;
+      font-weight: 700;
+      border-radius: 20px;
+      box-shadow: 0 12px 24px -6px rgba(99, 102, 241, 0.5);
+      transition: all 0.2s ease;
+      cursor: pointer;
+      border: none;
+    }
+    .btn-download:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 16px 28px -6px rgba(99, 102, 241, 0.6);
+      background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+    }
+    .btn-download:active {
+      transform: translateY(0);
+    }
+    .btn-download svg {
+      width: 20px;
+      height: 20px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2.2;
+    }
+    .file-meta {
+      margin-top: 10px;
+      font-size: 11px;
+      color: #64748b;
+    }
+    .instructions {
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      text-align: left;
+    }
+    .instructions h3 {
+      font-size: 12px;
+      font-weight: 700;
+      color: #cbd5e1;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 10px;
+    }
+    .instructions ol {
+      padding-left: 18px;
+      font-size: 11px;
+      color: #94a3b8;
+      line-height: 1.8;
+    }
+    .footer {
+      margin-top: 20px;
+      font-size: 11px;
+      color: #64748b;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="app-icon">
+      <svg viewBox="0 0 24 24">
+        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+      </svg>
+    </div>
+    
+    <div class="badge">
+      <span class="badge-dot"></span>
+      Release Ready • v1.0.0
+    </div>
+
+    <h1>KR Track</h1>
+    <p class="subtitle">Autonomous Campus Management & Online Examination Assessment Hub</p>
+
+    <div class="features">
+      <span class="feature-chip">📝 Proctored Exams</span>
+      <span class="feature-chip">🛡️ Full-Screen Lock</span>
+      <span class="feature-chip">🚫 Anti-Screenshot</span>
+      <span class="feature-chip">🎫 Smart GatePass</span>
+      <span class="feature-chip">⚡ Quick Scanner</span>
+    </div>
+
+    <a href="/KR_Track.apk" class="btn-download" download="KR_Track.apk">
+      <svg viewBox="0 0 24 24">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+      </svg>
+      Download KR Track APK
+    </a>
+
+    <div class="file-meta">
+      Package: <strong>KR_Track.apk</strong> (~73 MB) • Android 8.0+
+    </div>
+
+    <div class="instructions">
+      <h3>Quick Installation Steps</h3>
+      <ol>
+        <li>Tap <strong>Download KR Track APK</strong> above.</li>
+        <li>Open the downloaded file from notifications or file manager.</li>
+        <li>If prompted, enable <em>"Install unknown apps"</em> for your browser.</li>
+        <li>Launch KR Track and sign in with your Register Number / Staff ID.</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="footer">
+    K. Ramakrishnan College of Technology (Autonomous) • IDCS Systems
+  </div>
+</body>
+</html>

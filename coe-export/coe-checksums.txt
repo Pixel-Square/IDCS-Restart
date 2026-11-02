@@ -1,0 +1,3 @@
+adf2d44c52405afe81be9216edc01b4daeb0babf873beb8f55e065c334f72ee5  /home/iqac/OLD BRANCHES IDCS/IDCS-Restart/coe-export/coe_data_only.sql
+853c785543ebd7ac3843b246cc604e183a6841220006ca168bb03969055a0038  /home/iqac/OLD BRANCHES IDCS/IDCS-Restart/coe-export/coe-table-counts.txt
+2fb2cb6c80f5eede0160e4a8f4d859dacd2728216bdc360805fc536a92429296  /home/iqac/OLD BRANCHES IDCS/IDCS-Restart/coe-export/COE-INTEGRATION-MANIFEST.md

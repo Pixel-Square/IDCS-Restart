@@ -1,0 +1,8 @@
+# Web Server:
+flutter run -d web-server --web-hostname 0.0.0.0 --web-port 8066
+
+# APK Download Links:
+# Landing Page: http://192.168.65.178:8088/
+# Direct APK:   http://192.168.65.178:8088/KR_Track.apk
+# One-click rebuild & serve script:
+./build_apk.sh

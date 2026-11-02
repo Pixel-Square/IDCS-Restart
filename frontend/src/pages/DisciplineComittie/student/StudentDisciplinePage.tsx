@@ -47,8 +47,8 @@ export default function StudentDisciplinePage() {
   const [uploadSuccess, setUploadSuccess] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const loadStudentIncidents = async () => {
-    setLoading(true);
+  const loadStudentIncidents = async (isBackground = false) => {
+    if (!isBackground) setLoading(true);
     try {
       const data = await fetchStudentMyIncidents();
       setPendingActions(data.pending_actions || []);
@@ -56,13 +56,20 @@ export default function StudentDisciplinePage() {
     } catch (e) {
       console.error('Failed to load student discipline records:', e);
     } finally {
-      setLoading(false);
+      if (!isBackground) setLoading(false);
     }
   };
 
   useEffect(() => {
     loadStudentIncidents();
-  }, []);
+    // Auto-refresh student actions & discipline records every 5s
+    const interval = setInterval(() => {
+      if (!activeUploadLog && !uploading) {
+        loadStudentIncidents(true);
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [activeUploadLog, uploading]);
 
   const handleOpenUploadModal = (log: DisciplineLog) => {
     setActiveUploadLog(log);
@@ -141,7 +148,7 @@ export default function StudentDisciplinePage() {
         </div>
 
         <button
-          onClick={loadStudentIncidents}
+          onClick={() => loadStudentIncidents(false)}
           disabled={loading}
           className="p-2.5 text-slate-600 hover:text-indigo-600 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 disabled:opacity-50 cursor-pointer w-fit"
         >

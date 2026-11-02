@@ -125,7 +125,7 @@ class DisciplineIncidentLogSerializer(serializers.ModelSerializer):
         if not student:
             return None
 
-        from academics.models import AcademicYear, Department
+        from academics.models import AcademicYear, Department, DepartmentRole
         from academics.services import authority_resolver
 
         academic_year = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
@@ -140,14 +140,24 @@ class DisciplineIncidentLogSerializer(serializers.ModelSerializer):
                 dept = Department.objects.filter(
                     Q(name__iexact=obj.department_name) | Q(short_name__iexact=obj.department_name)
                 ).first()
-            return authority_resolver.get_department_hod_by_department(dept, academic_year) if dept and academic_year else None
+            staff = authority_resolver.get_department_hod_by_department(dept, academic_year) if dept and academic_year else None
+            if not staff and dept:
+                hod_role = DepartmentRole.objects.filter(department=dept, role='HOD', is_active=True).order_by('-academic_year__id').select_related('staff__user').first()
+                if hod_role:
+                    staff = hod_role.staff
+            return staff
         elif role_code == 'AHOD':
             dept = authority_resolver._get_student_department(student)
             if not dept and obj.department_name:
                 dept = Department.objects.filter(
                     Q(name__iexact=obj.department_name) | Q(short_name__iexact=obj.department_name)
                 ).first()
-            return authority_resolver.get_department_ahod_by_department(dept, academic_year) if dept and academic_year else None
+            staff = authority_resolver.get_department_ahod_by_department(dept, academic_year) if dept and academic_year else None
+            if not staff and dept:
+                ahod_role = DepartmentRole.objects.filter(department=dept, role='AHOD', is_active=True).order_by('-academic_year__id').select_related('staff__user').first()
+                if ahod_role:
+                    staff = ahod_role.staff
+            return staff
         return None
 
     def get_assigned_approver_name(self, obj):
@@ -183,6 +193,9 @@ class DisciplineIncidentLogSerializer(serializers.ModelSerializer):
     def get_flow_stages(self, obj):
         """
         Returns the sequential list of stages in the forward approval ladder with exact assigned users.
+        The ladder consists of:
+        0. Submitter (Origin)
+        1..N. The sequential approval roles from obj.flow_roles (where the last role is the Finalizer/Approver).
         """
         authorities = self.get_flow_authorities(obj)
         flow_roles = obj.flow_roles or []
@@ -196,19 +209,22 @@ class DisciplineIncidentLogSerializer(serializers.ModelSerializer):
             'step_index': 0,
             'role_key': 'SUBMITTER',
             'role_title': 'Submitter (Origin)',
-            'assigned_name': authorities.get('SUBMITTER', 'Reporting Faculty'),
+            'assigned_name': authorities.get('SUBMITTER', obj.reported_by_name or 'Reporting Faculty'),
             'status': 'SUBMITTED',
             'is_done': True,
             'is_current': False,
         })
 
-        # Intermediate Stages
+        total_flow_roles = len(flow_roles)
         for idx, role in enumerate(flow_roles):
             role_clean = role.strip().upper()
-            is_done = idx < current_idx or obj.status == 'RESOLVED'
-            is_current = idx == current_idx and obj.status != 'RESOLVED'
+            is_last = (idx == total_flow_roles - 1)
+            is_resolved = (obj.status == 'RESOLVED')
+            is_past = (idx < current_idx)
+            is_current = (idx == current_idx and not is_resolved)
+            is_done = is_past or is_resolved
 
-            # Look for specific action performed by this role if already forwarded
+            # Look for specific action performed by this role if already forwarded or approved
             past_action = next(
                 (a for a in actions if a.role_performed and a.role_performed.strip().upper() == role_clean and a.action_type in ['FORWARDED', 'APPROVED']),
                 None
@@ -217,31 +233,22 @@ class DisciplineIncidentLogSerializer(serializers.ModelSerializer):
             expected_authority_name = authorities.get(role_clean, role.replace('_', ' '))
             performer_name = past_action.user_name if (past_action and past_action.user_name) else expected_authority_name
 
+            if is_last:
+                role_title = f"{role.replace('_', ' ')} (Finalizer)"
+                stage_status = 'RESOLVED' if is_resolved else ('PENDING' if is_current else 'FINALIZER')
+            else:
+                role_title = role.replace('_', ' ')
+                stage_status = 'FORWARDED' if is_done else ('PENDING' if is_current else 'UPCOMING')
+
             stages.append({
                 'step_index': idx + 1,
                 'role_key': role_clean,
-                'role_title': role.replace('_', ' '),
+                'role_title': role_title,
                 'assigned_name': performer_name,
-                'status': 'FORWARDED' if is_done else ('PENDING' if is_current else 'UPCOMING'),
+                'status': stage_status,
                 'is_done': is_done,
                 'is_current': is_current,
             })
-
-        # Finalizer Stage
-        is_final_done = obj.status == 'RESOLVED'
-        is_final_current = current_idx >= len(flow_roles) and not is_final_done
-        final_role = flow_roles[-1] if flow_roles else 'FINAL_APPROVER'
-        final_authority_name = authorities.get(final_role.strip().upper(), 'Final Approver')
-
-        stages.append({
-            'step_index': len(flow_roles) + 1,
-            'role_key': 'FINAL_APPROVER',
-            'role_title': 'Final Approver',
-            'assigned_name': final_authority_name,
-            'status': 'RESOLVED' if is_final_done else ('PENDING' if is_final_current else 'UPCOMING'),
-            'is_done': is_final_done,
-            'is_current': is_final_current,
-        })
 
         return stages
 

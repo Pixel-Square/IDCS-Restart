@@ -89,8 +89,8 @@ export default function StaffLogsPage() {
   const [selectedLog, setSelectedLog] = useState<DisciplineLog | null>(null);
   const [showTrailModal, setShowTrailModal] = useState<boolean>(false);
 
-  const loadLogs = async () => {
-    setLoading(true);
+  const loadLogs = async (isBackground = false) => {
+    if (!isBackground) setLoading(true);
     try {
       const me = getCachedMe();
       const meFullName = me ? `${me.first_name || ''} ${me.last_name || ''}`.trim() : '';
@@ -111,13 +111,20 @@ export default function StaffLogsPage() {
     } catch (e) {
       console.error('Failed to load my submissions:', e);
     } finally {
-      setLoading(false);
+      if (!isBackground) setLoading(false);
     }
   };
 
   useEffect(() => {
     loadLogs();
-  }, [statusFilter, severityFilter, deptFilter, selectedDate]);
+    // Auto-refresh staff submitted logs every 6s in background when modal is not open
+    const interval = setInterval(() => {
+      if (!selectedLog && !showTrailModal) {
+        loadLogs(true);
+      }
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [statusFilter, severityFilter, deptFilter, selectedDate, selectedLog, showTrailModal]);
 
   // Derived departments combining backend master depts & logs
   const departmentOptions = useMemo(() => {
@@ -238,7 +245,7 @@ export default function StaffLogsPage() {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={loadLogs}
+              onClick={() => loadLogs(false)}
               disabled={loading}
               className="p-2 text-slate-600 hover:text-indigo-600 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
             >

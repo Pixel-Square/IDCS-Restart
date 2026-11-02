@@ -241,7 +241,7 @@ class _AuthScreenState extends State<AuthScreen> {
               // 2. Back Button (< only, no circular outline)
               SafeArea(
                 child: Padding(
-                  padding: const EdgeInsets.only(left: 12.0, top: 12.0),
+                  padding: const EdgeInsets.only(left: 12.0, top: 4.0),
                   child: GestureDetector(
                     onTap: _onBack,
                     behavior: HitTestBehavior.opaque,
@@ -250,29 +250,29 @@ class _AuthScreenState extends State<AuthScreen> {
                       child: Icon(
                         Icons.arrow_back_ios_new_rounded,
                         color: Colors.white,
-                        size: 20,
+                        size: 18,
                       ),
                     ),
                   ),
                 ),
               ),
 
-              // 3. Official KR Track Logo Emblem Floating in Header
+              // 3. Official KR Track Logo Emblem Floating in Header (Minimized & Pinned at Top)
               SafeArea(
                 child: Align(
                   alignment: Alignment.topCenter,
                   child: Padding(
-                    padding: const EdgeInsets.only(top: 14.0),
+                    padding: const EdgeInsets.only(top: 4.0),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3.5),
                       decoration: BoxDecoration(
                         color: Colors.white.withValues(alpha: 0.95),
-                        borderRadius: BorderRadius.circular(20),
+                        borderRadius: BorderRadius.circular(16),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.3),
-                            blurRadius: 14,
-                            offset: const Offset(0, 4),
+                            color: Colors.black.withValues(alpha: 0.22),
+                            blurRadius: 10,
+                            offset: const Offset(0, 3),
                           ),
                         ],
                       ),
@@ -281,13 +281,13 @@ class _AuthScreenState extends State<AuthScreen> {
                         children: [
                           Image.asset(
                             'assets/kr_track_emblem.png',
-                            height: 24,
+                            height: 16,
                             fit: BoxFit.contain,
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 5),
                           Image.asset(
                             'assets/kr_track_wordmark.png',
-                            height: 12,
+                            height: 9,
                             fit: BoxFit.contain,
                           ),
                         ],

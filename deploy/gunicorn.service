@@ -8,13 +8,13 @@ Group=www-data
 UMask=0007
 WorkingDirectory=/home/iqac/IDCS-Restart/backend
 EnvironmentFile=/home/iqac/IDCS-Restart/backend/.env
-Environment=GUNICORN_WORKERS=5
-Environment=GUNICORN_THREADS=2
-Environment=GUNICORN_TIMEOUT=600
-Environment=GUNICORN_GRACEFUL_TIMEOUT=30
-Environment=GUNICORN_KEEPALIVE=5
-Environment=GUNICORN_MAX_REQUESTS=1500
-Environment=GUNICORN_MAX_REQUESTS_JITTER=150
+Environment=GUNICORN_WORKERS=24
+Environment=GUNICORN_THREADS=8
+Environment=GUNICORN_TIMEOUT=3600
+Environment=GUNICORN_GRACEFUL_TIMEOUT=120
+Environment=GUNICORN_KEEPALIVE=60
+Environment=GUNICORN_MAX_REQUESTS=20000
+Environment=GUNICORN_MAX_REQUESTS_JITTER=2000
 ExecStart=/home/iqac/IDCS-Restart/backend/.venv/bin/gunicorn \
   --worker-class gthread \
   --workers ${GUNICORN_WORKERS} \

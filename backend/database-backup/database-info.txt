@@ -1,0 +1,62 @@
+IDCS Production Database — Migration Information
+=================================================
+Generated : 2026-10-14 18:24 IST  (iqac2 server)
+
+─── Engine ───────────────────────────────────────────────────────────────────
+Engine           : PostgreSQL 18.3 (Ubuntu 18.3-1.pgdg24.04+1)
+Cluster          : 18-main  (port 5432)
+Host (source)    : localhost  (iqac2 server)
+
+─── Database ─────────────────────────────────────────────────────────────────
+Database name    : college_erp
+Owner            : postgres
+Encoding         : UTF8
+Size (live)      : ~127 MB
+Schemas          : public, reporting
+
+─── Extensions ───────────────────────────────────────────────────────────────
+plpgsql          : 1.0   (built-in, always available)
+NOTE: No additional extensions required.
+
+─── Roles that must exist on iqac before restore ─────────────────────────────
+Role             | Superuser | Login | Purpose
+-----------------|-----------|-------|------------------------------------
+postgres         | YES       | YES   | DB owner / dump owner
+erp_user         | no        | YES   | Application DB user (Django)
+inoutx_user      | no        | YES   | InOutX attendance system
+pbi_readonly     | no        | YES   | Power BI read-only reports
+powerbi_user     | no        | YES   | Power BI service account
+rohit            | no        | YES   | Developer / admin access
+
+ACTION: Create these roles on iqac with appropriate passwords BEFORE restoring.
+        Role passwords are NOT stored in this file. Transfer them via a
+        secure, out-of-band channel (e.g., encrypted message / secrets vault).
+
+─── Schemas ──────────────────────────────────────────────────────────────────
+public           : Main application schema (305 tables, Django-managed)
+reporting        : Analytics/reporting schema (owner: postgres)
+                   Contains functions: co_key_to_int(text), to_numeric_or_zero(text)
+
+─── Dump File ────────────────────────────────────────────────────────────────
+File             : idcs-production.dump
+Format           : Custom (pg_dump -Fc) — compressed, restorable with pg_restore
+Dumped at        : 2026-10-14 18:24:22 IST
+TOC Entries      : 3117
+Tables (live)    : 305 (in public schema)
+SHA-256          : 93108c18fc603f03cda32f9bd2399576a0d1dc0372ac77e6c61d36c94deaef41
+File size        : ~17 MB (compressed)
+PG version used  : 18.3
+
+─── Application Config (non-secret) ──────────────────────────────────────────
+Django DB engine : django.db.backends.postgresql
+DB_NAME          : college_erp
+DB_USER          : postgres   (change to erp_user on iqac if preferred)
+DB_HOST          : localhost
+DB_PORT          : 5432
+DISABLE_SERVER_SIDE_CURSORS : True  (PgBouncer compatibility)
+CONN_MAX_AGE     : 60 (seconds)
+CONN_HEALTH_CHECKS : True
+
+─── Secrets NOT included here ────────────────────────────────────────────────
+All passwords, API keys, tokens, and secrets must be transferred separately.
+See MIGRATION-README.md § "Secrets Transfer" for a complete checklist.

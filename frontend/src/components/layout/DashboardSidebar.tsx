@@ -100,6 +100,8 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   discipline_admin_config: Settings2,
   discipline_admin_logs: ClipboardList,
   discipline_staff_portal: ShieldAlert,
+  online_exam_admin: FileText,
+  student_exams: GraduationCap,
 };
 
 export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: string; user?: any }) {
@@ -113,12 +115,59 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
   const [unreadAnnouncementsCount, setUnreadAnnouncementsCount] = useState<number>(0);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [applicationsNav, setApplicationsNav] = useState<ApplicationsNavResponse | null>(null);
+  const [hasStudentOnlineExams, setHasStudentOnlineExams] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem('idcs_has_student_exams') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   const permsForHook = (data?.permissions || []).map((p) => String(p || '').toLowerCase());
   const rolesForHook = (data?.roles || []).map((r) => String(r || '').toUpperCase());
   const isIqacForBadge = rolesForHook.includes('IQAC');
   const isHodOrIqac = rolesForHook.includes('HOD') || rolesForHook.includes('IQAC');
   const { count: attendanceNotifCount } = useAttendanceNotificationCount(isHodOrIqac);
+
+  const isStudentAccount = Boolean(
+    data?.flags?.is_student ||
+    user?.flags?.is_student ||
+    rolesForHook.includes('STUDENT') ||
+    (Array.isArray(user?.roles) && user.roles.some((r: any) => String(r?.name || r).toUpperCase() === 'STUDENT'))
+  );
+
+  useEffect(() => {
+    let mounted = true;
+    if (!isStudentAccount) {
+      setHasStudentOnlineExams(false);
+      return;
+    }
+
+    const checkStudentExams = async () => {
+      try {
+        const res = await fetchWithAuth('/api/online-exam/student/exams/');
+        if (res.ok && mounted) {
+          const d = await res.json();
+          const hasExams = Boolean(
+            d.has_exams ?? ((d.active && d.active.length > 0) || (d.past && d.past.length > 0))
+          );
+          setHasStudentOnlineExams(hasExams);
+          try {
+            sessionStorage.setItem('idcs_has_student_exams', hasExams ? 'true' : 'false');
+          } catch {}
+        }
+      } catch {
+        // best effort
+      }
+    };
+
+    checkStudentExams();
+    const interval = window.setInterval(checkStudentExams, 30_000);
+    return () => {
+      mounted = false;
+      window.clearInterval(interval);
+    };
+  }, [isStudentAccount]);
 
   const perms = (data?.permissions || []).map((p) => String(p || '').toLowerCase());
   const canObeMasterManage = perms.includes('obe.master.manage');
@@ -234,6 +283,13 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
       loc.pathname.startsWith('/faculty/attendance')
     ) {
       setExpanded((p) => ({ ...p, faculty_directory: true }));
+    }
+  }, [loc.pathname]);
+
+  // auto-expand Online Exam Admin when on /iqac/online-exam routes
+  useEffect(() => {
+    if (loc.pathname.startsWith('/iqac/online-exam')) {
+      setExpanded((p) => ({ ...p, online_exam_admin: true }));
     }
   }, [loc.pathname]);
 
@@ -371,6 +427,11 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
   const canPbasManage = rolesUpper.some((r) => ['IQAC', 'ADMIN', 'PRINCIPAL', 'PS'].includes(r));
 
   const items: Array<{ key: string; label: string; to: string; icon?: any }> = [];
+
+  // Online Exam Admin for IQAC (Top 1)
+  if (isIqac || rolesUpper.includes('ADMIN')) {
+    items.push({ key: 'online_exam_admin', label: 'Online Exam Admin', to: '/iqac/online-exam' });
+  }
 
   // PBAS Module Navigation Items (Admin, Approvals, Submission)
   const pbasAdminRoles = ['PBAS_ADMIN', 'PBASADMIN', 'PBAS_MANAGER', 'IQAC', 'ADMIN'];
@@ -511,8 +572,11 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
   if (flags.can_view_timetable && flags.is_student && permsLower.includes('timetable.view')) items.push({ key: 'student_timetable', label: 'My Timetable', to: '/student/timetable' });
   if (flags.can_view_timetable && flags.is_staff && permsLower.includes('timetable.view')) items.push({ key: 'staff_timetable', label: 'My Timetable (Staff)', to: '/staff/timetable' });
 
-  // Student: show My Attendance link for students
-  if (flags.is_student) {
+  // Student: show Exam and My Attendance link for students
+  if (flags.is_student || rolesUpper.includes('STUDENT')) {
+    if ((hasStudentOnlineExams || loc.pathname.startsWith('/student/exams')) && !items.some((item) => item.key === 'student_exams')) {
+      items.push({ key: 'student_exams', label: 'Exam', to: '/student/exams' });
+    }
     items.push({ key: 'student_academics', label: 'My Marks', to: '/academic-v2/student/dashboard' });
     items.push({ key: 'student_attendance', label: 'My Attendance', to: '/student/attendance' });
   }
@@ -881,6 +945,7 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
                       // preserve mobile toggle behaviour
                       if (window.innerWidth < 1024) toggle();
                       // toggle submenu expansion for specific groups
+                      if (i.key === 'online_exam_admin') setExpanded((p) => ({ ...p, online_exam_admin: !p.online_exam_admin }));
                       if (i.key === 'academic') setExpanded((p) => ({ ...p, academic: !p.academic }));
                       if (i.key === 'academic_controller') setExpanded((p) => ({ ...p, academic_controller: !p.academic_controller }));
                       if (i.key === 'rf_reader') setExpanded((p) => ({ ...p, rf_reader: !p.rf_reader }));
@@ -1061,6 +1126,21 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
                       <li>
                         <Link to={'/iqac/academic-controller?tab=internal_marks'} className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/iqac/academic-controller') && new URLSearchParams(loc.search).get('tab') === 'internal_marks' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
                           <Grid className="w-4 h-4" /> <span>Internal marks</span>
+                        </Link>
+                      </li>
+                    </ul>
+                  ) : null}
+
+                  {/* Submenu for Online Exam Admin (IQAC) */}
+                  {i.key === 'online_exam_admin' && expanded.online_exam_admin && !collapsed ? (
+                    <ul className="pl-8 mt-1 space-y-1">
+                      <li>
+                        <Link
+                          to={'/iqac/online-exam'}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/iqac/online-exam') ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
+                          onClick={() => { if (window.innerWidth < 1024) toggle(); }}
+                        >
+                          <Grid className="w-4 h-4" /> <span>Create or Upcoming Exams</span>
                         </Link>
                       </li>
                     </ul>

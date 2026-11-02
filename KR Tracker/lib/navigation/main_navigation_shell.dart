@@ -7,6 +7,7 @@ import '../screens/gatepass_screen.dart';
 import '../screens/discipline_screen.dart';
 import '../screens/profile_screen.dart';
 import '../screens/staff_scanner_screen.dart';
+import '../screens/student_exams_screen.dart';
 
 import '../services/notification_service.dart';
 
@@ -24,12 +25,14 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
     StaffScannerScreen(),  // Index 2: Camera Scanner (with taskbar preserved)
     GatePassScreen(),      // Index 3: Gatepass
     ProfileScreen(),       // Index 4: Profile
+    StudentExamsScreen(),  // Index 5: Online Exams
   ];
 
   @override
   void initState() {
     super.initState();
     NotificationService.instance.startApprovalPolling();
+    AppState.instance.checkStudentExams();
   }
 
   @override
@@ -74,7 +77,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
                 bottom: autoBottom,
                 left: 0,
                 right: 0,
-                child: _buildModernSkeuomorphicTaskbar(isDark, isStaff, currentIndex),
+                child: _buildModernSkeuomorphicTaskbar(isDark, isStaff, isStudent, state, currentIndex),
               ),
             ],
           ),
@@ -83,7 +86,13 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
     );
   }
 
-  Widget _buildModernSkeuomorphicTaskbar(bool isDark, bool isStaff, int currentIndex) {
+  Widget _buildModernSkeuomorphicTaskbar(
+    bool isDark,
+    bool isStaff,
+    bool isStudent,
+    AppState state,
+    int currentIndex,
+  ) {
     // Ultra-clean frosted glass blur effect: translucent so elements behind are softly blurred
     final barBg = isDark
         ? const Color(0xFF0F172A).withValues(alpha: 0.45)
@@ -147,6 +156,16 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
 
                       // Center Gap for elevated camera ONLY if user role is Staff
                       if (isStaff) const SizedBox(width: 58),
+
+                      // Tab 5: Online Exam (SHOWN ONLY IF STUDENT HAS UPCOMING/ACTIVE EXAM TODAY)
+                      if (isStudent && state.hasUpcomingExamToday)
+                        _buildNavItem(
+                          index: 5,
+                          icon: Icons.quiz_rounded,
+                          label: 'Exam',
+                          isSelected: currentIndex == 5,
+                          isDark: isDark,
+                        ),
 
                       // Tab 3: Gatepass / Passes
                       _buildNavItem(

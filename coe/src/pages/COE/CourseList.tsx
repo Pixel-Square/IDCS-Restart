@@ -395,6 +395,57 @@ export default function CourseList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cdapPdfUrl]);
 
+  /**
+   * Build the jspdf-autotable body for a CDAP PDF.
+   * Each distinct CO text gets a sequential number (CO1, CO2 …).
+   * Section-header rows (spanning all 7 columns) are injected whenever the CO changes.
+   * The CO column in every data row shows the short label, e.g. "CO1".
+   */
+  const buildCdapTableBody = (rawRows: any[]): any[] => {
+    const coIndexMap = new Map<string, number>();
+    let coCounter = 0;
+    // First pass: assign numbers to distinct CO texts
+    for (const r of rawRows) {
+      const co = (r.co || '').trim();
+      if (co && !coIndexMap.has(co)) {
+        coIndexMap.set(co, ++coCounter);
+      }
+    }
+    const body: any[] = [];
+    let lastCo = '';
+    let currentCoNum = '';   // carries the CO number forward to every row in the section
+    let rowNum = 1;
+    for (const r of rawRows) {
+      const co = (r.co || '').trim();
+      if (co) {
+        const coNum = `CO${coIndexMap.get(co)}`;
+        if (co !== lastCo) {
+          // New CO section — insert banner and update tracker
+          body.push([
+            {
+              content: co,
+              colSpan: 7,
+              styles: { fillColor: [230, 240, 255], textColor: [30, 60, 140], fontStyle: 'bold', fontSize: 8 }
+            }
+          ]);
+          lastCo = co;
+          currentCoNum = coNum;
+        }
+      }
+      // Every row uses the current section's CO number (even if the row's own `co` field is empty)
+      body.push([
+        rowNum++,
+        r.content_type || '-',
+        r.part_no || '-',
+        r.topics || '-',
+        r.sub_topics || '-',
+        r.bt_level || '-',
+        currentCoNum || '-'
+      ]);
+    }
+    return body;
+  };
+
   const handleCdapClick = async (e: React.MouseEvent, row: CourseRow) => {
     e.preventDefault();
     if (cdapLoadingRow) return;
@@ -418,11 +469,11 @@ export default function CourseList() {
       let krLogoDataUrl = '';
       try {
         krLogoDataUrl = await imageUrlToDataUrl(krLogoSrc);
-
+        
         const logoHeight = 12;
         const logoX = 210 - 14 - 20; // Position at top right
         const logoY = 8;
-
+        
         if (krLogoDataUrl) {
           const imgProps = doc.getImageProperties(krLogoDataUrl);
           const pdfWidth = (imgProps.width * logoHeight) / imgProps.height;
@@ -435,27 +486,17 @@ export default function CourseList() {
       doc.setFontSize(14);
       doc.text(`SYLLABUS - ${row.courseCode} ${row.courseName}`, pageWidth / 2, 25, { align: 'center' });
 
-      // Build rows
-      const tableBody = (cdap.rows || []).map((r: any, idx: number) => {
-        return [
-          idx + 1,
-          r.content_type || '-',
-          r.part_no || '-',
-          r.topics || '-',
-          r.sub_topics || '-',
-          r.bt_level || '-'
-        ];
-      });
-
+      // Build CO-wise rows with numbered section headers
       autoTable(doc, {
         startY: 32,
-        head: [['#', 'Content type', 'PART NO.', 'TOPICS TO BE COVERED (SYLLBUS TOPICS)', 'SUB TOPICS (WHAT TO BE TAUGHT)', 'BT LEVEL']],
-        body: tableBody,
+        head: [['#', 'Content type', 'PART NO.', 'TOPICS TO BE COVERED (SYLLBUS TOPICS)', 'SUB TOPICS (WHAT TO BE TAUGHT)', 'BT LEVEL', 'CO']],
+        body: buildCdapTableBody(cdap.rows || []),
         styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
         headStyles: { fillColor: [63, 81, 181], textColor: [255, 255, 255] },
         columnStyles: {
-           3: { cellWidth: 50 },
-           4: { cellWidth: 50 },
+           3: { cellWidth: 45 },
+           4: { cellWidth: 45 },
+           6: { cellWidth: 22 },
         },
         margin: { left: 14, right: 14 }
       });
@@ -479,7 +520,7 @@ export default function CourseList() {
             doc.setFont('helvetica', 'bold');
             doc.text('Textbooks:', 14, currentY);
             doc.setFont('helvetica', 'normal');
-
+            
             const tbLines = doc.splitTextToSize(cdap.books.textbook || '', pageWidth - 28);
             currentY += 6;
             doc.text(tbLines, 14, currentY);
@@ -494,7 +535,7 @@ export default function CourseList() {
             doc.setFont('helvetica', 'bold');
             doc.text('References:', 14, currentY);
             doc.setFont('helvetica', 'normal');
-
+            
             const refLines = doc.splitTextToSize(cdap.books.reference || '', pageWidth - 28);
             currentY += 6;
             doc.text(refLines, 14, currentY);
@@ -536,11 +577,11 @@ export default function CourseList() {
       let krLogoDataUrl = '';
       try {
         krLogoDataUrl = await imageUrlToDataUrl(krLogoSrc);
-
+        
         const logoHeight = 12;
         const logoX = 210 - 14 - 20; // Position at top right
         const logoY = 8;
-
+        
         if (krLogoDataUrl) {
           const imgProps = doc.getImageProperties(krLogoDataUrl);
           const pdfWidth = (imgProps.width * logoHeight) / imgProps.height;
@@ -553,26 +594,16 @@ export default function CourseList() {
       doc.setFontSize(14);
       doc.text(`SYLLABUS - ${cdapCurrentRow.courseCode} ${cdapCurrentRow.courseName}`, pageWidth / 2, 25, { align: 'center' });
 
-      const tableBody = (cdap.rows || []).map((r: any, idx: number) => {
-        return [
-          idx + 1,
-          r.content_type || '-',
-          r.part_no || '-',
-          r.topics || '-',
-          r.sub_topics || '-',
-          r.bt_level || '-'
-        ];
-      });
-
       autoTable(doc, {
         startY: 32,
-        head: [['#', 'Content type', 'PART NO.', 'TOPICS TO BE COVERED (SYLLBUS TOPICS)', 'SUB TOPICS (WHAT TO BE TAUGHT)', 'BT LEVEL']],
-        body: tableBody,
+        head: [['#', 'Content type', 'PART NO.', 'TOPICS TO BE COVERED (SYLLBUS TOPICS)', 'SUB TOPICS (WHAT TO BE TAUGHT)', 'BT LEVEL', 'CO']],
+        body: buildCdapTableBody(cdap.rows || []),
         styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
         headStyles: { fillColor: [63, 81, 181], textColor: [255, 255, 255] },
         columnStyles: {
-           3: { cellWidth: 50 },
-           4: { cellWidth: 50 },
+           3: { cellWidth: 45 },
+           4: { cellWidth: 45 },
+           6: { cellWidth: 22 },
         },
         margin: { left: 14, right: 14 }
       });
@@ -595,7 +626,7 @@ export default function CourseList() {
             doc.setFont('helvetica', 'bold');
             doc.text('Textbooks:', 14, currentY);
             doc.setFont('helvetica', 'normal');
-
+            
             const tbLines = doc.splitTextToSize(cdap.books.textbook || '', pageWidth - 28);
             currentY += 6;
             doc.text(tbLines, 14, currentY);
@@ -610,7 +641,7 @@ export default function CourseList() {
             doc.setFont('helvetica', 'bold');
             doc.text('References:', 14, currentY);
             doc.setFont('helvetica', 'normal');
-
+            
             const refLines = doc.splitTextToSize(cdap.books.reference || '', pageWidth - 28);
             currentY += 6;
             doc.text(refLines, 14, currentY);
@@ -686,26 +717,16 @@ export default function CourseList() {
           doc.setFontSize(14);
           doc.text(`SYLLABUS - ${row.courseCode} ${row.courseName}`, pageWidth / 2, 25, { align: 'center' });
 
-          const tableBody = (cdap.rows || []).map((r: any, idx: number) => {
-            return [
-              idx + 1,
-              r.content_type || '-',
-              r.part_no || '-',
-              r.topics || '-',
-              r.sub_topics || '-',
-              r.bt_level || '-'
-            ];
-          });
-
           autoTable(doc, {
             startY: 32,
-            head: [['#', 'Content type', 'PART NO.', 'TOPICS TO BE COVERED (SYLLBUS TOPICS)', 'SUB TOPICS (WHAT TO BE TAUGHT)', 'BT LEVEL']],
-            body: tableBody,
+            head: [['#', 'Content type', 'PART NO.', 'TOPICS TO BE COVERED (SYLLBUS TOPICS)', 'SUB TOPICS (WHAT TO BE TAUGHT)', 'BT LEVEL', 'CO']],
+            body: buildCdapTableBody(cdap.rows || []),
             styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
             headStyles: { fillColor: [63, 81, 181], textColor: [255, 255, 255] },
             columnStyles: {
-              3: { cellWidth: 50 },
-              4: { cellWidth: 50 },
+              3: { cellWidth: 45 },
+              4: { cellWidth: 45 },
+              6: { cellWidth: 22 },
             },
             margin: { left: 14, right: 14 }
           });

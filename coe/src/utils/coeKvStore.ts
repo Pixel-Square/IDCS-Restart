@@ -10,6 +10,23 @@
 
 import fetchWithAuth from '../services/fetchAuth';
 
+/* ---- load / read with fallback ---- */
+
+export async function kvLoad<T>(key: string, fallback: T): Promise<T> {
+  try {
+    const res = await fetchWithAuth(`/api/coe/kv-store/?key=${encodeURIComponent(key)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.data !== null && data.data !== undefined) return data.data as T;
+    }
+  } catch {}
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw) return JSON.parse(raw) as T;
+  } catch {}
+  return fallback;
+}
+
 /* ---- hydrate (DB → localStorage) ---- */
 
 export async function kvHydrate(key: string): Promise<any> {

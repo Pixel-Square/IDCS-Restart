@@ -32,6 +32,7 @@ import StudentsList from './pages/COE/StudentsList';
 import HallAllocationPage from './pages/COE/HallAllocationPage';
 import HallAllocationPlanPage from './pages/COE/HallAllocationPlanPage';
 import HallSelectionPage from './pages/COE/HallSelectionPage';
+import ExamTimetablePage from './pages/COE/ExamTimetablePage';
 
 function hasAccessToken(): boolean {
   if (typeof window === 'undefined') return false;
@@ -81,6 +82,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     { to: '/coe/arrears', label: 'Arrears' },
     { to: '/coe/additional', label: 'Additional' },
     { to: '/coe/hall-allocation', label: 'Hall Allocation' },
+    { to: '/coe/exam-timetable', label: 'Exam Timetable' },
     { to: '/coe/hall-selection', label: 'Hall Selection' },
     { to: '/coe/bundle-allocation', label: 'Bundles' },
     { to: '/coe/assigning', label: 'Assigning' },
@@ -174,7 +176,7 @@ function Shell({ children }: { children: React.ReactNode }) {
                 ✕
               </button>
             </div>
-
+            
             <div className="mb-4 hidden items-center justify-end lg:flex">
               <button
                 onClick={() => setIsDesktopSidebarCollapsed(true)}
@@ -313,6 +315,7 @@ export default function App() {
         <Route path="/coe/additional" element={<RequireAuth><AdditionalPage /></RequireAuth>} />
         <Route path="/coe/hall-allocation" element={<RequireAuth><HallAllocationPage /></RequireAuth>} />
         <Route path="/coe/hall-allocation/plan" element={<RequireAuth><HallAllocationPlanPage /></RequireAuth>} />
+        <Route path="/coe/exam-timetable" element={<RequireAuth><ExamTimetablePage /></RequireAuth>} />
         <Route path="/coe/hall-selection" element={<RequireAuth><HallSelectionPage /></RequireAuth>} />
         <Route path="/coe/bundle-allocation" element={<RequireAuth><BundleAllocation /></RequireAuth>} />
         <Route path="/coe/assigning" element={<RequireAuth><AssigningPage /></RequireAuth>} />

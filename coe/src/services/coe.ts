@@ -19,11 +19,14 @@ export type CoeCourseStudent = {
   reg_no: string;
   name: string;
   is_arrear?: boolean;
+  section?: string;
+  department?: string;
 };
 
 export type CoeCourseGroup = {
   course_code: string;
   course_name: string;
+  is_elective?: boolean;
   students: CoeCourseStudent[];
 };
 
@@ -35,6 +38,8 @@ export type CoeDepartmentCourseMap = {
 export type CoeStudentsMapResponse = {
   department_filter: string;
   semester_filter: string | null;
+  section_filter?: string | null;
+  sections?: string[];
   departments: CoeDepartmentCourseMap[];
   saved_dummies?: CoeSavedDummyMapItem[];
 };
@@ -79,7 +84,66 @@ export async function fetchCoePortalContext(): Promise<CoePortalContext> {
   return res.json();
 }
 
-export async function fetchCoeStudentsMap(params: { department: string; semester: string }): Promise<CoeStudentsMapResponse> {
+interface SectionStudentCache {
+  sections: string[];
+  regToSection: Map<string, string>;
+}
+
+const sectionCacheBySem = new Map<string, Promise<SectionStudentCache>>();
+
+async function loadSectionRosterForSemester(semStr: string): Promise<SectionStudentCache> {
+  const semNum = parseInt(semStr.replace(/[^0-9]/g, ''), 10);
+  if (isNaN(semNum)) return { sections: [], regToSection: new Map() };
+
+  try {
+    const res = await fetchWithAuth('/api/academics/sections/?limit=200');
+    if (!res.ok) return { sections: [], regToSection: new Map() };
+    const raw = await res.json();
+    const rows: any[] = Array.isArray(raw) ? raw : (raw?.results || []);
+
+    let matching = rows.filter((r) => {
+      const sNum = parseInt(String(r.semester ?? r.semester_id ?? ''), 10);
+      return sNum === semNum;
+    });
+
+    if (matching.length === 0 && (semNum === 1 || semNum === 2)) {
+      matching = rows.filter((r) => {
+        const d = String(r.department_code || r.department_short_name || r.managing_department || '').toUpperCase();
+        return d === 'S&H' || d === 'SH';
+      });
+    }
+
+    matching.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+
+    const sections = Array.from(new Set(matching.map((m) => String(m.name || '').trim().toUpperCase()).filter(Boolean)));
+    const regToSection = new Map<string, string>();
+
+    await Promise.all(
+      matching.map(async (sec) => {
+        const secName = String(sec.name || '').trim().toUpperCase();
+        if (!sec.id || !secName) return;
+        try {
+          const sRes = await fetchWithAuth(`/api/academics/sections/${sec.id}/students/`);
+          if (!sRes.ok) return;
+          const sRaw = await sRes.json();
+          const sList: any[] = Array.isArray(sRaw) ? sRaw : (sRaw?.results || []);
+          for (const s of sList) {
+            const reg = String(s.reg_no || s.student_register_number || '').trim();
+            if (reg) {
+              regToSection.set(reg, secName);
+            }
+          }
+        } catch {}
+      })
+    );
+
+    return { sections, regToSection };
+  } catch {
+    return { sections: [], regToSection: new Map() };
+  }
+}
+
+export async function fetchCoeStudentsMap(params: { department: string; semester: string; section?: string }): Promise<CoeStudentsMapResponse> {
   const rawSemester = String(params.semester || '').trim();
   const normalized = normalizeSemesterLabel(rawSemester);
 
@@ -95,10 +159,60 @@ export async function fetchCoeStudentsMap(params: { department: string; semester
     const qp = new URLSearchParams();
     qp.set('department', params.department);
     qp.set('semester', semesterCandidate);
+    if (params.section && params.section !== 'ALL') {
+      qp.set('section', params.section);
+    }
 
     const res = await fetchWithAuth(`/api/coe/students-map/?${qp.toString()}`);
     if (res.ok) {
-      return res.json();
+      const data: CoeStudentsMapResponse = await res.json();
+
+      const semKey = normalized || rawSemester || 'SEM1';
+      const targetSemNum = parseInt(semKey.replace(/[^0-9]/g, ''), 10);
+
+      const hasAnyStudentSection = (data.departments || []).some((d) =>
+        (d.courses || []).some((c) => (c.students || []).some((s) => Boolean(s.section)))
+      );
+
+      if (!hasAnyStudentSection || targetSemNum === 1 || targetSemNum === 2) {
+        if (!sectionCacheBySem.has(semKey)) {
+          sectionCacheBySem.set(semKey, loadSectionRosterForSemester(semKey));
+        }
+        const { sections, regToSection } = await sectionCacheBySem.get(semKey)!;
+
+        if (regToSection.size > 0) {
+          if (!data.sections || data.sections.length === 0) {
+            data.sections = sections;
+          }
+          for (const d of data.departments || []) {
+            for (const c of d.courses || []) {
+              for (const s of c.students || []) {
+                const mappedSec = regToSection.get(String(s.reg_no || '').trim());
+                if (mappedSec) {
+                  s.section = mappedSec;
+                }
+              }
+              if (params.section && params.section !== 'ALL') {
+                const targetSec = params.section.trim().toUpperCase();
+                c.students = (c.students || []).filter(
+                  (s) => String(s.section || '').trim().toUpperCase() === targetSec
+                );
+              }
+            }
+          }
+        }
+      } else if (params.section && params.section !== 'ALL') {
+        const targetSec = params.section.trim().toUpperCase();
+        for (const d of data.departments || []) {
+          for (const c of d.courses || []) {
+            c.students = (c.students || []).filter(
+              (s) => String(s.section || '').trim().toUpperCase() === targetSec
+            );
+          }
+        }
+      }
+
+      return data;
     }
 
     let text = '';

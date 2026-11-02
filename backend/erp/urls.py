@@ -52,6 +52,9 @@ urlpatterns = [
     path('api/coder/', include('coder.urls')),
     path('api/discipline/', include('discipline.urls')),
     path('api/audits/', include('audits.urls')),
+    path('api/online-exam/', include('online_exam.urls')),
+    # CORS-enabled media serving endpoint for web and mobile clients
+    re_path(r'^api/media/(?P<path>.*)$', _serve, {'document_root': settings.MEDIA_ROOT}),
 ]
 
 # Admin dashboard data endpoint (counts for models) - always available

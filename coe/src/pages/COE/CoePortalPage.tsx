@@ -41,7 +41,7 @@ export default function CoePortalPage({ user }: Props) {
       }
     })();
 
-    return () => {
+    return () => { 
       mounted = false;
     };
   }, []);

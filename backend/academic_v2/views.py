@@ -5072,6 +5072,16 @@ def faculty_course_info(request, ta_id):
                     except Exception:
                         pass
 
+        pub_at_iso = None
+        if ea_kind == 'cqi' and cqi_pub_at:
+            pub_at_iso = cqi_pub_at.isoformat()
+        elif getattr(ea, 'published_at', None):
+            pub_at_iso = ea.published_at.isoformat()
+
+        pub_by_name = ''
+        if getattr(ea, 'published_by', None):
+            pub_by_name = ea.published_by.get_full_name() or ea.published_by.username
+
         exams.append({
             'id': str(ea.id),
             'name': ea.exam_display_name or ea.exam or ea.qp_type,
@@ -5093,6 +5103,10 @@ def faculty_course_info(request, ta_id):
             'can_edit': bool((not is_strictly_locked) and (not cycle_state['cycle_locked'])),
             'due_date': None,
             'status': sm_status,
+            'raw_status': getattr(ea, 'status', 'DRAFT'),
+            'is_published': bool(has_been_published),
+            'published_at': pub_at_iso,
+            'published_by': pub_by_name,
             'kind': ea_kind,
             'cqi_cos': _cqi_cos,
             'cqi_name': _cqi_name,
@@ -10752,7 +10766,7 @@ def admin_courses_list(request):
         faculty = sec.faculty_user
         course = sec.course
         total_exams = sec.exam_assignments.count()
-        published = sum(1 for e in sec.exam_assignments.all() if e.status == 'PUBLISHED')
+        published = sum(1 for e in sec.exam_assignments.all() if e.status in PUBLISHED_EXAM_STATUSES or e.published_at)
         ta = sec.teaching_assignment
         dept = ''
         semester_name = ''
@@ -10844,7 +10858,7 @@ def admin_course_faculty(request, ta_id):
             sec.save(update_fields=['faculty_user'])
             faculty = assigned_user
         total_exams = sec.exam_assignments.count()
-        published = sum(1 for e in sec.exam_assignments.all() if e.status == 'PUBLISHED')
+        published = sum(1 for e in sec.exam_assignments.all() if e.status in PUBLISHED_EXAM_STATUSES or e.published_at)
         faculty_photo = None
         if faculty:
             try:

@@ -62,7 +62,7 @@ class PeriodSwapRequestAdmin(admin.ModelAdmin):
         }),
     )
 
-
+\
 """
 # ─────────────────────────────────────────────────────────────
 # Automatic Timetable Generator Admin

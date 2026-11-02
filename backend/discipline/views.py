@@ -106,6 +106,14 @@ def is_user_approver_for_incident(user, log: DisciplineIncidentLog, target_role:
             hod_staff = authority_resolver.get_department_hod_by_department(dept, academic_year)
             if hod_staff and hod_staff.user_id == user.id:
                 return True
+        if dept:
+            hod_role = DepartmentRole.objects.filter(department=dept, role='HOD', is_active=True).order_by('-academic_year__id').select_related('staff__user').first()
+            if hod_role and hod_role.staff and hod_role.staff.user_id == user.id:
+                return True
+        if 'HOD' in roles_upper:
+            staff_dept = getattr(getattr(user, 'staff_profile', None), 'department', None)
+            if staff_dept and dept and staff_dept.id == dept.id:
+                return True
         return False
 
     # 4. AHOD role check: Student's department AHOD
@@ -121,6 +129,14 @@ def is_user_approver_for_incident(user, log: DisciplineIncidentLog, target_role:
         if dept and academic_year:
             ahod_staff = authority_resolver.get_department_ahod_by_department(dept, academic_year)
             if ahod_staff and ahod_staff.user_id == user.id:
+                return True
+        if dept:
+            ahod_role = DepartmentRole.objects.filter(department=dept, role='AHOD', is_active=True).order_by('-academic_year__id').select_related('staff__user').first()
+            if ahod_role and ahod_role.staff and ahod_role.staff.user_id == user.id:
+                return True
+        if 'AHOD' in roles_upper:
+            staff_dept = getattr(getattr(user, 'staff_profile', None), 'department', None)
+            if staff_dept and dept and staff_dept.id == dept.id:
                 return True
         return False
 
@@ -187,6 +203,17 @@ class DisciplineApprovalFlowConfigView(APIView):
             flow.save()
         else:
             flow = DisciplineApprovalFlowConfig.objects.create(name=name, roles=roles, is_active=True)
+
+        # Synchronize all active/open incident logs to follow the newly updated flow
+        open_logs = DisciplineIncidentLog.objects.exclude(status__in=['RESOLVED', 'DISMISSED'])
+        for inc in open_logs:
+            inc.flow_roles = roles
+            if inc.current_role in roles:
+                inc.current_step_index = roles.index(inc.current_role)
+            else:
+                inc.current_step_index = 0
+                inc.current_role = roles[0]
+            inc.save(update_fields=['flow_roles', 'current_step_index', 'current_role'])
 
         serializer = DisciplineApprovalFlowConfigSerializer(flow)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -570,6 +597,23 @@ class DisciplineApprovalsListView(APIView):
             'student__section__batch', 'student__section__batch__course', 'student__section__batch__course__department',
             'category', 'reported_by'
         ).prefetch_related('actions').all().order_by('-updated_at')
+
+        # Keep open incident flow_roles synchronized with active flow configuration
+        active_flow = DisciplineApprovalFlowConfig.objects.filter(is_active=True).first()
+        active_roles = active_flow.roles if (active_flow and active_flow.roles) else None
+        if active_roles:
+            to_sync = []
+            for log in qs:
+                if log.status not in ['RESOLVED', 'DISMISSED'] and log.flow_roles != active_roles:
+                    log.flow_roles = active_roles
+                    if log.current_role in active_roles:
+                        log.current_step_index = active_roles.index(log.current_role)
+                    else:
+                        log.current_step_index = 0
+                        log.current_role = active_roles[0]
+                    to_sync.append(log)
+            if to_sync:
+                DisciplineIncidentLog.objects.bulk_update(to_sync, ['flow_roles', 'current_step_index', 'current_role'])
 
         if is_admin_or_iqac:
             results = list(qs)

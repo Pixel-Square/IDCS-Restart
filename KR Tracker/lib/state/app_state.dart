@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -70,6 +71,12 @@ class AppState extends ChangeNotifier {
   // GatePass Live Status: 'APPROVED', 'IN-CAMPUS', 'OUT-PASS', 'PENDING'
   String _gateStatus = 'APPROVED';
   String get gateStatus => _gateStatus;
+
+  // Student Online Exam Indicator: true ONLY if student has an upcoming/active exam today
+  bool _hasUpcomingExamToday = false;
+  bool get hasUpcomingExamToday => _hasUpcomingExamToday;
+  List<Map<String, dynamic>> _todayStudentExams = [];
+  List<Map<String, dynamic>> get todayStudentExams => _todayStudentExams;
 
   // Discipline & Decorum Metrics
   final double _meritScore = 98.5; // percentage
@@ -207,6 +214,8 @@ class AppState extends ChangeNotifier {
 
     _persistSession();
     notifyListeners();
+    checkStudentExams();
+    _startPeriodicExamCheck();
   }
 
   /// Persist session into device local storage so closing and opening the app stays logged in
@@ -306,12 +315,69 @@ class AppState extends ChangeNotifier {
         _profileImageUrl = ApiService.formatProfileImageUrl(rawImg);
 
         notifyListeners();
+        // Check if student has upcoming online exams today
+        checkStudentExams();
+        _startPeriodicExamCheck();
         return true;
       }
     } catch (e) {
       debugPrint('Error restoring session: $e');
     }
     return false;
+  }
+
+  Timer? _periodicExamTimer;
+
+  /// Start periodic auto-refresh check for student exams across the entire app
+  void _startPeriodicExamCheck() {
+    _periodicExamTimer?.cancel();
+    _periodicExamTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      if (_isAuthenticated) {
+        checkStudentExams();
+      }
+    });
+  }
+
+  /// Check if the student has any active or upcoming online exams today
+  Future<void> checkStudentExams() async {
+    final isStudent = _role == 'Student' ||
+        _backendRoles.contains('STUDENT') ||
+        _studentId.length >= 10;
+    if (!isStudent) {
+      if (_hasUpcomingExamToday) {
+        _hasUpcomingExamToday = false;
+        _todayStudentExams = [];
+        notifyListeners();
+      }
+      return;
+    }
+
+    try {
+      final res = await ApiService.fetchStudentOnlineExams();
+      if (res['success'] == true) {
+        final activeList = res['active'] as List<Map<String, dynamic>>? ?? [];
+        final now = DateTime.now();
+        final todayStr = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+
+        // Check if any exam in active list is for today or currently running or allowed retest
+        final matchingToday = activeList.where((ex) {
+          final isToday = ex['is_today'] == true;
+          final examDate = (ex['exam_date'] ?? '').toString();
+          final status = (ex['status'] ?? '').toString().toUpperCase();
+          final isRetest = ex['is_retest'] == true;
+          return isToday || examDate == todayStr || status == 'RUNNING' || isRetest;
+        }).toList();
+
+        final hasMatch = matchingToday.isNotEmpty;
+        if (_hasUpcomingExamToday != hasMatch || _todayStudentExams.length != matchingToday.length) {
+          _hasUpcomingExamToday = hasMatch;
+          _todayStudentExams = matchingToday;
+          notifyListeners();
+        }
+      }
+    } catch (e) {
+      debugPrint('checkStudentExams error: $e');
+    }
   }
 
   /// Switch mode manually if authorized
@@ -328,6 +394,7 @@ class AppState extends ChangeNotifier {
         _department = 'Computer Science & Engg.';
       }
     }
+    checkStudentExams();
     notifyListeners();
   }
 
@@ -342,8 +409,12 @@ class AppState extends ChangeNotifier {
     _roleTitle = 'Student';
     _profileImageUrl = null;
     _activeNavIndex = 0;
+    _hasUpcomingExamToday = false;
+    _todayStudentExams = [];
     ApiService.logout();
     NotificationService.instance.stopApprovalPolling();
+    _periodicExamTimer?.cancel();
+    _periodicExamTimer = null;
 
     try {
       final prefs = await SharedPreferences.getInstance();

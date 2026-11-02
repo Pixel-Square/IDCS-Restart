@@ -87,6 +87,7 @@ INSTALLED_APPS = [
     'coder.apps.CoderConfig',
     'discipline.apps.DisciplineConfig',
     'audits.apps.AuditsConfig',
+    'online_exam',
 ]
 # Staff requests dynamic forms & workflow engine
 INSTALLED_APPS.append('staff_requests')
@@ -295,10 +296,14 @@ TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID', '')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN', '')
 TWILIO_SERVICE_SID = os.getenv('TWILIO_SERVICE_SID', '')
 
-# Restrict CORS to explicit origins when credentials (cookies/auth) are used.
-# Wildcard '*' is invalid with `Access-Control-Allow-Credentials: true`.
-# In local development, allow all origins to avoid brittle localhost/port mismatches.
-CORS_ALLOW_ALL_ORIGINS = DEBUG
+# Allow all origins dynamically while supporting credentials (cookies/auth).
+# When CORS_ALLOW_ALL_ORIGINS is True and CORS_ALLOW_CREDENTIALS is True,
+# corsheaders echoes back the exact request Origin and sets credentials: true.
+CORS_ALLOW_ALL_ORIGINS = str(os.getenv('CORS_ALLOW_ALL_ORIGINS', '1')).strip().lower() in ('1', 'true', 'yes')
+CORS_ALLOW_PRIVATE_NETWORK = True
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https?://.*$",
+]
 
 def _split_env_csv(name: str) -> list[str]:
     return [v.strip() for v in str(os.getenv(name, '') or '').split(',') if v.strip()]

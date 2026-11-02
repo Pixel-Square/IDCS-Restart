@@ -28,7 +28,11 @@ interface ExamMark {
   total_students: number;
   is_locked: boolean;
   due_date: string | null;
-  status: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'LOCKED';
+  status: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'LOCKED' | 'PUBLISHED' | string;
+  raw_status?: string;
+  is_published?: boolean;
+  published_at?: string | null;
+  published_by?: string | null;
   kind?: 'exam' | 'cqi';
   cqi_cos?: number[];
   cqi_name?: string;
@@ -171,6 +175,22 @@ export default function InternalMarkPageBypass({
     });
   }, [courseInfo]);
 
+  const isExamPublished = (exam: ExamMark): boolean => {
+    return Boolean(
+      exam.is_published ||
+      exam.status === 'PUBLISHED' ||
+      exam.status === 'COMPLETED' ||
+      exam.status === 'LOCKED' ||
+      exam.raw_status === 'PUBLISHED' ||
+      Boolean(exam.published_at)
+    );
+  };
+
+  const totalPublished = useMemo(() => {
+    return dedupedExams.filter(isExamPublished).length;
+  }, [dedupedExams]);
+  const totalExams = dedupedExams.length;
+
   const loadData = async () => {
     try {
       setLoading(true);
@@ -208,13 +228,46 @@ export default function InternalMarkPageBypass({
     }
   };
 
-  const getStatusBadge = (exam: ExamMark) => {
-    // In bypass mode we show PUBLISHED status but never show as "locked"
-    if (exam.status === 'COMPLETED' || exam.status === 'LOCKED')
-      return <span className="flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded text-sm"><CheckCircle className="w-3 h-3" />Published</span>;
-    if (exam.status === 'IN_PROGRESS')
-      return <span className="flex items-center gap-1 px-2 py-1 bg-yellow-100 text-yellow-700 rounded text-sm"><Clock className="w-3 h-3" />In Progress</span>;
-    return <span className="flex items-center gap-1 px-2 py-1 bg-gray-100 text-gray-700 rounded text-sm"><AlertCircle className="w-3 h-3" />Not Started</span>;
+  const getPublishStatusBadge = (exam: ExamMark) => {
+    const published = isExamPublished(exam);
+    if (published) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-100 text-emerald-800 border border-emerald-300 font-semibold rounded-full text-xs shadow-xs shrink-0">
+          <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+          Published
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 text-amber-700 border border-amber-300 font-medium rounded-full text-xs shadow-xs shrink-0">
+        <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
+        Not Published
+      </span>
+    );
+  };
+
+  const getEntryStatusBadge = (exam: ExamMark) => {
+    if (exam.entered_count === exam.total_students && exam.total_students > 0) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded text-xs font-medium shrink-0">
+          Marks Entered
+        </span>
+      );
+    }
+    if (exam.entered_count > 0) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-50 text-yellow-800 border border-yellow-200 rounded text-xs font-medium shrink-0">
+          <Clock className="w-3 h-3 text-yellow-600" />
+          In Progress
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 text-gray-600 border border-gray-200 rounded text-xs font-medium shrink-0">
+        <AlertCircle className="w-3 h-3 text-gray-400" />
+        Not Started
+      </span>
+    );
   };
 
   const getProgressBar = (entered: number, total: number) => {
@@ -274,6 +327,13 @@ export default function InternalMarkPageBypass({
           <div><span className="text-gray-400 block text-xs">Class Type</span><span className="font-medium">{courseInfo.class_type.name}</span></div>
           <div><span className="text-gray-400 block text-xs">QP Type</span><span className="font-medium">{courseInfo.qp_type || '—'}</span></div>
           <div><span className="text-gray-400 block text-xs">Total Internal</span><span className="font-medium">{courseInfo.class_type.total_internal_marks}</span></div>
+          <div>
+            <span className="text-gray-400 block text-xs">Published Exams</span>
+            <span className={`font-semibold text-sm flex items-center gap-1 ${totalPublished > 0 ? 'text-emerald-700' : 'text-gray-700'}`}>
+              <CheckCircle className={`w-3.5 h-3.5 ${totalPublished > 0 ? 'text-emerald-600' : 'text-gray-400'}`} />
+              {totalPublished}/{totalExams} published
+            </span>
+          </div>
         </div>
       </div>
 
@@ -302,46 +362,103 @@ export default function InternalMarkPageBypass({
       {/* Exams tab */}
       {tab === 'exams' && (
         <div className="bg-white rounded-lg shadow divide-y">
-          <div className="p-4 border-b flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Internal Mark Components</h2>
-            <span className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded font-medium">
-              Admin Bypass — all locks disabled
-            </span>
+          <div className="p-4 border-b flex flex-wrap items-center justify-between gap-3 bg-gray-50/70">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">Internal Mark Components</h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                <span className="font-semibold text-emerald-700">{totalPublished}</span> of {totalExams} exam assignments published
+                {totalExams - totalPublished > 0 && (
+                  <span className="text-amber-600 font-medium ml-1.5">
+                    • {totalExams - totalPublished} not published
+                  </span>
+                )}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-1 rounded-full font-medium flex items-center gap-1">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                {totalPublished}/{totalExams} Published
+              </span>
+              <span className="text-xs bg-amber-100 text-amber-800 border border-amber-200 px-2.5 py-1 rounded-full font-medium">
+                Admin Bypass — all locks disabled
+              </span>
+            </div>
           </div>
           {dedupedExams.length === 0 ? (
             <div className="p-8 text-center text-gray-500">No exam components configured</div>
           ) : dedupedExams.map((exam) => {
             const isCqi = exam.kind === 'cqi';
+            const published = isExamPublished(exam);
             return (
               <div
                 key={exam.id}
-                className={`p-4 ${isCqi ? 'bg-purple-50' : 'hover:bg-gray-50'}`}
+                className={`p-4 transition-colors ${isCqi ? 'bg-purple-50/50 hover:bg-purple-50' : 'hover:bg-gray-50'}`}
               >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className={`p-2 rounded-lg ${isCqi ? 'bg-purple-200' : 'bg-gray-100'}`}>
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                  {/* Left: icon & exam metadata */}
+                  <div className="flex items-start sm:items-center gap-3.5 flex-1 min-w-0">
+                    <div className={`p-2.5 rounded-lg shrink-0 ${isCqi ? 'bg-purple-200' : 'bg-gray-100'}`}>
                       <FileText className={`w-5 h-5 ${isCqi ? 'text-purple-600' : 'text-gray-600'}`} />
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-medium">{exam.name}</h3>
-                        <span className="text-sm text-gray-500">({exam.short_name})</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-semibold text-gray-900 text-base">{exam.name}</h3>
+                        <span className="text-xs text-gray-500 font-mono">({exam.short_name})</span>
                         {isCqi && exam.cqi_name && (
-                          <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 text-xs rounded">{exam.cqi_name}</span>
+                          <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded-full">
+                            {exam.cqi_name}
+                          </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-3 text-xs text-gray-500 mt-1">
-                        <span>Max: {exam.max_marks}</span>
-                        <span>Weight: {exam.weight}%</span>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500 mt-1">
+                        <span>Max: <strong className="text-gray-700 font-medium">{exam.max_marks}</strong></span>
+                        <span>Weight: <strong className="text-gray-700 font-medium">{exam.weight}%</strong></span>
+                        <span className="text-gray-300">•</span>
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="text-gray-400">Publish Status:</span>
+                          <span className={`font-semibold inline-flex items-center gap-1 ${published ? 'text-emerald-700' : 'text-amber-600'}`}>
+                            {published ? (
+                              <>
+                                <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                                Published
+                              </>
+                            ) : (
+                              <>
+                                <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
+                                Not Published (Draft)
+                              </>
+                            )}
+                          </span>
+                        </span>
+                        {published && exam.published_at && (
+                          <>
+                            <span className="text-gray-300">•</span>
+                            <span className="text-gray-500">
+                              Published on <strong className="text-gray-700 font-medium">{new Date(exam.published_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</strong>
+                              {exam.published_by && <span className="ml-1 text-gray-400 font-normal">by {exam.published_by}</span>}
+                            </span>
+                          </>
+                        )}
+                        {!published && (
+                          <>
+                            <span className="text-gray-300">•</span>
+                            <span className="text-gray-400 italic">Unpublished draft</span>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    {getStatusBadge(exam)}
+
+                  {/* Right: Badges, progress, action buttons */}
+                  <div className="flex flex-wrap items-center gap-3 shrink-0">
+                    <div className="flex flex-col sm:items-end gap-1">
+                      {getPublishStatusBadge(exam)}
+                      {getEntryStatusBadge(exam)}
+                    </div>
                     <div className="w-28">
                       <div className="flex justify-between text-xs text-gray-500 mb-1">
                         <span>Progress</span>
-                        <span>{exam.entered_count}/{exam.total_students}</span>
+                        <span className="font-semibold text-gray-700">{exam.entered_count}/{exam.total_students}</span>
                       </div>
                       {getProgressBar(exam.entered_count, exam.total_students)}
                     </div>
@@ -349,7 +466,7 @@ export default function InternalMarkPageBypass({
                     <button
                       onClick={() => setResetTarget(exam)}
                       disabled={resetting === exam.id}
-                      className="flex items-center gap-1 px-2.5 py-1.5 text-xs border border-red-300 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50"
+                      className="flex items-center gap-1 px-2.5 py-1.5 text-xs border border-red-300 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50 font-medium"
                       title="Reset marks for this exam"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
@@ -364,7 +481,7 @@ export default function InternalMarkPageBypass({
                           navigate(`/academic-v2/exam/${exam.id}`);
                         }
                       }}
-                      className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg text-white ${
+                      className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg text-white font-medium ${
                         isCqi ? 'bg-purple-600 hover:bg-purple-700' : 'bg-blue-600 hover:bg-blue-700'
                       }`}
                     >

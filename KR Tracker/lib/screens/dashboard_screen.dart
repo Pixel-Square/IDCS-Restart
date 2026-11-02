@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/offline_storage_service.dart';
@@ -20,6 +21,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   List<Map<String, dynamic>> _studentPendingActions = [];
   List<Map<String, dynamic>> _studentCompletedActions = [];
   bool _loadingStudentIncidents = false;
+  Timer? _refreshTimer;
 
   @override
   void initState() {
@@ -37,22 +39,32 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
 
     _loadStudentIncidents();
+    // Auto-refresh actions & online exams status every 5 seconds
+    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted) {
+        _loadStudentIncidents(isBackground: true);
+        AppState.instance.checkStudentExams();
+      }
+    });
   }
 
-  Future<void> _loadStudentIncidents() async {
-    setState(() => _loadingStudentIncidents = true);
+  Future<void> _loadStudentIncidents({bool isBackground = false}) async {
+    if (!isBackground) {
+      setState(() => _loadingStudentIncidents = true);
+    }
     final data = await ApiService.fetchStudentMyIncidents();
     if (mounted) {
       setState(() {
         _studentPendingActions = List<Map<String, dynamic>>.from(data['pending_actions'] ?? []);
         _studentCompletedActions = List<Map<String, dynamic>>.from(data['completed_actions'] ?? []);
-        _loadingStudentIncidents = false;
+        if (!isBackground) _loadingStudentIncidents = false;
       });
     }
   }
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
     _floatController.dispose();
     super.dispose();
   }

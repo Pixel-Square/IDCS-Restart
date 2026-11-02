@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Barcode from 'react-barcode';
+import { Users, Check, X } from 'lucide-react';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
 import { jsPDF } from 'jspdf';
 import JsBarcode from 'jsbarcode';
 import BarScanMarkEntry from './BarScanMarkEntry';
+import StudentGroupModal from './StudentGroupModal';
 
 import {
   CoeCourseGroup,
@@ -83,6 +85,29 @@ type CourseBundleDummyStore = Record<string, CourseBundleDummyMap>;
 type PersistedAssigningStore = Record<string, Array<{ courseKey: string; valuators?: Array<{ bundles?: PersistedBundleInfo[] }> }>>;
 type CourseMeta = { classType?: string; qpType?: string };
 
+const STUDENT_GROUPS_KEY = 'coe-student-groups-v1';
+
+export type StudentGroup = {
+  name: string;
+  department?: string;
+  semester?: string;
+  regNos: string[];
+};
+
+function readSavedGroups(): StudentGroup[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(STUDENT_GROUPS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && Array.isArray(parsed.groups)) return parsed.groups;
+    return [];
+  } catch {
+    return [];
+  }
+}
+
 function readAssigningStoreForBundleDummies(): PersistedAssigningStore {
   if (typeof window === 'undefined') return {};
   try {
@@ -141,6 +166,10 @@ export default function StudentsList() {
   const processedRetrivalApplyKeyRef = useRef<string>('');
   const [courseMetaMap, setCourseMetaMap] = useState<Record<string, CourseMeta>>({});
 
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [savedGroups, setSavedGroups] = useState<StudentGroup[]>(readSavedGroups);
+  const [activeGroup, setActiveGroup] = useState<string | null>(null);
+
   // Fetch departments on mount
   useEffect(() => {
     let active = true;
@@ -173,8 +202,52 @@ export default function StudentsList() {
       hydrateMarksStore(),
       kvHydrate(ASSIGNING_STORE_KEY),
       kvHydrate(COURSE_BUNDLE_DUMMY_STORE_KEY),
+      kvHydrate(STUDENT_GROUPS_KEY).then(() => {
+        setSavedGroups(readSavedGroups());
+      }),
     ]).catch(() => {});
   }, []);
+
+  const activeGroupRegNoSet = useMemo(() => {
+    if (!activeGroup) return null;
+    const found = savedGroups.find((g) => g.name === activeGroup);
+    return found ? new Set(found.regNos) : null;
+  }, [activeGroup, savedGroups]);
+
+  const handleSaveGroup = (name: string, regNos: string[], dept?: string, sem?: string) => {
+    const newGroup: StudentGroup = {
+      name,
+      regNos,
+      department: dept,
+      semester: sem,
+    };
+    setSavedGroups((prev) => {
+      const idx = prev.findIndex((g) => g.name.toLowerCase() === name.toLowerCase());
+      let next: StudentGroup[];
+      if (idx >= 0) {
+        next = [...prev];
+        next[idx] = newGroup;
+      } else {
+        next = [...prev, newGroup];
+      }
+      kvSave(STUDENT_GROUPS_KEY, { groups: next });
+      return next;
+    });
+    setActiveGroup(name);
+    setGroupModalOpen(false);
+  };
+
+  const handleDeleteGroup = (e: React.MouseEvent, groupNameToDelete: string) => {
+    e.stopPropagation();
+    setSavedGroups((prev) => {
+      const next = prev.filter((g) => g.name !== groupNameToDelete);
+      kvSave(STUDENT_GROUPS_KEY, { groups: next });
+      return next;
+    });
+    if (activeGroup === groupNameToDelete) {
+      setActiveGroup(null);
+    }
+  };
 
   const absentCourseMap = useMemo(
     () => readCourseAbsenteesMap(getAttendanceFilterKey(department, semester)),
@@ -368,7 +441,7 @@ export default function StudentsList() {
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(14); // Increased from 11
-    doc.text(dummyText, x, y + 11.8);
+    doc.text(dummyText, x, y + 11.8); 
 
     const barcodeImg = barcodeDataUrlForValue(barcodeValue);
     // Reduced length (width) of the barcode
@@ -383,18 +456,18 @@ export default function StudentsList() {
     // Dummy number below barcode with a small gap
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(13); // Increased from 10
-    doc.text(barcodeValue, barcodeX, y + 11.8);
+    doc.text(barcodeValue, barcodeX, y + 11.8); 
   };
 
   const buildCombinedCoursesPdf = (targets: { dept: string; course: AugCourse }[]) => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
-    const marginX = 14;
+    const marginX = 14; 
     const topY = 14;
     const contentStartY = 29.0;
     const bottomMargin = 10;
-    const colGap = 12;
+    const colGap = 12; 
     const colWidth = (pageWidth - marginX * 2 - colGap) / 2;
     const rightColumnShift = 6; // mm (0.6 cm)
     const rowsPerPage = 11;
@@ -483,7 +556,7 @@ export default function StudentsList() {
           doc.addPage();
           drawHeader(target.dept, target.course);
           summaryTableY = contentStartY;
-
+          
           // Repeat Table Header on new page
           doc.setFont('helvetica', 'bold');
           doc.setFillColor(240, 240, 240);
@@ -512,7 +585,7 @@ export default function StudentsList() {
         // Horizontal line
         doc.setDrawColor(200, 200, 200);
         doc.line(marginX, summaryTableY + rowH, pageWidth - marginX, summaryTableY + rowH);
-
+        
         summaryTableY += rowH;
       }
     });
@@ -1069,7 +1142,7 @@ export default function StudentsList() {
       alert('Please shuffle the student list before saving to DB.');
       return;
     }
-
+    
     // Calculate total students to verify
     let totalRecords = 0;
     enriched.departments.forEach(dept => {
@@ -1287,7 +1360,15 @@ export default function StudentsList() {
             </label>
           </div>
         </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+           <button
+             onClick={() => setGroupModalOpen(true)}
+             className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium shadow-sm flex items-center gap-1.5"
+             title="Create and manage student groups"
+           >
+             <Users className="w-4 h-4" />
+             Create Group
+           </button>
            <button
              onClick={handleShuffleAllCourses}
              disabled={loading || saving || resetting || !enriched || shuffleUsed}
@@ -1368,33 +1449,90 @@ export default function StudentsList() {
       <div className="rounded-xl border border-indigo-100 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-center gap-3">
           <span className="text-sm font-semibold text-gray-800">Exam Date:</span>
-          {availableDates.length === 0 ? (
-            <span className="text-sm text-gray-400">No dates assigned. Set TT dates in Course List first.</span>
-          ) : (
-            <>
-              <button
-                onClick={() => setSelectedDate('')}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                  selectedDate === '' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                All Dates
-              </button>
-              {availableDates.map((date) => (
-                <button
-                  key={date}
-                  onClick={() => setSelectedDate(date)}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                    selectedDate === date ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  {new Date(date + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-                </button>
-              ))}
-            </>
-          )}
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)}
+            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-800 focus:border-indigo-500 focus:outline-none"
+          />
+          <button
+            onClick={() => setSelectedDate('')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              selectedDate === '' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            All Dates
+          </button>
+          {availableDates.map((date) => (
+            <button
+              key={date}
+              onClick={() => setSelectedDate(date)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                selectedDate === date ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {new Date(date + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+            </button>
+          ))}
         </div>
       </div>
+
+      {/* Saved student groups chips */}
+      {savedGroups.length > 0 && (
+        <div className="rounded-xl border border-indigo-100 bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500 mr-1 flex items-center gap-1.5">
+              <Users className="w-3.5 h-3.5 text-indigo-600" />
+              Student Groups:
+            </span>
+            {savedGroups.map((group) => {
+              const isActive = activeGroup === group.name;
+              return (
+                <button
+                  key={group.name}
+                  type="button"
+                  onClick={() => setActiveGroup(isActive ? null : group.name)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all shadow-sm ${
+                    isActive
+                      ? 'bg-indigo-600 text-white ring-2 ring-indigo-400 ring-offset-1'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-200'
+                  }`}
+                >
+                  {isActive && <Check className="w-3.5 h-3.5" />}
+                  <span>{group.name}</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-semibold ${
+                      isActive ? 'bg-indigo-700 text-indigo-100' : 'bg-gray-200 text-gray-600'
+                    }`}
+                  >
+                    {group.regNos.length}
+                  </span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    title="Delete group"
+                    onClick={(e) => handleDeleteGroup(e, group.name)}
+                    className={`ml-1 rounded-full p-0.5 hover:bg-black/10 transition-colors ${
+                      isActive ? 'text-indigo-200 hover:text-white' : 'text-gray-400 hover:text-gray-600'
+                    }`}
+                  >
+                    <X className="w-3 h-3" />
+                  </span>
+                </button>
+              );
+            })}
+            {activeGroup && (
+              <button
+                type="button"
+                onClick={() => setActiveGroup(null)}
+                className="text-xs text-indigo-600 hover:text-indigo-800 underline font-medium ml-2"
+              >
+                Clear Selection
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="rounded-xl border border-gray-200 bg-white p-6 text-gray-600">Loading course-wise students...</div>
@@ -1469,16 +1607,24 @@ export default function StudentsList() {
                                 const canNavigateToMarkEntry = Boolean(
                                   dummy && student.reg_no && shuffleUsed && savedDummySet.has(dummy)
                                 );
+                                const isSelectedInGroup = Boolean(
+                                  activeGroupRegNoSet && student.reg_no && activeGroupRegNoSet.has(student.reg_no)
+                                );
 
                                 return (
-                                  <tr key={enrollmentKey} className="align-middle">
+                                  <tr
+                                    key={enrollmentKey}
+                                    className={`align-middle transition-colors ${
+                                      isSelectedInGroup ? 'bg-indigo-50/80 font-medium' : ''
+                                    }`}
+                                  >
                                     <td className="px-3 py-2 font-semibold text-gray-900">{dummy}</td>
                                     <td className="px-3 py-2">
                                       {canNavigateToMarkEntry ? (
                                         <a
                                           href="#"
-
-
+                                          
+                                          
                                           onClick={(e) => handleOpenMarkEntry(e, student, qpType, courseClassType, deptBlock.department, semester)}
 className="font-medium text-blue-700 underline hover:text-blue-800"
                                         >
@@ -1490,6 +1636,11 @@ className="font-medium text-blue-700 underline hover:text-blue-800"
                                     </td>
                                     <td className="px-3 py-2">{student.reg_no || '-'}</td>
                                     <td className="px-3 py-2">
+                                      {isSelectedInGroup && activeGroup ? (
+                                        <span className="inline-flex items-center rounded-full bg-indigo-100 border border-indigo-200 px-2 py-0.5 text-xs font-semibold text-indigo-800 mr-2">
+                                          {activeGroup}
+                                        </span>
+                                      ) : null}
                                       {student.is_arrear ? (
                                         <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 mr-2">
                                           Arrear
@@ -1548,6 +1699,19 @@ className="font-medium text-blue-700 underline hover:text-blue-800"
             </div>
           </div>
         </div>
+      ) : null}
+
+      {groupModalOpen ? (
+        <StudentGroupModal
+          isOpen={groupModalOpen}
+          onClose={() => setGroupModalOpen(false)}
+          departments={departments}
+          semesters={semesters}
+          initialDepartment={department}
+          initialSemester={semester}
+          enriched={enriched}
+          onSave={handleSaveGroup}
+        />
       ) : null}
         </>
       ) : (

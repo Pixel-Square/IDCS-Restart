@@ -176,8 +176,8 @@ class OfflineStorageService extends ChangeNotifier {
           'batch': '2024 (Sec A)',
           'section': 'Sec A',
           'profile_image': 'profile_images/f1b98a8541d84bd9b02e5706ae982590.png',
-          'profile_image_url': 'https://db.krgi.co.in/media/profile_images/f1b98a8541d84bd9b02e5706ae982590.png',
-          'photo_url': 'https://db.krgi.co.in/media/profile_images/f1b98a8541d84bd9b02e5706ae982590.png',
+          'profile_image_url': 'https://db.krgi.co.in/api/media/profile_images/f1b98a8541d84bd9b02e5706ae982590.png',
+          'photo_url': 'https://db.krgi.co.in/api/media/profile_images/f1b98a8541d84bd9b02e5706ae982590.png',
           'status': 'ACTIVE',
         };
         _studentCache['24KRCTCS102'] = {
@@ -297,15 +297,15 @@ class OfflineStorageService extends ChangeNotifier {
           'reg_no': regKey,
           'name': 'Student $regKey',
           'profile_image': knownImg,
-          'profile_image_url': 'https://db.krgi.co.in/media/$knownImg',
-          'photo_url': 'https://db.krgi.co.in/media/$knownImg',
+          'profile_image_url': 'https://db.krgi.co.in/api/media/$knownImg',
+          'photo_url': 'https://db.krgi.co.in/api/media/$knownImg',
         };
       } else {
         final existing = result['profile_image'] ?? result['profile_image_url'] ?? result['photo_url'];
         if (existing == null || existing.toString().trim().isEmpty || existing.toString().contains('.jpg')) {
           result['profile_image'] = knownImg;
-          result['profile_image_url'] = 'https://db.krgi.co.in/media/$knownImg';
-          result['photo_url'] = 'https://db.krgi.co.in/media/$knownImg';
+          result['profile_image_url'] = 'https://db.krgi.co.in/api/media/$knownImg';
+          result['photo_url'] = 'https://db.krgi.co.in/api/media/$knownImg';
         }
       }
     }

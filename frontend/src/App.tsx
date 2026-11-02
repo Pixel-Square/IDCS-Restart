@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { derivePrimaryRole, getMe } from "./services/auth";
 import { seedUCState } from "./utils/underConstruction";
 import Navbar from "./components/navigation/Navbar";
@@ -133,6 +133,10 @@ import FilePreviewPage from './pages/lms/FilePreviewPage';
 import AuditManagementPage from './pages/audits/AuditManagementPage';
 import AuditEntryPage from './pages/audits/AuditEntryPage';
 import AuditATRPage from './pages/audits/AuditATRPage';
+import OnlineExamAdminPage from './pages/iqac/online_exam/OnlineExamAdminPage';
+import ExamSubmissionsPage from './pages/iqac/online_exam/ExamSubmissionsPage';
+import ExamResultsPage from './pages/iqac/online_exam/ExamResultsPage';
+import StudentExamsPage from './pages/student/StudentExamsPage';
 import { LazyErrorBoundary } from './components/LazyErrorBoundary';
 import { safeLazy } from './utils/safeLazy';
 
@@ -193,6 +197,10 @@ export default function App() {
   const [user, setUser] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
   const { collapsed } = useSidebar();
+  const location = useLocation();
+  const isExamTakePage = Boolean(
+    location.pathname.startsWith('/student/exams/') && location.pathname.endsWith('/take')
+  );
   const bootstrapMeTimeoutMs = Math.max(
     Number((import.meta as any)?.env?.VITE_ME_BOOTSTRAP_TIMEOUT) || 20000,
     5000,
@@ -313,19 +321,19 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-50 overflow-x-hidden">
-      <Navbar user={user} />
+      {!isExamTakePage && <Navbar user={user} />}
       {user ? (
         <div className="flex">
-          <DashboardSidebar user={user} />
+          {!isExamTakePage && <DashboardSidebar user={user} />}
           <main
-            className={`flex-1 min-w-0 transition-all duration-300 pt-20 overflow-x-hidden ${
-              // Sidebar is `fixed`, so using `ml-*` here would increase total page width
-              // (main still occupies full width, plus margin). Use `pl-*` instead.
-              collapsed ? 'lg:pl-20' : 'lg:pl-64'
+            className={`flex-1 min-w-0 transition-all duration-300 overflow-x-hidden ${
+              isExamTakePage
+                ? 'pt-0 pl-0'
+                : `pt-20 ${collapsed ? 'lg:pl-20' : 'lg:pl-64'}`
             }`}
           >
             <UCGate user={user}>
-            <div className="app-main-zoom">
+            <div className={isExamTakePage ? '' : 'app-main-zoom'}>
               <Routes>
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/login" element={<Navigate to="/dashboard" replace />} />
@@ -557,6 +565,18 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["academics.assign_teaching"]} element={<TeachingAssignmentsPage />} />}
                 />
                 <Route
+                  path="/iqac/online-exam"
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC", "ADMIN"]} element={<OnlineExamAdminPage />} />}
+                />
+                <Route
+                  path="/iqac/online-exam/:examId/submissions"
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC", "ADMIN"]} element={<ExamSubmissionsPage />} />}
+                />
+                <Route
+                  path="/iqac/online-exam/:examId/results"
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC", "ADMIN"]} element={<ExamResultsPage />} />}
+                />
+                <Route
                   path="/iqac/master-teaching-assignment"
                   element={<ProtectedRoute user={user} requiredRoles={["IQAC", "ADMIN"]} element={<MasterTeachingAssignmentPage />} />}
                 />
@@ -724,6 +744,18 @@ export default function App() {
                 <Route
                   path="/student/attendance"
                   element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentAttendancePage />} />}
+                />
+                <Route
+                  path="/student/exams"
+                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentExamsPage />} />}
+                />
+                <Route
+                  path="/student/exams/:examId/instructions"
+                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentExamsPage />} />}
+                />
+                <Route
+                  path="/student/exams/:examId/take"
+                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentExamsPage />} />}
                 />
                 <Route
                   path="/student/academics"

@@ -1,0 +1,19 @@
+COE table row counts
+===================
+COE_coearrearstudent	2
+COE_coeassignmentstore	1
+COE_coecourseselectionstore	11
+COE_coeexamdummy	2728
+COE_coefinalresult	1739
+COE_coekeyvaluestore	13
+COE_coestudentmarks	1222
+
+Sequence current values
+======================
+COE_coearrearstudent_id_seq	2
+COE_coeassignmentstore_id_seq	2
+COE_coecourseselectionstore_id_seq	11
+COE_coeexamdummy_id_seq	6470
+COE_coefinalresult_id_seq	15801
+COE_coekeyvaluestore_id_seq	20
+COE_coestudentmarks_id_seq	1281

@@ -6,7 +6,6 @@ import '../state/app_state.dart';
 
 class ApiService {
   static const String primaryUrl = 'https://db.krgi.co.in';
-  static const String localFallbackUrl = 'http://127.0.0.1:8000';
   static String baseUrl = primaryUrl;
   static String? authToken;
   static Map<String, dynamic>? currentUser;
@@ -21,41 +20,37 @@ class ApiService {
   static List<String> resolveAvatarCandidates(dynamic rawImage, {String? regNo}) {
     final candidates = <String>[];
 
+    String toMediaUrl(String path) {
+      final clean = path.trim().replaceAll('\\', '/');
+      final normalized = clean.startsWith('/') ? clean.substring(1) : clean;
+      final rel = normalized.startsWith('media/') ? normalized.substring(6) : normalized;
+      return 'https://db.krgi.co.in/api/media/$rel';
+    }
+
     // 1. If register number is known, check database-verified offline storage mapping
     if (regNo != null && regNo.trim().isNotEmpty) {
       final cleanReg = regNo.trim().toUpperCase();
       final known = OfflineStorageService.knownStudentProfileImages[cleanReg];
       if (known != null && known.isNotEmpty) {
-        candidates.add('https://db.krgi.co.in/media/$known');
-        candidates.add('/media/$known');
-        candidates.add('http://127.0.0.1:8000/media/$known');
+        candidates.add(toMediaUrl(known));
       }
       final st = OfflineStorageService.instance.getStudent(cleanReg);
       final stImg = st?['profile_image'] ?? st?['profile_image_url'] ?? st?['photo'];
-      if (stImg != null && stImg.toString().trim().isNotEmpty && !stImg.toString().contains('.jpg')) {
-        final stClean = stImg.toString().trim().replaceAll('\\', '/');
-        final cleanPath = stClean.startsWith('/') ? stClean.substring(1) : stClean;
-        final relPath = cleanPath.startsWith('media/') ? cleanPath : 'media/$cleanPath';
-        candidates.add('https://db.krgi.co.in/$relPath');
-        candidates.add('/$relPath');
+      if (stImg != null && stImg.toString().trim().isNotEmpty) {
+        candidates.add(toMediaUrl(stImg.toString()));
       }
     }
 
     // 2. Normalize rawImage if provided
     if (rawImage != null) {
       final raw = rawImage.toString().trim().replaceAll('\\', '/');
-      if (raw.isNotEmpty && !raw.contains('.jpg')) {
-        if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('data:') || raw.startsWith('blob:')) {
+      if (raw.isNotEmpty) {
+        if (raw.contains('db.krgi.co.in/media/')) {
+          candidates.insert(0, raw.replaceFirst('db.krgi.co.in/media/', 'db.krgi.co.in/api/media/'));
+        } else if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('data:') || raw.startsWith('blob:')) {
           candidates.insert(0, raw);
         } else {
-          final normalized = raw.startsWith('/') ? raw.substring(1) : raw;
-          final path = normalized.startsWith('media/') ? normalized.substring(6) : normalized;
-          // Exact Profile.tsx candidates:
-          // 1) /media/$path
-          // 2) ${getApiBase()}/media/$path
-          candidates.insert(0, 'https://db.krgi.co.in/media/$path');
-          candidates.add('/media/$path');
-          candidates.add('http://127.0.0.1:8000/media/$path');
+          candidates.insert(0, toMediaUrl(raw));
         }
       }
     }
@@ -64,7 +59,8 @@ class ApiService {
     final state = AppState.instance;
     if (state.profileImageUrl != null && state.profileImageUrl!.isNotEmpty) {
       if (regNo == null || regNo.isEmpty || regNo == state.studentId || regNo == state.userName) {
-        candidates.add(state.profileImageUrl!);
+        final stUrl = state.profileImageUrl!.replaceFirst('db.krgi.co.in/media/', 'db.krgi.co.in/api/media/');
+        candidates.add(stUrl);
       }
     }
 
@@ -79,7 +75,7 @@ class ApiService {
     return list.isNotEmpty ? list.first : null;
   }
 
-  /// Authenticate strictly against real backend database users
+  /// Authenticate strictly against real backend database users at db.krgi.co.in
   static Future<Map<String, dynamic>> login({
     required String identifier,
     required String password,
@@ -94,41 +90,33 @@ class ApiService {
       };
     }
 
-    // Attempt primary live endpoint first, then local development endpoints if unreachable
-    final endpoints = [
-      primaryUrl,
-      'http://127.0.0.1',
-      localFallbackUrl,
-      'http://localhost:8000',
-    ];
+    final base = primaryUrl;
+    try {
+      final tokenUri = Uri.parse('$base/api/accounts/token/');
+      final payload = jsonEncode({
+        'identifier': cleanId,
+        'username': cleanId,
+        'password': cleanPass,
+      });
 
-    for (final base in endpoints) {
-      try {
-        final tokenUri = Uri.parse('$base/api/accounts/token/');
-        final payload = jsonEncode({
-          'identifier': cleanId,
-          'username': cleanId,
-          'password': cleanPass,
-        });
+      final tokenResponse = await http
+          .post(
+            tokenUri,
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: payload,
+          )
+          .timeout(const Duration(seconds: 10));
 
-        final tokenResponse = await http
-            .post(
-              tokenUri,
-              headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-              },
-              body: payload,
-            )
-            .timeout(const Duration(seconds: 6));
+      if (tokenResponse.statusCode == 200) {
+        final data = jsonDecode(tokenResponse.body);
+        final access = data['access'] as String?;
 
-        if (tokenResponse.statusCode == 200) {
-          final data = jsonDecode(tokenResponse.body);
-          final access = data['access'] as String?;
-
-          if (access != null && access.isNotEmpty) {
-            authToken = access;
-            baseUrl = base;
+        if (access != null && access.isNotEmpty) {
+          authToken = access;
+          baseUrl = base;
 
             // Fetch authenticated user profile from /api/accounts/me/
             final meUri = Uri.parse('$base/api/accounts/me/');
@@ -260,15 +248,18 @@ class ApiService {
           }
         }
       } catch (e) {
-        debugPrint('Authentication attempt on $base failed: $e');
+        debugPrint('Authentication error on $base: $e');
+        return {
+          'success': false,
+          'message': 'Failed to connect to campus server (db.krgi.co.in). Please check your internet connection.',
+        };
       }
-    }
 
-    return {
-      'success': false,
-      'message': 'Could not connect to the campus server. Please check your network connection.',
-    };
-  }
+      return {
+        'success': false,
+        'message': 'Unable to log in. Please verify your credentials.',
+      };
+    }
 
   /// Search and fetch student details via scanned Barcode / Register Number from database or offline cache
   static Future<Map<String, dynamic>?> fetchStudentByBarcode(
@@ -407,78 +398,61 @@ class ApiService {
 
   /// Download complete Student Directory from backend for offline usage (no photo needed)
   static Future<List<Map<String, dynamic>>> fetchStudentDirectory() async {
-    final candidateBases = [baseUrl, primaryUrl, localFallbackUrl, 'http://127.0.0.1:8000'];
-    final seen = <String>{};
-
-    for (final base in candidateBases) {
-      if (seen.contains(base)) continue;
-      seen.add(base);
-
-      try {
-        final uri = Uri.parse('$base/api/discipline/students/');
-        final headers = <String, String>{
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        };
-        if (authToken != null && authToken!.isNotEmpty) {
-          headers['Authorization'] = 'Bearer $authToken';
-        }
-
-        final response = await http.get(uri, headers: headers).timeout(
-              const Duration(seconds: 30),
-            );
-
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          final dynamic list = data is Map ? (data['results'] ?? data['students'] ?? data) : data;
-          if (list is List && list.isNotEmpty) {
-            return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-          }
-        }
-      } catch (e) {
-        debugPrint('fetchStudentDirectory from $base error: $e');
+    try {
+      final uri = Uri.parse('$primaryUrl/api/discipline/students/');
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      if (authToken != null && authToken!.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $authToken';
       }
+
+      final response = await http.get(uri, headers: headers).timeout(
+            const Duration(seconds: 30),
+          );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final dynamic list = data is Map ? (data['results'] ?? data['students'] ?? data) : data;
+        if (list is List && list.isNotEmpty) {
+          return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('fetchStudentDirectory error: $e');
     }
     return [];
   }
 
   /// Download complete Discipline Categories config defined by DC Admin for offline usage
   static Future<List<Map<String, dynamic>>> fetchDisciplineCategories() async {
-    final candidateBases = [baseUrl, primaryUrl, localFallbackUrl, 'http://127.0.0.1:8000'];
-    final seen = <String>{};
-
-    for (final base in candidateBases) {
-      if (seen.contains(base)) continue;
-      seen.add(base);
-
-      try {
-        final uri = Uri.parse('$base/api/discipline/categories/?is_active=true');
-        final headers = <String, String>{
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        };
-        if (authToken != null && authToken!.isNotEmpty) {
-          headers['Authorization'] = 'Bearer $authToken';
-        }
-
-        final response = await http.get(uri, headers: headers).timeout(
-              const Duration(seconds: 15),
-            );
-
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          final dynamic list = data is Map ? (data['results'] ?? data['categories'] ?? data) : data;
-          if (list is List && list.isNotEmpty) {
-            return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-          }
-        }
-      } catch (e) {
-        debugPrint('fetchDisciplineCategories from $base error: $e');
+    try {
+      final uri = Uri.parse('$primaryUrl/api/discipline/categories/?is_active=true');
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      if (authToken != null && authToken!.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $authToken';
       }
+
+      final response = await http.get(uri, headers: headers).timeout(
+            const Duration(seconds: 15),
+          );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final dynamic list = data is Map ? (data['results'] ?? data['categories'] ?? data) : data;
+        if (list is List && list.isNotEmpty) {
+          return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('fetchDisciplineCategories error: $e');
     }
     return [];
   }
-
 
   /// Record discipline incident to DB with full fields and proof attachment
   static Future<bool> recordDisciplineIncident({
@@ -496,59 +470,50 @@ class ApiService {
     String? reportedByName,
     String? reportedByUsername,
   }) async {
-    final candidateBases = [baseUrl, primaryUrl, localFallbackUrl, 'http://127.0.0.1:8000', 'http://localhost:8000'];
-    final seen = <String>{};
-
-    for (final base in candidateBases) {
-      if (seen.contains(base)) continue;
-      seen.add(base);
-
-      try {
-        final uri = Uri.parse('$base/api/discipline/logs/');
-        final headers = <String, String>{
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        };
-        if (authToken != null && authToken!.isNotEmpty) {
-          headers['Authorization'] = 'Bearer $authToken';
-        }
-
-        final payload = <String, dynamic>{
-          'reg_no': regNo,
-          'student_name': studentName,
-          'username': username ?? '',
-          'department_name': departmentName ?? '',
-          'batch_name': batchName ?? '',
-          'section_name': sectionName ?? '',
-          'category': category,
-          'category_ids': categoryIds ?? (category != null ? [category] : []),
-          'category_title': categoryTitle ?? '',
-          'remarks': remarks ?? '',
-          'timestamp': DateTime.now().toIso8601String(),
-        };
-        if (reportedByName != null && reportedByName.isNotEmpty) {
-          payload['reported_by_name'] = reportedByName;
-        }
-        if (reportedByUsername != null && reportedByUsername.isNotEmpty) {
-          payload['reported_by_username'] = reportedByUsername;
-        }
-        if (incidentDocument != null && incidentDocument.isNotEmpty) {
-          payload['incident_document'] = incidentDocument;
-        }
-
-        final response = await http
-            .post(uri, headers: headers, body: jsonEncode(payload))
-            .timeout(const Duration(seconds: 8));
-
-        if (response.statusCode == 200 || response.statusCode == 201) {
-          baseUrl = base;
-          return true;
-        } else {
-          debugPrint('recordDisciplineIncident to $base failed: ${response.statusCode} ${response.body}');
-        }
-      } catch (e) {
-        debugPrint('recordDisciplineIncident to $base error: $e');
+    try {
+      final uri = Uri.parse('$primaryUrl/api/discipline/logs/');
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      if (authToken != null && authToken!.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $authToken';
       }
+
+      final payload = <String, dynamic>{
+        'reg_no': regNo,
+        'student_name': studentName,
+        'username': username ?? '',
+        'department_name': departmentName ?? '',
+        'batch_name': batchName ?? '',
+        'section_name': sectionName ?? '',
+        'category': category,
+        'category_ids': categoryIds ?? (category != null ? [category] : []),
+        'category_title': categoryTitle ?? '',
+        'remarks': remarks ?? '',
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+      if (reportedByName != null && reportedByName.isNotEmpty) {
+        payload['reported_by_name'] = reportedByName;
+      }
+      if (reportedByUsername != null && reportedByUsername.isNotEmpty) {
+        payload['reported_by_username'] = reportedByUsername;
+      }
+      if (incidentDocument != null && incidentDocument.isNotEmpty) {
+        payload['incident_document'] = incidentDocument;
+      }
+
+      final response = await http
+          .post(uri, headers: headers, body: jsonEncode(payload))
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return true;
+      } else {
+        debugPrint('recordDisciplineIncident failed: ${response.statusCode} ${response.body}');
+      }
+    } catch (e) {
+      debugPrint('recordDisciplineIncident error: $e');
     }
     return false;
   }
@@ -559,42 +524,33 @@ class ApiService {
     required String actionType,
     required String notes,
   }) async {
-    final candidateBases = [baseUrl, primaryUrl, localFallbackUrl, 'http://127.0.0.1:8000', 'http://localhost:8000'];
-    final seen = <String>{};
+    try {
+      final uri = Uri.parse('$primaryUrl/api/discipline/logs/');
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      if (authToken != null && authToken!.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $authToken';
+      }
 
-    for (final base in candidateBases) {
-      if (seen.contains(base)) continue;
-      seen.add(base);
+      final response = await http
+          .post(
+            uri,
+            headers: headers,
+            body: jsonEncode({
+              'reg_no': regNo,
+              'action_type': actionType,
+              'notes': notes,
+              'timestamp': DateTime.now().toIso8601String(),
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
 
-      try {
-        final uri = Uri.parse('$base/api/discipline/logs/');
-        final headers = <String, String>{
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        };
-        if (authToken != null && authToken!.isNotEmpty) {
-          headers['Authorization'] = 'Bearer $authToken';
-        }
-
-        final response = await http
-            .post(
-              uri,
-              headers: headers,
-              body: jsonEncode({
-                'reg_no': regNo,
-                'action_type': actionType,
-                'notes': notes,
-                'timestamp': DateTime.now().toIso8601String(),
-              }),
-            )
-            .timeout(const Duration(seconds: 6));
-
-        if (response.statusCode == 200 || response.statusCode == 201) {
-          baseUrl = base;
-          return true;
-        }
-      } catch (_) {}
-    }
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return true;
+      }
+    } catch (_) {}
     return true;
   }
 
@@ -603,84 +559,66 @@ class ApiService {
     String? username,
     String? staffName,
   }) async {
-    final candidateBases = [baseUrl, primaryUrl, localFallbackUrl, 'http://127.0.0.1:8000', 'http://localhost:8000'];
-    final seen = <String>{};
-
-    for (final base in candidateBases) {
-      if (seen.contains(base)) continue;
-      seen.add(base);
-
-      try {
-        final qp = <String, String>{'my_submissions': 'true'};
-        if (username != null && username.isNotEmpty) {
-          qp['username'] = username;
-        }
-        if (staffName != null && staffName.isNotEmpty) {
-          qp['reported_by_name'] = staffName;
-        }
-        final queryString = Uri(queryParameters: qp).query;
-        final uri = Uri.parse('$base/api/discipline/logs/?$queryString');
-        final headers = <String, String>{
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        };
-        if (authToken != null && authToken!.isNotEmpty) {
-          headers['Authorization'] = 'Bearer $authToken';
-        }
-
-        final response = await http.get(uri, headers: headers).timeout(
-              const Duration(seconds: 8),
-            );
-
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          final list = data is Map ? (data['results'] ?? data) : data;
-          if (list is List) {
-            baseUrl = base;
-            return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-          }
-        }
-      } catch (e) {
-        debugPrint('fetchStaffSubmissions from $base error: $e');
+    try {
+      final qp = <String, String>{'my_submissions': 'true'};
+      if (username != null && username.isNotEmpty) {
+        qp['username'] = username;
       }
+      if (staffName != null && staffName.isNotEmpty) {
+        qp['reported_by_name'] = staffName;
+      }
+      final queryString = Uri(queryParameters: qp).query;
+      final uri = Uri.parse('$primaryUrl/api/discipline/logs/?$queryString');
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      if (authToken != null && authToken!.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $authToken';
+      }
+
+      final response = await http.get(uri, headers: headers).timeout(
+            const Duration(seconds: 10),
+          );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final list = data is Map ? (data['results'] ?? data) : data;
+        if (list is List) {
+          return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('fetchStaffSubmissions error: $e');
     }
     return [];
   }
 
   /// Fetch logged-in staff member's approvals queue
   static Future<List<Map<String, dynamic>>> fetchStaffApprovals() async {
-    final candidateBases = [baseUrl, primaryUrl, localFallbackUrl, 'http://127.0.0.1:8000', 'http://localhost:8000'];
-    final seen = <String>{};
-
-    for (final base in candidateBases) {
-      if (seen.contains(base)) continue;
-      seen.add(base);
-
-      try {
-        final uri = Uri.parse('$base/api/discipline/approvals/');
-        final headers = <String, String>{
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        };
-        if (authToken != null && authToken!.isNotEmpty) {
-          headers['Authorization'] = 'Bearer $authToken';
-        }
-
-        final response = await http.get(uri, headers: headers).timeout(
-              const Duration(seconds: 8),
-            );
-
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          final list = data is Map ? (data['results'] ?? data) : data;
-          if (list is List) {
-            baseUrl = base;
-            return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-          }
-        }
-      } catch (e) {
-        debugPrint('fetchStaffApprovals from $base error: $e');
+    try {
+      final uri = Uri.parse('$primaryUrl/api/discipline/approvals/');
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      if (authToken != null && authToken!.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $authToken';
       }
+
+      final response = await http.get(uri, headers: headers).timeout(
+            const Duration(seconds: 10),
+          );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final list = data is Map ? (data['results'] ?? data) : data;
+        if (list is List) {
+          return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('fetchStaffApprovals error: $e');
     }
     return [];
   }
@@ -850,5 +788,181 @@ class ApiService {
       {'role_key': 'HOD', 'role': 'Head of Dept', 'name': 'Dr. S. Manikandan', 'icon': 'account_balance'},
     ];
   }
+
+  // ─────────────────────────────────────────────────────────────
+  // ONLINE EXAM STUDENT ENDPOINTS
+  // ─────────────────────────────────────────────────────────────
+
+  /// Fetch active and past online exams for the logged-in student
+  static Future<Map<String, dynamic>> fetchStudentOnlineExams() async {
+    try {
+      final uri = Uri.parse('$baseUrl/api/online-exam/student/exams/');
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+      };
+      if (authToken != null && authToken!.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $authToken';
+      }
+
+      final response = await http.get(uri, headers: headers).timeout(
+            const Duration(seconds: 8),
+          );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return {
+          'success': true,
+          'has_exams': data['has_exams'] == true,
+          'student_section': data['student_section'] ?? '',
+          'active': List<Map<String, dynamic>>.from(
+              (data['active'] as List? ?? []).map((e) => Map<String, dynamic>.from(e as Map))),
+          'past': List<Map<String, dynamic>>.from(
+              (data['past'] as List? ?? []).map((e) => Map<String, dynamic>.from(e as Map))),
+        };
+      }
+    } catch (e) {
+      debugPrint('fetchStudentOnlineExams error: $e');
+    }
+    return {
+      'success': false,
+      'has_exams': false,
+      'student_section': '',
+      'active': <Map<String, dynamic>>[],
+      'past': <Map<String, dynamic>>[],
+    };
+  }
+
+  /// Fetch proctored take-exam questions and student session data
+  static Future<Map<String, dynamic>> fetchStudentTakeOnlineExam(int examId) async {
+    try {
+      final uri = Uri.parse('$baseUrl/api/online-exam/student/exams/$examId/take/');
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+      };
+      if (authToken != null && authToken!.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $authToken';
+      }
+
+      final response = await http.get(uri, headers: headers).timeout(
+            const Duration(seconds: 10),
+          );
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200) {
+        return {
+          'success': true,
+          ...Map<String, dynamic>.from(data as Map),
+        };
+      } else {
+        return {
+          'success': false,
+          'error': data['error'] ?? 'Unable to start examination.',
+          'is_kicked': data['is_kicked'] == true,
+          'kicked_reason': data['kicked_reason'] ?? '',
+        };
+      }
+    } catch (e) {
+      debugPrint('fetchStudentTakeOnlineExam error: $e');
+      return {'success': false, 'error': 'Network connection failed. $e'};
+    }
+  }
+
+  /// Auto-save student draft answers and poll live status
+  static Future<Map<String, dynamic>> saveStudentOnlineExamDraft(int examId, Map<String, dynamic> answers) async {
+    try {
+      final uri = Uri.parse('$baseUrl/api/online-exam/student/exams/$examId/save-draft/');
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+      };
+      if (authToken != null && authToken!.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $authToken';
+      }
+
+      final response = await http.post(
+        uri,
+        headers: headers,
+        body: jsonEncode({'answers': answers}),
+      ).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return {'success': true, ...Map<String, dynamic>.from(data as Map)};
+      }
+    } catch (e) {
+      debugPrint('saveStudentOnlineExamDraft error: $e');
+    }
+    return {'success': false};
+  }
+
+  /// Final submit student online exam
+  static Future<Map<String, dynamic>> submitStudentOnlineExam(
+    int examId,
+    Map<String, dynamic> answers, {
+    int violationsCount = 0,
+  }) async {
+    try {
+      final uri = Uri.parse('$baseUrl/api/online-exam/student/exams/$examId/take/');
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+      };
+      if (authToken != null && authToken!.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $authToken';
+      }
+
+      final response = await http.post(
+        uri,
+        headers: headers,
+        body: jsonEncode({
+          'answers': answers,
+          'status': 'SUBMITTED',
+          'violations_count': violationsCount,
+        }),
+      ).timeout(const Duration(seconds: 12));
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200) {
+        return {'success': true, ...Map<String, dynamic>.from(data as Map)};
+      } else {
+        return {'success': false, 'error': data['error'] ?? 'Submission failed.'};
+      }
+    } catch (e) {
+      debugPrint('submitStudentOnlineExam error: $e');
+      return {'success': false, 'error': 'Network error submitting exam: $e'};
+    }
+  }
+
+  /// Record malpractice kick disqualification
+  static Future<bool> kickStudentOnlineExam(
+    int examId,
+    String reason,
+    Map<String, dynamic> answers, {
+    int violationsCount = 0,
+  }) async {
+    try {
+      final uri = Uri.parse('$baseUrl/api/online-exam/student/exams/$examId/kick/');
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+      };
+      if (authToken != null && authToken!.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $authToken';
+      }
+
+      final response = await http.post(
+        uri,
+        headers: headers,
+        body: jsonEncode({
+          'reason': reason,
+          'answers': answers,
+          'violations_count': violationsCount,
+        }),
+      ).timeout(const Duration(seconds: 6));
+
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('kickStudentOnlineExam error: $e');
+      return false;
+    }
+  }
 }
+
 

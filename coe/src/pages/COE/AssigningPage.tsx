@@ -794,22 +794,31 @@ export default function AssigningPage() {
 
           <div>
             <label className="mb-2 block text-sm font-medium text-gray-700" htmlFor="assign-date">Exam Date</label>
-            <select
-              id="assign-date"
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-            >
-              {availableDates.length === 0 ? (
-                <option value="">No dates set</option>
-              ) : (
-                availableDates.map((d) => (
-                  <option key={d} value={d}>
-                    {new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-                  </option>
-                ))
-              )}
-            </select>
+            <div className="flex gap-2">
+              <input
+                type="date"
+                id="assign-date-calendar"
+                className="w-1/2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+              />
+              <select
+                id="assign-date"
+                className="w-1/2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+              >
+                {availableDates.length === 0 ? (
+                  <option value="">No dates set</option>
+                ) : (
+                  availableDates.map((d) => (
+                    <option key={d} value={d}>
+                      {new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
           </div>
         </div>
 
@@ -905,7 +914,7 @@ export default function AssigningPage() {
                           </>
                         )}
                       </p>
-
+                      
                       {!assignedValuator && !isLocked && (
                         <div className="flex flex-col gap-2">
                           <label className="text-[10px] font-bold text-gray-500 uppercase">Assign To</label>

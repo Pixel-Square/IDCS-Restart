@@ -106,8 +106,8 @@ export default function LogsPage() {
   const [selectedLog, setSelectedLog] = useState<DisciplineLog | null>(null);
   const [showTrailModal, setShowTrailModal] = useState<boolean>(false);
 
-  const loadLogs = async () => {
-    setLoading(true);
+  const loadLogs = async (isBackground = false) => {
+    if (!isBackground) setLoading(true);
     try {
       const data = await fetchDisciplineLogs({
         search,
@@ -129,13 +129,20 @@ export default function LogsPage() {
     } catch (e) {
       console.error('Failed to load logs from backend DB:', e);
     } finally {
-      setLoading(false);
+      if (!isBackground) setLoading(false);
     }
   };
 
   useEffect(() => {
     loadLogs();
-  }, [statusFilter, severityFilter, deptFilter, selectedDate]);
+    // Auto-refresh logs every 6s in background when modal is not open
+    const interval = setInterval(() => {
+      if (!selectedLog && !showTrailModal && !updating) {
+        loadLogs(true);
+      }
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [statusFilter, severityFilter, deptFilter, selectedDate, selectedLog, showTrailModal, updating]);
 
   // Derived departments combining backend master depts & logs
   const departmentOptions = useMemo(() => {
@@ -260,7 +267,7 @@ export default function LogsPage() {
 
         <div className="flex items-center gap-2">
           <button
-            onClick={loadLogs}
+            onClick={() => loadLogs(false)}
             disabled={loading}
             className="p-2.5 text-slate-600 hover:text-indigo-600 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 disabled:opacity-50"
             title="Reload from DB"

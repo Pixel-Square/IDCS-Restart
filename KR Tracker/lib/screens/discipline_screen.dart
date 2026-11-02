@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/offline_storage_service.dart';
@@ -18,15 +19,28 @@ class _DisciplineScreenState extends State<DisciplineScreen> {
 
   List<Map<String, dynamic>> _submissions = [];
   List<Map<String, dynamic>> _approvals = [];
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     _loadData();
+    // Auto-refresh submissions and approvals every 5 seconds
+    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted) _loadData(isBackground: true);
+    });
   }
 
-  Future<void> _loadData() async {
-    setState(() => _isLoading = true);
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadData({bool isBackground = false}) async {
+    if (!isBackground) {
+      setState(() => _isLoading = true);
+    }
     final appState = AppState.instance;
 
     // WhatsApp-like auto-sync: Automatically sync pending offline items when internet/screen is active
@@ -52,7 +66,7 @@ class _DisciplineScreenState extends State<DisciplineScreen> {
       setState(() {
         _submissions = [...offlineItems, ...subs];
         _approvals = apps;
-        _isLoading = false;
+        if (!isBackground) _isLoading = false;
       });
     }
   }
