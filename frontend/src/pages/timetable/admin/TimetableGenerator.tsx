@@ -814,11 +814,12 @@ const buildGeneratedSection = (
   // they will appear in the timetable with an ⚠️ UNASSIGNED marker so the admin
   // can see exactly which subjects are missing a faculty assignment.
   //
-  // IMPORTANT: A subject listed in allExceptionCourses (group/special-period exclusions) must NOT
-  // be filtered out if it ALSO has any of the following exception rules configured:
-  //   • Credit-Based Period Allocation exception (courseExceptions)
-  //   • Class Type Exception rule (classTypeExceptions)
-  // This applies to ALL subjects given exception rules — not just specific courses.
+  // PRIORITY RULE: If a subject is explicitly listed in the group/special-period exception
+  // courses list, that takes HIGHEST priority and the course is excluded from normal scheduling.
+  // Only a direct course-specific exception rule (courseExceptions) can override this.
+  // A general class-type exception rule (classTypeExceptions) does NOT override the explicit
+  // group exception list — elective courses like ITC13** should stay excluded even when
+  // they also happen to match a broad class-type rule (e.g. TCPR).
   const rawSubjects = [...(snapshot.subjectStaff || [])];
 
   // Helper: true if this subject matches any Credit-Based course exception rule
@@ -830,14 +831,6 @@ const buildGeneratedSection = (
       const rName = (rule.course_name || '').toUpperCase();
       return (rCode && (sCode === rCode || sCode.includes(rCode))) || (rName && sName.includes(rName));
     });
-  };
-
-  // Helper: true if this subject's class type matches any Class Type Exception rule
-  const hasClassTypeExceptionForSubject = (subject: any): boolean => {
-    const subjectClassType = normalizeClassType(subject?.class_type, subject).toUpperCase();
-    return classTypeExceptions.some(
-      (rule) => (rule.classType || '').toUpperCase() === subjectClassType
-    );
   };
 
   const filteredSubjects = rawSubjects.filter((subject) => {
@@ -861,12 +854,11 @@ const buildGeneratedSection = (
     });
 
     if (isExcepted) {
-      // Even if a subject is in the group/special-period exclusion list, it must still be
-      // scheduled if it has its own exception rule. This covers ALL subjects configured in
-      // the Exception Rules panel — Credit-Based course exceptions AND class-type exceptions.
+      // A course explicitly named in the group exception list is excluded from normal scheduling.
+      // Only a direct course-specific exception rule (courseExceptions) can override this.
+      // Class-type rules (broad/general) do NOT override an explicit group exception entry.
       if (hasCourseExceptionRuleForSubject(subject)) return true;
-      if (hasClassTypeExceptionForSubject(subject)) return true;
-      // No exception rule found for this subject — correctly exclude from normal scheduling.
+      // Explicitly excepted — exclude regardless of class-type exception rules.
       return false;
     }
 
@@ -1944,9 +1936,11 @@ export default function TimetableGenerator({ templates, initialView = 'generator
           ? classTypeExceptions.find((r) => (r.classType || '').toUpperCase() === sClassType)
           : undefined;
 
-        // If this subject is a group exception course and has no overriding exception rule,
-        // skip it — it is scheduled during the group allocation period, not as a normal slot.
-        if (isGroupExceptionCourse && !courseRule && !classTypeRule) return;
+        // If this subject is explicitly listed as a group exception course, skip it —
+        // it is handled during the group allocation period and must NOT appear in the
+        // unfilled tray. Only a direct course-specific exception rule (courseRule) can
+        // override this. Class-type rules (broad/general) do NOT override group exceptions.
+        if (isGroupExceptionCourse && !courseRule) return;
 
         const matchingCells = placedCells.filter((c) => {
           const cSub = (c.subject || '').toUpperCase();
