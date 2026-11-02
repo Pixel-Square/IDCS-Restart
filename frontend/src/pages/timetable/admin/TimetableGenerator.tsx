@@ -814,24 +814,32 @@ const buildGeneratedSection = (
   // they will appear in the timetable with an ⚠️ UNASSIGNED marker so the admin
   // can see exactly which subjects are missing a faculty assignment.
   //
-  // PRIORITY RULE: If a subject is explicitly listed in the group/special-period exception
-  // courses list, that takes HIGHEST priority and the course is excluded from normal scheduling.
-  // Only a direct course-specific exception rule (courseExceptions) can override this.
-  // A general class-type exception rule (classTypeExceptions) does NOT override the explicit
-  // group exception list — elective courses like ITC13** should stay excluded even when
-  // they also happen to match a broad class-type rule (e.g. TCPR).
-  const rawSubjects = [...(snapshot.subjectStaff || [])];
-
-  // Helper: true if this subject matches any Credit-Based course exception rule
-  const hasCourseExceptionRuleForSubject = (subject: any): boolean => {
-    const sCode = getSubjectCode(subject).toUpperCase();
-    const sName = getSubjectName(subject).toUpperCase();
+  // Group Allocation / Special Period exception courses are subjects taught during the
+  // shared group period. They must NEVER appear in the section's individual timetable
+  // template slots. Class Type Exception rules and Credit-Based Course Exception rules
+  // control HOW a subject is scheduled — they do NOT override a group exclusion.
+  // Lightweight Subject Allocation check — must be defined BEFORE filteredSubjects.
+  // Subject Allocation (courseExceptions) rules override group exclusion:
+  // if the admin explicitly configured custom individual/paired periods for a subject
+  // in Subject Allocation, it MUST appear in the regular timetable even if it is also
+  // in a Group Allocation exception list.
+  const isInSubjectAllocation = (subject: any): boolean => {
+    if (!courseExceptions || courseExceptions.length === 0) return false;
+    const sCode = getSubjectCode(subject).toUpperCase().trim();
+    const sName = getSubjectName(subject).toUpperCase().trim();
     return courseExceptions.some((rule) => {
-      const rCode = (rule.course_code || '').toUpperCase();
-      const rName = (rule.course_name || '').toUpperCase();
-      return (rCode && (sCode === rCode || sCode.includes(rCode))) || (rName && sName.includes(rName));
+      const rCode = (rule.course_code || '').toUpperCase().trim();
+      const rName = (rule.course_name || '').toUpperCase().trim();
+      const rCodeBase = rCode.replace(/[\*X]+$/i, '').trim();
+      if (rCode && sCode === rCode) return true;
+      if (rCodeBase && rCodeBase.length >= 3 && sCode.startsWith(rCodeBase)) return true;
+      if (rCode && (sCode.includes(rCode) || rCode.includes(sCode))) return true;
+      if (rName && (sName.includes(rName) || rName.includes(sName))) return true;
+      return false;
     });
   };
+
+  const rawSubjects = [...(snapshot.subjectStaff || [])];
 
   const filteredSubjects = rawSubjects.filter((subject) => {
     if (!getSubjectLabel(subject)) return false;
@@ -845,20 +853,29 @@ const buildGeneratedSection = (
     }
 
     if (allExceptionCourses.length === 0) return true;
-    const sCode = getSubjectCode(subject).toUpperCase();
-    const sName = getSubjectName(subject).toUpperCase();
+    const sCode = getSubjectCode(subject).toUpperCase().trim();
+    const sName = getSubjectName(subject).toUpperCase().trim();
     const isExcepted = allExceptionCourses.some((e) => {
-      const eCode = (e.course_code || '').toUpperCase();
-      const eName = (e.course_name || '').toUpperCase();
-      return (eCode && sCode.includes(eCode)) || (eName && sName.includes(eName));
+      const eCode = (e.course_code || '').toUpperCase().trim();
+      const eName = (e.course_name || '').toUpperCase().trim();
+      // Strip trailing wildcards (* and X) to support patterns like ITC13**, AXX13XX
+      const eCodeBase = eCode.replace(/[\*X]+$/i, '').trim();
+      if (eCode && sCode === eCode) return true;
+      if (eCodeBase && eCodeBase.length >= 3 && sCode.startsWith(eCodeBase)) return true;
+      if (eCode && (sCode.includes(eCode) || eCode.includes(sCode))) return true;
+      if (eName && (sName.includes(eName) || eName.includes(sName))) return true;
+      return false;
     });
 
     if (isExcepted) {
-      // A course explicitly named in the group exception list is excluded from normal scheduling.
-      // Only a direct course-specific exception rule (courseExceptions) can override this.
-      // Class-type rules (broad/general) do NOT override an explicit group exception entry.
-      if (hasCourseExceptionRuleForSubject(subject)) return true;
-      // Explicitly excepted — exclude regardless of class-type exception rules.
+      // ✅ SUBJECT ALLOCATION OVERRIDE:
+      // If the admin explicitly added this subject to Subject Allocation with custom
+      // individual/paired period counts, it MUST be scheduled in the regular timetable
+      // regardless of any group exclusion. Subject Allocation is a direct admin
+      // instruction and takes highest priority.
+      if (isInSubjectAllocation(subject)) return true;
+
+      // Group exclusion wins: subject is taught during the shared group period only.
       return false;
     }
 
@@ -909,10 +926,26 @@ const buildGeneratedSection = (
     };
 
     return courseExceptions.find((rule) => {
-      // 1. Course Code / Name Match
-      const rCode = (rule.course_code || '').toUpperCase();
-      const rName = (rule.course_name || '').toUpperCase();
-      const courseMatched = (rCode && sCode === rCode) || (rCode && sCode.includes(rCode)) || (rName && sName.includes(rName));
+      // 1. Course Code / Name Match — supports wildcards like ITC13**, AXX13XX, CSC13**
+      const rCode = (rule.course_code || '').toUpperCase().trim();
+      const rName = (rule.course_name || '').toUpperCase().trim();
+
+      // Strip trailing wildcard characters (* and X used as placeholders) to get a matchable prefix
+      // e.g. "ITC13**" → "ITC13", "AXX13XX" → "AXX13", "CSC13**" → "CSC13"
+      const rCodeBase = rCode.replace(/[\*X]+$/i, '').trim();
+
+      const courseMatched = (() => {
+        if (!rCode && !rName) return false;
+        // Exact match
+        if (rCode && sCode === rCode) return true;
+        // Wildcard prefix match: if the rule code had trailing wildcards, match any subject whose code starts with the prefix
+        if (rCodeBase && rCodeBase.length >= 3 && sCode.startsWith(rCodeBase)) return true;
+        // Bidirectional contains: rule code is a substring of subject code, or vice versa
+        if (rCode && (sCode.includes(rCode) || rCode.includes(sCode))) return true;
+        // Name match (substring, both directions)
+        if (rName && (sName.includes(rName) || rName.includes(sName))) return true;
+        return false;
+      })();
       if (!courseMatched) return false;
 
       const selectedSecKeys = rule.selected_section_keys || [];
@@ -1219,7 +1252,7 @@ const buildGeneratedSection = (
             faculty: displayFaculty,
             kind: 'theory',
             code: sCode,
-            note: `Course Exception (${courseRule.course_code || 'Custom'}) - Block Pair (No slot available)`,
+            note: `Subject Allocation (${courseRule.course_code || 'Custom'}) - Block Pair (No slot available)`,
             isPair: true,
             colSpan: 2,
             bgColor: '#FEF3C7',
@@ -1241,7 +1274,7 @@ const buildGeneratedSection = (
             subject: buildCellText(subject, 'theory', `Block Pair ${p}`),
             faculty: displayFaculty,
             kind: 'theory',
-            note: (isUnassigned ? '⚠️ No staff! ' : conflict ? '⚠️ Conflict! ' : '') + `Course Exception (${courseRule.course_code || 'Custom'}) - Block Pair`,
+            note: (isUnassigned ? '⚠️ No staff! ' : conflict ? '⚠️ Conflict! ' : '') + `Subject Allocation (${courseRule.course_code || 'Custom'}) - Block Pair`,
             colSpan: block.keys.length,
           };
         }
@@ -1250,7 +1283,7 @@ const buildGeneratedSection = (
             subject: buildCellText(subject, 'theory', `Block Pair ${p}`),
             faculty: displayFaculty,
             kind: 'theory',
-            note: (isUnassigned ? '⚠️ No staff! ' : conflict ? '⚠️ Conflict! ' : '') + `Course Exception (${courseRule.course_code || 'Custom'}) - Block Pair`,
+            note: (isUnassigned ? '⚠️ No staff! ' : conflict ? '⚠️ Conflict! ' : '') + `Subject Allocation (${courseRule.course_code || 'Custom'}) - Block Pair`,
             isBlockSecondSlot: true,
           };
         }
@@ -1267,7 +1300,7 @@ const buildGeneratedSection = (
             faculty: displayFaculty,
             kind: 'theory',
             code: sCode,
-            note: `Course Exception (${courseRule.course_code || 'Custom'}) - Single Period (No slot available)`,
+            note: `Subject Allocation (${courseRule.course_code || 'Custom'}) - Single Period (No slot available)`,
             isPair: false,
             colSpan: 1,
             bgColor: '#EFF6FF',
@@ -1285,7 +1318,7 @@ const buildGeneratedSection = (
           subject: buildCellText(subject, 'theory', `Single ${i}`),
           faculty: displayFaculty,
           kind: 'theory',
-          note: (isUnassigned ? '⚠️ No staff! ' : conflict ? '⚠️ Conflict! ' : '') + `Course Exception (${courseRule.course_code || 'Custom'}) - Single Period`,
+          note: (isUnassigned ? '⚠️ No staff! ' : conflict ? '⚠️ Conflict! ' : '') + `Subject Allocation (${courseRule.course_code || 'Custom'}) - Single Period`,
         };
       }
     } else if (classTypeRule) {
@@ -1722,6 +1755,14 @@ export default function TimetableGenerator({ templates, initialView = 'generator
     }));
   };
 
+  // Called by GroupAllocationModal whenever a group is created/updated/deleted.
+  // Keeps local groupAllocations state in sync so timetable preview immediately
+  // reflects the latest exception courses and period settings from the group
+  // allocation — NOT from the old timetable template allocation.
+  const handleGroupAllocationsUpdated = (updatedAllocations: GroupAllocation[]) => {
+    setGroupAllocations(updatedAllocations);
+  };
+
   const getGroupedSections = () => {
     const grouped: Record<number, Record<string, any[]>> = {
       1: {},
@@ -1831,99 +1872,20 @@ export default function TimetableGenerator({ templates, initialView = 'generator
     if (secGen && snapshot) {
       const placedCells = Object.values(secGen.cells);
 
-      // Compute which group allocations and special periods match this section
-      // (mirrors the same logic in buildGeneratedSection so we honour exception-course lists)
-      const sectionMatchesDept = (selectedDepts: string[], dept: string | null | undefined): boolean => {
-        if (!dept || !selectedDepts || selectedDepts.length === 0) return false;
-        const dUpper = dept.toUpperCase().trim();
-        return selectedDepts.some((sel) => {
-          const selUpper = sel.toUpperCase().trim();
-          if (selUpper === 'S&H') return dUpper.includes('SCIENCE') || dUpper.includes('S&H') || dUpper.includes('SH') || dUpper.includes('HUMANIT');
-          if (selUpper === 'AI&DS') return (dUpper.includes('AI') || dUpper.includes('ARTIFICIAL')) && (dUpper.includes('DS') || dUpper.includes('DATA'));
-          if (selUpper === 'AIML') return (dUpper.includes('AI') || dUpper.includes('ARTIFICIAL')) && (dUpper.includes('ML') || dUpper.includes('MACHINE'));
-          if (selUpper === 'CIVIL') return dUpper === 'CIVIL' || dUpper === 'CE' || dUpper === 'CIV' || dUpper.includes('CIVIL');
-          if (selUpper === 'MECH') return dUpper === 'MECH' || dUpper === 'ME' || dUpper === 'MEC' || dUpper.includes('MECH') || dUpper.includes('MECHANICAL');
-          if (selUpper === 'CSE') return dUpper === 'CSE' || dUpper === 'CS' || dUpper.includes('COMPUTER SCIENCE');
-          if (selUpper === 'IT') return dUpper === 'IT' || dUpper.includes('INFORMATION TECH');
-          if (selUpper === 'ECE') return dUpper === 'ECE' || dUpper === 'EC' || dUpper.includes('ELECTRONICS');
-          if (selUpper === 'EEE') return dUpper === 'EEE' || dUpper === 'EE' || dUpper.includes('ELECTRICAL');
-          return dUpper === selUpper || dUpper.includes(selUpper) || selUpper.includes(dUpper);
-        });
-      };
-
-      const sectionMatchesKey = (selectedKeys: string[]): boolean => {
-        if (!selectedKeys || selectedKeys.length === 0) return false;
-        const secIdStr = String(snapshot.sectionId);
-        return selectedKeys.some((k) => {
-          if (k === sectionKey) return true;
-          if (k.endsWith(`-${secIdStr}`) || k.startsWith(`sec-${secIdStr}-`) || k.startsWith(`mixed-${secIdStr}-`)) return true;
-          const parts = k.split('-');
-          if (parts[parts.length - 1] === secIdStr || parts[1] === secIdStr) return true;
-          return false;
-        });
-      };
-
-      // Get exception courses from groups matching this section
-      const sectionGroupExceptionCourses: Array<{ course_code?: string; course_name?: string }> = [];
-      groupAllocations.forEach((g) => {
-        const hasExplicitSections = (g.selectedSectionKeys && g.selectedSectionKeys.length > 0) ||
-                                   (g.selectedMixedSectionKeys && g.selectedMixedSectionKeys.length > 0);
-        let matches = false;
-        if (hasExplicitSections) {
-          matches = sectionMatchesKey(g.selectedSectionKeys || []) || sectionMatchesKey(g.selectedMixedSectionKeys || []);
-        } else {
-          const yearMatch = snapshot.year !== null && snapshot.year !== undefined && g.selectedYears && g.selectedYears.includes(snapshot.year);
-          const deptMatch = g.selectedDepartments && g.selectedDepartments.length > 0 &&
-                            sectionMatchesDept(g.selectedDepartments, snapshot.department);
-          matches = yearMatch && deptMatch;
-        }
-        if (matches) {
-          (g.exceptionCourses || []).forEach((ec) => sectionGroupExceptionCourses.push(ec));
-        }
-      });
-
-      // Get exception courses from special periods matching this section
-      specialPeriodAllocations.forEach((sp) => {
-        const hasExplicitSections = (sp.selectedSectionKeys && sp.selectedSectionKeys.length > 0) ||
-                                   (sp.selectedMixedSectionKeys && sp.selectedMixedSectionKeys.length > 0);
-        let matches = false;
-        if (hasExplicitSections) {
-          matches = sectionMatchesKey(sp.selectedSectionKeys || []) || sectionMatchesKey(sp.selectedMixedSectionKeys || []);
-        } else {
-          if (sp.selectedDepartments && sp.selectedDepartments.length > 0) {
-            if (!sectionMatchesDept(sp.selectedDepartments, snapshot.department)) return;
-          }
-          const semestersOrYears = sp.selectedSemesters || sp.selectedYears || [];
-          if (semestersOrYears.length > 0) {
-            const semMatch = snapshot.semester !== undefined && snapshot.semester !== null
-              ? semestersOrYears.includes(Number(snapshot.semester))
-              : (snapshot.year !== undefined && snapshot.year !== null && (
-                  semestersOrYears.includes(Number(snapshot.year) * 2) ||
-                  semestersOrYears.includes(Number(snapshot.year) * 2 - 1)
-                ));
-            if (!semMatch) return;
-          }
-          matches = true;
-        }
-        if (matches) {
-          (sp.exceptionCourses || []).forEach((ec) => sectionGroupExceptionCourses.push(ec));
-        }
-      });
-
       (snapshot.subjectStaff || []).forEach((subj: any) => {
         const sLabel = getSubjectLabel(subj);
         if (!sLabel) return;
         const sCode = (getSubjectCode(subj) || '').toUpperCase().trim();
         const sName = (getSubjectName(subj) || '').toUpperCase().trim();
 
-        // Skip subjects that are exception courses for this section's group/special-period
-        // allocations — they are intentionally excluded from normal scheduling and should
-        // NOT appear in the unfilled periods tray (mirrors buildGeneratedSection filtering).
-        const isGroupExceptionCourse = sectionGroupExceptionCourses.length > 0 && sectionGroupExceptionCourses.some((e) => {
-          const eCode = (e.course_code || '').toUpperCase();
-          const eName = (e.course_name || '').toUpperCase();
-          return (eCode && sCode.includes(eCode)) || (eName && sName.includes(eName));
+        const matchingCells = placedCells.filter((c) => {
+          const cSub = (c.subject || '').toUpperCase();
+          return (sCode && cSub.includes(sCode)) || (sName && cSub.includes(sName));
         });
+
+        const placedPairs = matchingCells.filter((c) => c.colSpan === 2).length;
+        const placedSingles = matchingCells.filter((c) => !c.colSpan || c.colSpan === 1).length;
+        const totalPlaced = placedPairs * 2 + placedSingles;
 
         const courseRule = courseExceptions.find((r) => {
           const rCode = (r.course_code || '').toUpperCase();
@@ -1935,21 +1897,6 @@ export default function TimetableGenerator({ templates, initialView = 'generator
         const classTypeRule = !courseRule
           ? classTypeExceptions.find((r) => (r.classType || '').toUpperCase() === sClassType)
           : undefined;
-
-        // If this subject is explicitly listed as a group exception course, skip it —
-        // it is handled during the group allocation period and must NOT appear in the
-        // unfilled tray. Only a direct course-specific exception rule (courseRule) can
-        // override this. Class-type rules (broad/general) do NOT override group exceptions.
-        if (isGroupExceptionCourse && !courseRule) return;
-
-        const matchingCells = placedCells.filter((c) => {
-          const cSub = (c.subject || '').toUpperCase();
-          return (sCode && cSub.includes(sCode)) || (sName && cSub.includes(sName));
-        });
-
-        const placedPairs = matchingCells.filter((c) => c.colSpan === 2).length;
-        const placedSingles = matchingCells.filter((c) => !c.colSpan || c.colSpan === 1).length;
-        const totalPlaced = placedPairs * 2 + placedSingles;
 
         let reqPairs = 0;
         let reqSingles = 0;
@@ -1982,7 +1929,7 @@ export default function TimetableGenerator({ templates, initialView = 'generator
               faculty: getFacultyNames(subj).join(' / ') || 'Assigned Faculty',
               kind: 'theory',
               code: sCode,
-              note: `${courseRule ? 'Course Exception' : classTypeRule ? 'Class Type' : 'Pair'} (2 Periods Required)`,
+              note: `${courseRule ? 'Subject Allocation' : classTypeRule ? 'Class Type' : 'Pair'} (2 Periods Required)`,
               isPair: true,
               colSpan: 2,
               bgColor: '#FEF3C7',
@@ -3896,6 +3843,7 @@ export default function TimetableGenerator({ templates, initialView = 'generator
         <GroupAllocationModal
           isOpen={showGroupModal}
           onClose={() => setShowGroupModal(false)}
+          onAllocationsUpdated={handleGroupAllocationsUpdated}
         />
         <SpecialPeriodModal
           isOpen={showSpecialModal}
@@ -4251,6 +4199,7 @@ export default function TimetableGenerator({ templates, initialView = 'generator
       <GroupAllocationModal
         isOpen={showGroupModal}
         onClose={() => setShowGroupModal(false)}
+        onAllocationsUpdated={handleGroupAllocationsUpdated}
       />
 
       <SpecialPeriodModal

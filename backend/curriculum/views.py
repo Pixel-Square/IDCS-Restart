@@ -27,15 +27,23 @@ logger = logging.getLogger(__name__)
 
 
 def custom_exception_handler(exc, context):
+    codes = None
+    try:
+        if hasattr(exc, 'get_codes'):
+            raw_codes = exc.get_codes()
+            if isinstance(raw_codes, str):
+                codes = raw_codes
+    except Exception:
+        pass
+
     response = exception_handler(exc, context)
 
     if response is not None:
-        response.data['status_code'] = response.status_code
-        response.data['detail'] = str(exc)
-        # Machine-readable reason (e.g. 'password_change_required') for clients.
-        codes = exc.get_codes() if hasattr(exc, 'get_codes') else None
-        if isinstance(codes, str):
-            response.data['code'] = codes
+        if isinstance(response.data, dict):
+            response.data['status_code'] = response.status_code
+            response.data['detail'] = str(exc)
+            if codes:
+                response.data['code'] = codes
 
     return response
 

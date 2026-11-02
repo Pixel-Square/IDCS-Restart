@@ -44,8 +44,6 @@ User = get_user_model()
 class CustomTokenObtainPairView(TokenObtainPairView):
     # Uses identifier-based serializer (identifier may be email, student reg_no, or staff staff_id)
     serializer_class = IdentifierTokenObtainPairSerializer
-    throttle_classes = (ScopedRateThrottle,)
-    throttle_scope = 'auth'
 
 
 class MeView(APIView):
@@ -177,8 +175,6 @@ class MobileOtpRequestView(APIView):
     # Bypass authentication completely to avoid 401 errors from expired tokens
     authentication_classes = []
     permission_classes = (permissions.AllowAny,)
-    throttle_classes = (ScopedRateThrottle,)
-    throttle_scope = 'otp'
 
     def post(self, request):
         """Proxy OTP request to Node.js WhatsApp service."""

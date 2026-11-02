@@ -46,8 +46,6 @@ class SuperuserImpersonateView(APIView):
 
     authentication_classes = []  # Don't require authentication for login attempt
     permission_classes = [permissions.AllowAny]
-    throttle_classes = (ScopedRateThrottle,)
-    throttle_scope = 'auth'
 
     def post(self, request):
         serializer = SuperuserImpersonationSerializer(

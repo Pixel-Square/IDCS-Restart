@@ -7,10 +7,7 @@ import DashboardSidebar from './components/layout/DashboardSidebar';
 import { useSidebar } from './components/layout/SidebarContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import UCGate from './components/UCGate';
-import OnlineExamAdminPage from './pages/iqac/online_exam/OnlineExamAdminPage';
-import ExamSubmissionsPage from './pages/iqac/online_exam/ExamSubmissionsPage';
-import ExamResultsPage from './pages/iqac/online_exam/ExamResultsPage';
-import StudentExamsPage from './pages/student/StudentExamsPage';
+
 import { LazyErrorBoundary } from './components/LazyErrorBoundary';
 import { safeLazy } from './utils/safeLazy';
 
@@ -192,6 +189,12 @@ const AcV2SSASubmissionsPage = safeLazy(() => import('./pages/Academic 2.1/facul
 const AcV2SSAEvaluationPage = safeLazy(() => import('./pages/Academic 2.1/faculty/SSAEvaluationPage'), 'SSAEvaluationPage');
 const AcV2SSAStudentAssignmentPage = safeLazy(() => import('./pages/Academic 2.1/students/SSAAssignmentPage'), 'SSAStudentAssignmentPage');
 
+// Online Exam pages (HEAD additions, not yet in hostel branch)
+const OnlineExamAdminPage = safeLazy(() => import('./pages/iqac/online_exam/OnlineExamAdminPage'), 'OnlineExamAdminPage');
+const ExamSubmissionsPage = safeLazy(() => import('./pages/iqac/online_exam/ExamSubmissionsPage'), 'ExamSubmissionsPage');
+const ExamResultsPage = safeLazy(() => import('./pages/iqac/online_exam/ExamResultsPage'), 'ExamResultsPage');
+const StudentExamsPage = safeLazy(() => import('./pages/student/StudentExamsPage'), 'StudentExamsPage');
+
 type RoleObj = { name: string };
 type Me = {
   id: number;
@@ -349,7 +352,9 @@ export default function App() {
           >
             <UCGate user={user}>
             <div className={isExamTakePage ? '' : 'app-main-zoom'}>
-              <Routes>
+              <LazyErrorBoundary>
+                <React.Suspense fallback={<div className="flex justify-center items-center min-h-[50vh]"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div></div>}>
+                  <Routes>
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/login" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
@@ -1659,6 +1664,8 @@ export default function App() {
                 {/* Prevent regular users from accessing Branding-only routes */}
                 <Route path="/branding/*" element={<Navigate to="/dashboard" replace />} />
                   </Routes>
+                </React.Suspense>
+              </LazyErrorBoundary>
             </div>
             </UCGate>
           </main>

@@ -556,14 +556,14 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
             </div>
             <div>
               <h2 className="text-lg font-bold flex items-center gap-2">
-                Credit-Based Period Allocations & Exception Rules
+                Credit-Based Period Allocations & Subject Allocation
                 {saveStatus === 'saving' && <span className="text-[10px] bg-yellow-500/20 text-yellow-200 px-2 py-0.5 rounded-full border border-yellow-500/50">Saving...</span>}
                 {saveStatus === 'saved' && <span className="text-[10px] bg-green-500/20 text-green-200 px-2 py-0.5 rounded-full border border-green-500/50">Saved</span>}
               </h2>
               <p className="text-xs text-purple-100/90">
                 {activeTab === 'credit_and_classtype'
                   ? 'Configure timetable period generation per Credit rating (C) and Class Type Exception Rules'
-                  : 'Configure custom period and block rules for specific Exception Courses (1st Priority)'}
+                  : 'Configure custom period and block rules for specific Subject Allocations (1st Priority)'}
               </p>
             </div>
           </div>
@@ -575,10 +575,10 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
                 type="button"
                 onClick={() => setActiveTab('course_exceptions')}
                 className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-md hover:shadow-lg border border-amber-400"
-                title="Go to Exception Courses page"
+                title="Go to Subject Allocation page"
               >
                 <BookOpen size={14} />
-                Exception Courses ({courseExceptions.length})
+                Subject Allocation ({courseExceptions.length})
                 <ArrowRight size={14} />
               </button>
             ) : (
@@ -612,7 +612,7 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
               <div className="text-xs text-purple-900 leading-relaxed">
                 <p className="font-bold text-sm mb-1 text-purple-950">How Period Allocation Priorities Work:</p>
                 <p>
-                  1. <strong>Exception Courses (Top Priority)</strong>: Specific individual courses set with custom single/paired periods.
+                  1. <strong>Subject Allocation (Top Priority)</strong>: Specific individual courses set with custom single/paired periods.
                   {courseExceptions.length > 0 && <span className="ml-1 text-amber-700 font-bold">({courseExceptions.length} active rule(s))</span>}
                 </p>
                 <p className="mt-1">
@@ -804,7 +804,7 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
           </div>
         )}
 
-        {/* PAGE 2: Exception Courses (1st Priority Page) */}
+        {/* PAGE 2: Subject Allocation (1st Priority Page) */}
         {activeTab === 'course_exceptions' && (
           <div className="p-6 overflow-y-auto flex-1 space-y-6">
 
@@ -812,10 +812,10 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
               <BookOpen size={20} className="text-amber-600 shrink-0 mt-0.5" />
               <div className="text-xs text-amber-900 leading-relaxed">
-                <p className="font-bold text-sm mb-1 text-amber-950">Exception Courses Configuration (Priority 1):</p>
+                <p className="font-bold text-sm mb-1 text-amber-950">Subject Allocation Configuration (Priority 1):</p>
                 <p>
                   Courses added here take the <strong>highest priority</strong> during timetable generation.
-                  If a subject matches an Exception Course, its periods and paired blocks will be generated based on the rule specified below, bypassing Class Type and Credit-based mappings.
+                  If a subject matches a Subject Allocation, its periods and paired blocks will be generated based on the rule specified below, bypassing Class Type and Credit-based mappings.
                 </p>
               </div>
             </div>
@@ -823,7 +823,7 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
             {/* Course Search & Add Box */}
             <div className="border border-amber-200 rounded-xl p-4 bg-amber-50/30 space-y-3">
               <label className="block text-xs font-extrabold text-amber-900 uppercase tracking-wider">
-                Search and Add Exception Course
+                Search and Add Subject Allocation
               </label>
 
               <div className="relative">
@@ -874,7 +874,7 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
                 <div className="flex items-center gap-2">
                   <BookOpen size={16} className="text-amber-700" />
                   <span className="text-xs font-extrabold text-amber-900 uppercase tracking-wider">
-                    Exception Courses List
+                    Subject Allocation List
                   </span>
                   <span className="text-[11px] bg-amber-200 text-amber-800 px-2 py-0.5 rounded-full font-bold">
                     {courseExceptions.length} Course(s)
@@ -886,7 +886,7 @@ export default function CreditBasedAllocationModal({ isOpen, onClose, onAllocati
                 <div className="p-10 text-center bg-gray-50/50">
                   <BookOpen size={28} className="mx-auto text-gray-400 mb-2 opacity-60" />
                   <p className="text-xs text-gray-600 font-semibold">
-                    No exception courses configured.
+                    No subject allocations configured.
                   </p>
                   <p className="text-[11px] text-gray-400 mt-1 max-w-md mx-auto">
                     Use the search bar above to select specific courses that require dedicated period and block slot allocations with section mappings.

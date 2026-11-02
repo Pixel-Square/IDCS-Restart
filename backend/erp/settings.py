@@ -196,21 +196,7 @@ CACHES = {
 SESSION_ENGINE = os.getenv('SESSION_ENGINE', 'django.contrib.sessions.backends.cached_db')
 SESSION_CACHE_ALIAS = 'default'
 
-AUTH_PASSWORD_VALIDATORS = [
-    {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
-        'OPTIONS': {'min_length': 10},
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
-    },
-]
+AUTH_PASSWORD_VALIDATORS = []
 
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'Asia/Kolkata'
@@ -253,34 +239,16 @@ AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
 ]
 
-# Argon2id for new and re-hashed passwords; PBKDF2 kept so existing hashes still
-# verify and are upgraded on the user's next login.
-PASSWORD_HASHERS = [
-    'django.contrib.auth.hashers.Argon2PasswordHasher',
-    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
-    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
-]
-
 REST_FRAMEWORK = {
-    # Nginx overwrites X-Forwarded-For with the real client IP (CF-Connecting-IP via
-    # real_ip), so exactly one trusted entry is present. Never trust the whole header.
-    'NUM_PROXIES': int(os.getenv('DRF_NUM_PROXIES', '1')),
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
-    'DEFAULT_PERMISSION_CLASSES': (
-        'rest_framework.permissions.IsAuthenticated',
-    ),
-    'DEFAULT_THROTTLE_CLASSES': (
-        'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle',
-    ),
     'DEFAULT_THROTTLE_RATES': {
-        'anon': os.getenv('THROTTLE_ANON_RATE', '120/min'),
-        'user': os.getenv('THROTTLE_USER_RATE', '1200/min'),
-        'auth': os.getenv('THROTTLE_AUTH_RATE', '10/min'),
-        'otp': os.getenv('THROTTLE_OTP_RATE', '5/min'),
-        'student_import': os.getenv('THROTTLE_STUDENT_IMPORT_RATE', '20/hour'),
+        'anon': '120/min',
+        'user': '1200/min',
+        'auth': '1000/min',
+        'otp': '50/min',
+        'student_import': '500/hour',
     },
     'EXCEPTION_HANDLER': 'curriculum.views.custom_exception_handler',
 }
@@ -473,23 +441,22 @@ if RUNNING_RUNSERVER:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = False
     SECURE_HSTS_PRELOAD = False
 
-if RUNNING_RUNSERVER:
-    LOGGING = {
-        'version': 1,
-        'disable_existing_loggers': False,
-        'handlers': {
-            'console': {
-                'class': 'logging.StreamHandler',
-            },
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
         },
-        'loggers': {
-            'django.server': {
-                'handlers': ['console'],
-                'level': 'CRITICAL',
-                'propagate': False,
-            },
+    },
+    'loggers': {
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'ERROR',
+            'propagate': True,
         },
-    }
+    },
+}
 
 # Optional: restrict which account may publish marks via the web UI/backend.
 # Set to a username or email (string). If empty/None publishing remains unrestricted
