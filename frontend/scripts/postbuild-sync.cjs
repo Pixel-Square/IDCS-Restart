@@ -31,6 +31,12 @@ if (probe.error || probe.status !== 0) {
   process.exit(0);
 }
 
+const destDir = path.dirname(destination);
+if (!fs.existsSync(destDir)) {
+  console.log(`[postbuild] Target directory ${destDir} does not exist — skipping sync.`);
+  process.exit(0);
+}
+
 console.log(`[postbuild] Syncing ${source}/ -> ${destination}`);
 const result = spawnSync('rsync', ['-a', '--delete', `${source}/`, destination], {
   stdio: 'inherit',
