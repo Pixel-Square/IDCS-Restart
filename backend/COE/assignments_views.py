@@ -70,8 +70,13 @@ def _serialize_allocation(row: CoeAssignmentStore, faculty_code: str) -> list[di
     return results
 
 
+from rest_framework.permissions import IsAuthenticated
+from .permissions import IsCoeUser
+
+
 class CoeAssignmentStoreView(APIView):
-    """Public read / authenticated write endpoint for COE assignments."""
+    """Authenticated read for faculty evaluations / COE-only write endpoint."""
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         faculty_code = _normalize_faculty_code(request.query_params.get('faculty_code', ''))
@@ -86,8 +91,8 @@ class CoeAssignmentStoreView(APIView):
         return Response({'results': allocations})
 
     def post(self, request):
-        if not getattr(request.user, 'is_authenticated', False):
-            return Response({'detail': 'Authentication required.'}, status=status.HTTP_401_UNAUTHORIZED)
+        if not IsCoeUser().has_permission(request, self):
+            return Response({'detail': 'COE administrative access required.'}, status=status.HTTP_403_FORBIDDEN)
 
         payload = request.data or {}
         stores = payload.get('stores')

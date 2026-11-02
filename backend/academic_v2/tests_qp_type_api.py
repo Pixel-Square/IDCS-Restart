@@ -8,7 +8,8 @@ from academic_v2.models import AcV2ClassType, AcV2QpAssignment, AcV2QpPattern, A
 class QpTypeApiTests(TestCase):
     def test_create_qp_type_returns_201(self):
         User = get_user_model()
-        user = User.objects.create_user(username='qp_type_api_user', password='StrongPass123!')
+        # QP type writes are Academic 2.1 admin-only.
+        user = User.objects.create_user(username='qp_type_api_user', password='StrongPass123!', is_superuser=True)
 
         client = APIClient()
         client.force_authenticate(user=user)

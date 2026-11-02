@@ -4,11 +4,13 @@ Replaces the single JSON blob pattern with individual rows per dummy.
 """
 from __future__ import annotations
 
+from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import CoeStudentMarks
+from .permissions import IsCoeUser
 
 
 class CoeStudentMarksView(APIView):
@@ -21,6 +23,7 @@ class CoeStudentMarksView(APIView):
     POST { entries: [...] }       → Bulk save
     DELETE ?dummy=<dummy_number>  → { deleted: true }
     """
+    permission_classes = [IsCoeUser]
 
     def get(self, request):
         dummy = (request.query_params.get('dummy') or '').strip()
@@ -59,17 +62,18 @@ class CoeStudentMarksView(APIView):
         if entries and isinstance(entries, list):
             # Bulk save
             saved_count = 0
-            for entry in entries:
-                dummy = str(entry.get('dummy_number') or '').strip()
-                if not dummy:
-                    continue
-                marks = entry.get('marks', {})
-                qp_type = str(entry.get('qp_type') or 'QP1').strip()
-                CoeStudentMarks.objects.update_or_create(
-                    dummy_number=dummy,
-                    defaults={'marks': marks, 'qp_type': qp_type},
-                )
-                saved_count += 1
+            with transaction.atomic():
+                for entry in entries:
+                    dummy = str(entry.get('dummy_number') or '').strip()
+                    if not dummy:
+                        continue
+                    marks = entry.get('marks', {})
+                    qp_type = str(entry.get('qp_type') or 'QP1').strip()
+                    CoeStudentMarks.objects.update_or_create(
+                        dummy_number=dummy,
+                        defaults={'marks': marks, 'qp_type': qp_type},
+                    )
+                    saved_count += 1
             return Response({'saved': True, 'count': saved_count}, status=status.HTTP_200_OK)
 
         # Single save
@@ -89,11 +93,6 @@ class CoeStudentMarksView(APIView):
         return Response({'saved': True}, status=status.HTTP_200_OK)
 
     def delete(self, request):
-        if not getattr(request.user, 'is_authenticated', False):
-            return Response(
-                {'detail': 'Authentication required.'},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
         dummy = (request.query_params.get('dummy') or '').strip()
         if not dummy:
             return Response(
@@ -111,6 +110,7 @@ class CoeStudentMarksBulkView(APIView):
     GET  ?dummies=D1,D2,D3  → { entries: [...] } for specific dummies
     POST { dummies: [...] } → { entries: [...] } for specific dummies
     """
+    permission_classes = [IsCoeUser]
 
     def get(self, request):
         dummies_param = request.query_params.get('dummies', '')

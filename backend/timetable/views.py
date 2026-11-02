@@ -6,6 +6,7 @@ from .serializers import TimetableTemplateSerializer, PeriodDefinitionSerializer
 from .models import PeriodSwapRequest
 from .serializers import PeriodSwapRequestSerializer
 from accounts.utils import get_user_permissions
+from .permissions import IsTimetableManagerOrReadOnly, is_timetable_manager
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -2154,7 +2155,7 @@ class TimetableTemplateViewSet(viewsets.ModelViewSet):
 
     queryset = TimetableTemplate.objects.all().prefetch_related('periods')
     serializer_class = TimetableTemplateSerializer
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (IsTimetableManagerOrReadOnly,)
 
     def get_queryset(self):
         user = self.request.user
@@ -2169,7 +2170,7 @@ class TimetableTemplateViewSet(viewsets.ModelViewSet):
 class TimetableSlotViewSet(viewsets.ModelViewSet):
     queryset = TimetableSlot.objects.select_related('template')
     serializer_class = PeriodDefinitionSerializer
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (IsTimetableManagerOrReadOnly,)
 
 
 class TimetableAssignmentViewSet(viewsets.ModelViewSet):
@@ -2378,6 +2379,21 @@ class TimetableAssignmentViewSet(viewsets.ModelViewSet):
         if not allowed:
             raise PermissionDenied('You do not have permission to change timetable entries for this section.')
         serializer.save()
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        perms = get_user_permissions(user)
+        role_names = {r.name.upper() for r in user.roles.all()}
+        allowed = is_timetable_manager(user) or 'timetable.assign' in perms or 'HOD' in role_names
+        if not allowed and 'ADVISOR' in role_names and instance.section_id:
+            from academics.models import SectionAdvisor
+            staff_profile = getattr(user, 'staff_profile', None)
+            allowed = bool(staff_profile) and SectionAdvisor.objects.filter(
+                section_id=instance.section_id, advisor=staff_profile, is_active=True, academic_year__is_active=True
+            ).exists()
+        if not allowed:
+            raise PermissionDenied('You do not have permission to delete timetable entries for this section.')
+        instance.delete()
 
     def create(self, request, *args, **kwargs):
         try:
@@ -3881,25 +3897,25 @@ from .serializers import CreditAllocationSerializer, ClassTypeExceptionSerialize
 class CreditAllocationViewSet(viewsets.ModelViewSet):
     queryset = CreditAllocation.objects.all()
     serializer_class = CreditAllocationSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = (IsTimetableManagerOrReadOnly,)
 
 
 class ClassTypeExceptionViewSet(viewsets.ModelViewSet):
     queryset = ClassTypeException.objects.all()
     serializer_class = ClassTypeExceptionSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = (IsTimetableManagerOrReadOnly,)
 
 
 class GroupAllocationViewSet(viewsets.ModelViewSet):
     queryset = GroupAllocation.objects.all()
     serializer_class = GroupAllocationSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = (IsTimetableManagerOrReadOnly,)
     lookup_field = 'frontend_id'
 
 class VenueExceptionRuleViewSet(viewsets.ModelViewSet):
     queryset = VenueExceptionRule.objects.all()
     serializer_class = VenueExceptionRuleSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = (IsTimetableManagerOrReadOnly,)
     lookup_field = 'frontend_id'
 
 
@@ -3909,13 +3925,13 @@ from .serializers import CourseExceptionRuleSerializer, SpecialPeriodRuleSeriali
 class CourseExceptionRuleViewSet(viewsets.ModelViewSet):
     queryset = CourseExceptionRule.objects.all()
     serializer_class = CourseExceptionRuleSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = (IsTimetableManagerOrReadOnly,)
     lookup_field = 'frontend_id'
 
 
 class SpecialPeriodRuleViewSet(viewsets.ModelViewSet):
     queryset = SpecialPeriodRule.objects.all()
     serializer_class = SpecialPeriodRuleSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = (IsTimetableManagerOrReadOnly,)
     lookup_field = 'frontend_id'
 

@@ -15,6 +15,7 @@ from rest_framework import serializers
 from django.db import transaction
 from academics.models import StaffProfile, Department
 from django.contrib.auth import get_user_model
+from .permissions import IsCoeUser
 
 User = get_user_model()
 
@@ -64,6 +65,7 @@ def _serialize_admin_source_staff(strict: bool):
 
 
 class ExternalStaffListView(APIView):
+    permission_classes = [IsCoeUser]
     def get(self, request):
         strict = str(request.query_params.get('strict', '1')).lower() in ('1', 'true', 'yes')
         return Response(_serialize_local_external_staff(strict))
@@ -71,6 +73,7 @@ class ExternalStaffListView(APIView):
 
 class ExternalStaffAdminSourceView(APIView):
     """Expose the same source used by the admin External Staff proxy list."""
+    permission_classes = [IsCoeUser]
 
     def get(self, request):
         strict = str(request.query_params.get('strict', '0')).lower() in ('1', 'true', 'yes')
@@ -79,6 +82,7 @@ class ExternalStaffAdminSourceView(APIView):
 
 class ExternalStaffAcademicsProfilesView(APIView):
     """Expose academics ExtStaffProfile rows in the same shape as external staff API."""
+    permission_classes = [IsCoeUser]
 
     def get(self, request):
         strict = str(request.query_params.get('strict', '0')).lower() in ('1', 'true', 'yes')
@@ -124,6 +128,7 @@ class ExternalStaffAcademicsProfilesView(APIView):
 
 class ExternalStaffDbMirrorView(APIView):
     """Fetch external staff from db.krgi.co.in first, then fallback to local DB."""
+    permission_classes = [IsCoeUser]
 
     def get(self, request):
         strict = str(request.query_params.get('strict', '0')).lower() in ('1', 'true', 'yes')
@@ -151,6 +156,7 @@ class ExternalStaffDbMirrorView(APIView):
 
 
 class AssignExternalCodesView(APIView):
+    permission_classes = [IsCoeUser]
     def post(self, request):
         strict = str(request.query_params.get('strict', '1')).lower() in ('1', 'true', 'yes')
         staff_list = _apply_strict_filter(_admin_source_queryset(), strict)

@@ -1,0 +1,7258 @@
+{
+ "models": [
+  {
+   "label": "accounts.SuperuserImpersonationLog",
+   "db_table": "accounts_superuserimpersonationlog",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "ip_address",
+     "type": "GenericIPAddressField",
+     "cats": [
+      "address",
+      "ip_device"
+     ]
+    },
+    {
+     "name": "user_agent",
+     "type": "CharField",
+     "cats": [
+      "ip_device"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "accounts.SuperuserImpersonationPermission",
+   "db_table": "accounts_superuserimpersonationpermission",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "superuser"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "accounts.User",
+   "db_table": "accounts_user",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "password",
+     "type": "CharField",
+     "cats": [
+      "credentials"
+     ]
+    },
+    {
+     "name": "first_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "last_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "email",
+     "type": "CharField",
+     "cats": [
+      "email"
+     ]
+    },
+    {
+     "name": "mobile_no",
+     "type": "CharField",
+     "cats": [
+      "phone"
+     ]
+    },
+    {
+     "name": "profile_image",
+     "type": "CharField",
+     "cats": [
+      "photo"
+     ]
+    },
+    {
+     "name": "profile_image_updated",
+     "type": "BooleanField",
+     "cats": [
+      "photo"
+     ]
+    },
+    {
+     "name": "name_email_edited",
+     "type": "BooleanField",
+     "cats": [
+      "email"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "email"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "accounts.MobileOtp",
+   "db_table": "accounts_mobileotp",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "mobile_number",
+     "type": "CharField",
+     "cats": [
+      "phone"
+     ]
+    },
+    {
+     "name": "otp_hash",
+     "type": "CharField",
+     "cats": [
+      "credentials"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "accounts.Role",
+   "db_table": "accounts_role",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "accounts.Permission",
+   "db_table": "accounts_permission",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "code"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "accounts.RolePermission",
+   "db_table": "accounts_rolepermission",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "role",
+     "permission"
+    ]
+   ],
+   "fks": [
+    "accounts.Permission",
+    "accounts.Role"
+   ]
+  },
+  {
+   "label": "accounts.UserRole",
+   "db_table": "accounts_userrole",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "user",
+     "role"
+    ]
+   ],
+   "fks": [
+    "accounts.Role",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "accounts.NotificationTemplate",
+   "db_table": "accounts_notificationtemplate",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "code"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "accounts.UserQuery",
+   "db_table": "accounts_userquery",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "accounts.ProfileImageUpdateRequest",
+   "db_table": "accounts_profileimageupdaterequest",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "accounts.UserNotification",
+   "db_table": "accounts_usernotification",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "accounts.SiteConfiguration",
+   "db_table": "accounts_siteconfiguration",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "college.College",
+   "db_table": "college_college",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "short_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "address",
+     "type": "TextField",
+     "cats": [
+      "address"
+     ]
+    },
+    {
+     "name": "city",
+     "type": "CharField",
+     "cats": [
+      "address"
+     ]
+    },
+    {
+     "name": "state",
+     "type": "CharField",
+     "cats": [
+      "address"
+     ]
+    },
+    {
+     "name": "postal_code",
+     "type": "CharField",
+     "cats": [
+      "address"
+     ]
+    },
+    {
+     "name": "phone",
+     "type": "CharField",
+     "cats": [
+      "phone"
+     ]
+    },
+    {
+     "name": "email",
+     "type": "CharField",
+     "cats": [
+      "email"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "code"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "curriculum.QuestionPaperType",
+   "db_table": "curriculum_questionpapertype",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "code"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "curriculum.ClassType",
+   "db_table": "curriculum_classtype",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "code"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "curriculum.Regulation",
+   "db_table": "curriculum_regulation",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "code"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "curriculum.DepartmentGroup",
+   "db_table": "curriculum_departmentgroup",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "code"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "curriculum.DepartmentGroupMapping",
+   "db_table": "curriculum_departmentgroupmapping",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "group",
+     "department"
+    ]
+   ],
+   "fks": [
+    "academics.Department",
+    "curriculum.DepartmentGroup"
+   ]
+  },
+  {
+   "label": "curriculum.CurriculumMaster",
+   "db_table": "curriculum_curriculummaster",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "course_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "internal_mark",
+     "type": "PositiveSmallIntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "external_mark",
+     "type": "PositiveSmallIntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "total_mark",
+     "type": "PositiveSmallIntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.BatchYear",
+    "academics.Semester",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "curriculum.CurriculumDepartment",
+   "db_table": "curriculum_curriculumdepartment",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "course_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "internal_mark",
+     "type": "PositiveSmallIntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "external_mark",
+     "type": "PositiveSmallIntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "total_mark",
+     "type": "PositiveSmallIntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "department",
+     "regulation",
+     "semester",
+     "course_code"
+    ]
+   ],
+   "fks": [
+    "academics.BatchYear",
+    "academics.Department",
+    "academics.Semester",
+    "accounts.User",
+    "curriculum.CurriculumMaster"
+   ]
+  },
+  {
+   "label": "curriculum.ElectiveSubject",
+   "db_table": "curriculum_electivesubject",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "parent",
+     "type": "ForeignKey",
+     "cats": [
+      "guardian"
+     ]
+    },
+    {
+     "name": "course_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "internal_mark",
+     "type": "PositiveSmallIntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "external_mark",
+     "type": "PositiveSmallIntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "total_mark",
+     "type": "PositiveSmallIntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "parent",
+     "course_code"
+    ]
+   ],
+   "fks": [
+    "academics.BatchYear",
+    "academics.Department",
+    "academics.Semester",
+    "accounts.User",
+    "curriculum.CurriculumDepartment",
+    "curriculum.DepartmentGroup"
+   ]
+  },
+  {
+   "label": "curriculum.ElectiveChoice",
+   "db_table": "curriculum_electivechoice",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "student",
+     "elective_subject",
+     "academic_year"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.StudentProfile",
+    "accounts.User",
+    "curriculum.ElectiveSubject"
+   ]
+  },
+  {
+   "label": "academics.AcademicYear",
+   "db_table": "academics_academicyear",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name",
+     "parity"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "academics.SystemTransitionLog",
+   "db_table": "academics_systemtransitionlog",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "academics.AcademicYear",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academics.Department",
+   "db_table": "academics_department",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "short_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "parent",
+     "type": "ForeignKey",
+     "cats": [
+      "guardian"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "code"
+    ]
+   ],
+   "fks": [
+    "academics.Department"
+   ]
+  },
+  {
+   "label": "academics.Program",
+   "db_table": "academics_program",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "academics.RFReaderGate",
+   "db_table": "academics_rfreadergate",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "academics.RFReaderStudent",
+   "db_table": "academics_rfreaderstudent",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "rf_uid",
+     "type": "CharField",
+     "cats": [
+      "aadhaar"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "roll_no"
+    ],
+    [
+     "rf_uid"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "academics.RFReaderScan",
+   "db_table": "academics_rfreaderscan",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "uid",
+     "type": "CharField",
+     "cats": [
+      "aadhaar"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.RFReaderGate",
+    "academics.RFReaderStudent"
+   ]
+  },
+  {
+   "label": "academics.Course",
+   "db_table": "academics_course",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name",
+     "department",
+     "program"
+    ]
+   ],
+   "fks": [
+    "academics.Department",
+    "academics.Program"
+   ]
+  },
+  {
+   "label": "academics.Semester",
+   "db_table": "academics_semester",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "number"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "academics.Section",
+   "db_table": "academics_section",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name",
+     "batch"
+    ]
+   ],
+   "fks": [
+    "academics.Batch",
+    "academics.Department",
+    "academics.Semester"
+   ]
+  },
+  {
+   "label": "academics.MixedSection",
+   "db_table": "academics_mixedsection",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name",
+     "batch"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.Batch",
+    "academics.Semester"
+   ]
+  },
+  {
+   "label": "academics.Batch",
+   "db_table": "academics_batch",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name",
+     "course"
+    ],
+    [
+     "name",
+     "department"
+    ]
+   ],
+   "fks": [
+    "academics.BatchYear",
+    "academics.Course",
+    "academics.Department",
+    "curriculum.Regulation"
+   ]
+  },
+  {
+   "label": "academics.BatchYear",
+   "db_table": "academics_batchyear",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "academics.Subject",
+   "db_table": "academics_subject",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "code",
+     "course"
+    ],
+    [
+     "code"
+    ]
+   ],
+   "fks": [
+    "academics.Course",
+    "academics.Semester"
+   ]
+  },
+  {
+   "label": "academics.ModeOfTransportation",
+   "db_table": "academics_modeoftransportation",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "academics.StudentProfile",
+   "db_table": "academics_studentprofile",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "mobile_number",
+     "type": "CharField",
+     "cats": [
+      "phone"
+     ]
+    },
+    {
+     "name": "mobile_number_verified_at",
+     "type": "DateTimeField",
+     "cats": [
+      "phone"
+     ]
+    },
+    {
+     "name": "profile_image",
+     "type": "FileField",
+     "cats": [
+      "photo"
+     ]
+    },
+    {
+     "name": "is_photo_verified",
+     "type": "BooleanField",
+     "cats": [
+      "photo"
+     ]
+    },
+    {
+     "name": "address_line1",
+     "type": "CharField",
+     "cats": [
+      "address"
+     ]
+    },
+    {
+     "name": "address_line2",
+     "type": "CharField",
+     "cats": [
+      "address"
+     ]
+    },
+    {
+     "name": "address_line3",
+     "type": "CharField",
+     "cats": [
+      "address"
+     ]
+    },
+    {
+     "name": "address_line4",
+     "type": "CharField",
+     "cats": [
+      "address"
+     ]
+    },
+    {
+     "name": "district",
+     "type": "CharField",
+     "cats": [
+      "address"
+     ]
+    },
+    {
+     "name": "pincode",
+     "type": "CharField",
+     "cats": [
+      "address"
+     ]
+    },
+    {
+     "name": "father_name",
+     "type": "CharField",
+     "cats": [
+      "guardian",
+      "name"
+     ]
+    },
+    {
+     "name": "mother_name",
+     "type": "CharField",
+     "cats": [
+      "guardian",
+      "name"
+     ]
+    },
+    {
+     "name": "father_mobile",
+     "type": "CharField",
+     "cats": [
+      "phone",
+      "guardian"
+     ]
+    },
+    {
+     "name": "mother_mobile",
+     "type": "CharField",
+     "cats": [
+      "phone",
+      "guardian"
+     ]
+    },
+    {
+     "name": "dob",
+     "type": "DateField",
+     "cats": [
+      "dob_age"
+     ]
+    },
+    {
+     "name": "blood_group",
+     "type": "CharField",
+     "cats": [
+      "health_disability"
+     ]
+    },
+    {
+     "name": "gender",
+     "type": "CharField",
+     "cats": [
+      "gender"
+     ]
+    },
+    {
+     "name": "rfid_uid",
+     "type": "CharField",
+     "cats": [
+      "aadhaar"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "user"
+    ],
+    [
+     "reg_no"
+    ]
+   ],
+   "fks": [
+    "academics.Department",
+    "academics.MixedSection",
+    "academics.ModeOfTransportation",
+    "academics.Section",
+    "academics.StaffProfile",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academics.StudentSectionAssignment",
+   "db_table": "academics_studentsectionassignment",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "student",
+     "section_type"
+    ]
+   ],
+   "fks": [
+    "academics.Section",
+    "academics.StudentProfile"
+   ]
+  },
+  {
+   "label": "academics.StudentCourseEnrollment",
+   "db_table": "academics_studentcourseenrollment",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "student",
+     "course"
+    ]
+   ],
+   "fks": [
+    "academics.Course",
+    "academics.StudentProfile"
+   ]
+  },
+  {
+   "label": "academics.StaffProfile",
+   "db_table": "academics_staffprofile",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "mobile_number",
+     "type": "CharField",
+     "cats": [
+      "phone"
+     ]
+    },
+    {
+     "name": "mobile_number_verified_at",
+     "type": "DateTimeField",
+     "cats": [
+      "phone"
+     ]
+    },
+    {
+     "name": "profile_image",
+     "type": "FileField",
+     "cats": [
+      "photo"
+     ]
+    },
+    {
+     "name": "rfid_uid",
+     "type": "CharField",
+     "cats": [
+      "aadhaar"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "user"
+    ],
+    [
+     "internal_id"
+    ],
+    [
+     "staff_id"
+    ]
+   ],
+   "fks": [
+    "academics.Department",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academics.StaffDepartmentAssignment",
+   "db_table": "academics_staffdepartmentassignment",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "staff"
+    ]
+   ],
+   "fks": [
+    "academics.Department",
+    "academics.StaffProfile"
+   ]
+  },
+  {
+   "label": "academics.RoleAssignment",
+   "db_table": "academics_roleassignment",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "role_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "staff",
+     "role_name"
+    ]
+   ],
+   "fks": [
+    "academics.StaffProfile"
+   ]
+  },
+  {
+   "label": "academics.StudentMentorMap",
+   "db_table": "academics_studentmentormap",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "student"
+    ]
+   ],
+   "fks": [
+    "academics.StaffProfile",
+    "academics.StudentProfile"
+   ]
+  },
+  {
+   "label": "academics.SectionAdvisor",
+   "db_table": "academics_sectionadvisor",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "section",
+     "academic_year"
+    ],
+    [
+     "mixed_section",
+     "academic_year"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.MixedSection",
+    "academics.Section",
+    "academics.StaffProfile"
+   ]
+  },
+  {
+   "label": "academics.DepartmentRole",
+   "db_table": "academics_departmentrole",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "department",
+     "academic_year"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.Department",
+    "academics.StaffProfile"
+   ]
+  },
+  {
+   "label": "academics.TeachingAssignment",
+   "db_table": "academics_teachingassignment",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "staff",
+     "curriculum_row",
+     "section",
+     "academic_year"
+    ],
+    [
+     "staff",
+     "elective_subject",
+     "academic_year"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.Section",
+    "academics.StaffProfile",
+    "academics.Subject",
+    "curriculum.CurriculumDepartment",
+    "curriculum.ElectiveSubject"
+   ]
+  },
+  {
+   "label": "academics.SpecialCourseAssessmentSelection",
+   "db_table": "academics_specialcourseassessmentselection",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "curriculum_row",
+     "academic_year"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.StaffProfile",
+    "curriculum.CurriculumDepartment"
+   ]
+  },
+  {
+   "label": "academics.SpecialCourseAssessmentEditRequest",
+   "db_table": "academics_specialcourseassessmenteditrequest",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "academics.SpecialCourseAssessmentSelection",
+    "academics.StaffProfile",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academics.StudentSubjectBatch",
+   "db_table": "academics_studentsubjectbatch",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.Section",
+    "academics.StaffProfile",
+    "curriculum.CurriculumDepartment"
+   ]
+  },
+  {
+   "label": "academics.PeriodAttendanceSession",
+   "db_table": "academics_periodattendancesession",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "section",
+     "period",
+     "date",
+     "teaching_assignment",
+     "subject_batch"
+    ]
+   ],
+   "fks": [
+    "academics.Section",
+    "academics.StaffProfile",
+    "academics.StudentSubjectBatch",
+    "academics.TeachingAssignment",
+    "timetable.TimetableAssignment",
+    "timetable.TimetableSlot"
+   ]
+  },
+  {
+   "label": "academics.PeriodAttendanceSwapRecord",
+   "db_table": "academics_periodattendanceswaprecord",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "academics.PeriodAttendanceSession",
+    "academics.StaffProfile"
+   ]
+  },
+  {
+   "label": "academics.PeriodAttendanceRecord",
+   "db_table": "academics_periodattendancerecord",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "marked_at",
+     "type": "DateTimeField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "marked_by",
+     "type": "ForeignKey",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "session",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academics.PeriodAttendanceSession",
+    "academics.StaffProfile",
+    "academics.StudentProfile"
+   ]
+  },
+  {
+   "label": "academics.AttendanceUnlockRequest",
+   "db_table": "academics_attendanceunlockrequest",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "academics.PeriodAttendanceSession",
+    "academics.StaffProfile"
+   ]
+  },
+  {
+   "label": "academics.DailyAttendanceUnlockRequest",
+   "db_table": "academics_dailyattendanceunlockrequest",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "academics.DailyAttendanceSession",
+    "academics.StaffProfile"
+   ]
+  },
+  {
+   "label": "academics.DailyAttendanceSession",
+   "db_table": "academics_dailyattendancesession",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "section",
+     "date"
+    ]
+   ],
+   "fks": [
+    "academics.Section",
+    "academics.StaffProfile"
+   ]
+  },
+  {
+   "label": "academics.DailyAttendanceRecord",
+   "db_table": "academics_dailyattendancerecord",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "marked_at",
+     "type": "DateTimeField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "marked_by",
+     "type": "ForeignKey",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "remarks",
+     "type": "CharField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "session",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academics.DailyAttendanceSession",
+    "academics.StaffProfile",
+    "academics.StudentProfile"
+   ]
+  },
+  {
+   "label": "academics.DailyAttendanceSwapRecord",
+   "db_table": "academics_dailyattendanceswaprecord",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "academics.DailyAttendanceSession",
+    "academics.StaffProfile"
+   ]
+  },
+  {
+   "label": "academics.AttendanceAssignmentRequest",
+   "db_table": "academics_attendanceassignmentrequest",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "academics.DailyAttendanceSession",
+    "academics.PeriodAttendanceSession",
+    "academics.Section",
+    "academics.StaffProfile",
+    "timetable.TimetableSlot"
+   ]
+  },
+  {
+   "label": "academics.ExtStaffProfile",
+   "db_table": "academics_extstaffprofile",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "college_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "mobile",
+     "type": "CharField",
+     "cats": [
+      "phone"
+     ]
+    },
+    {
+     "name": "gender",
+     "type": "CharField",
+     "cats": [
+      "gender"
+     ]
+    },
+    {
+     "name": "date_of_birth",
+     "type": "DateField",
+     "cats": [
+      "dob_age"
+     ]
+    },
+    {
+     "name": "account_holder_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "account_number",
+     "type": "CharField",
+     "cats": [
+      "bank"
+     ]
+    },
+    {
+     "name": "bank_name",
+     "type": "CharField",
+     "cats": [
+      "bank",
+      "name"
+     ]
+    },
+    {
+     "name": "bank_branch_name",
+     "type": "CharField",
+     "cats": [
+      "bank",
+      "name"
+     ]
+    },
+    {
+     "name": "ifsc_code",
+     "type": "CharField",
+     "cats": [
+      "bank"
+     ]
+    },
+    {
+     "name": "passbook_proof",
+     "type": "FileField",
+     "cats": [
+      "bank"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "user"
+    ],
+    [
+     "external_id"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academics.ExtStaffFormSettings",
+   "db_table": "academics_extstaffformsettings",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "form_code"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academics.StudentProfileCompletionConfig",
+   "db_table": "academics_studentprofilecompletionconfig",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "timetable.TimetableTemplate",
+   "db_table": "timetable_timetabletemplate",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "timetable.TimetableSlot",
+   "db_table": "timetable_timetableslot",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "template",
+     "index"
+    ]
+   ],
+   "fks": [
+    "timetable.TimetableTemplate"
+   ]
+  },
+  {
+   "label": "timetable.TimetableAssignment",
+   "db_table": "timetable_timetableassignment",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "period",
+     "day",
+     "section",
+     "subject_batch"
+    ]
+   ],
+   "fks": [
+    "academics.Section",
+    "academics.StaffProfile",
+    "academics.StudentSubjectBatch",
+    "curriculum.CurriculumDepartment",
+    "timetable.TimetableSlot"
+   ]
+  },
+  {
+   "label": "timetable.SpecialTimetable",
+   "db_table": "timetable_specialtimetable",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.Section",
+    "academics.StaffProfile"
+   ]
+  },
+  {
+   "label": "timetable.SpecialTimetableEntry",
+   "db_table": "timetable_specialtimetableentry",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "timetable",
+     "date",
+     "period"
+    ]
+   ],
+   "fks": [
+    "academics.StaffProfile",
+    "academics.StudentSubjectBatch",
+    "curriculum.CurriculumDepartment",
+    "timetable.SpecialTimetable",
+    "timetable.TimetableSlot"
+   ]
+  },
+  {
+   "label": "timetable.PeriodSwapRequest",
+   "db_table": "timetable_periodswaprequest",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "academics.Section",
+    "academics.StaffProfile",
+    "timetable.TimetableSlot"
+   ]
+  },
+  {
+   "label": "timetable.TimetableConfigColumn",
+   "db_table": "timetable_timetableconfigcolumn",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "timetable.TimetableTemplate"
+   ]
+  },
+  {
+   "label": "timetable.TimetableConfigRow",
+   "db_table": "timetable_timetableconfigrow",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "timetable.TimetableTemplate"
+   ]
+  },
+  {
+   "label": "timetable.CreditAllocation",
+   "db_table": "timetable_creditallocation",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "credit_value"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "timetable.ClassTypeException",
+   "db_table": "timetable_classtypeexception",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "class_type"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "timetable.GroupAllocation",
+   "db_table": "timetable_groupallocation",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "group_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "frontend_id"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "timetable.VenueExceptionRule",
+   "db_table": "timetable_venueexceptionrule",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "venue_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "capacity",
+     "type": "IntegerField",
+     "cats": [
+      "address"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "frontend_id"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "timetable.CourseExceptionRule",
+   "db_table": "timetable_courseexceptionrule",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "course_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "frontend_id"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "timetable.SpecialPeriodRule",
+   "db_table": "timetable_specialperiodrule",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "frontend_id"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "pbas.PBASCustomDepartment",
+   "db_table": "pbas_pbascustomdepartment",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "academic_department"
+    ]
+   ],
+   "fks": [
+    "academics.Department",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "pbas.PBASApprovalFlow",
+   "db_table": "pbas_pbasapprovalflow",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "pbas.PBASNode",
+   "db_table": "pbas_pbasnode",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "parent",
+     "type": "ForeignKey",
+     "cats": [
+      "guardian"
+     ]
+    },
+    {
+     "name": "uploaded_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "pbas.PBASCustomDepartment",
+    "pbas.PBASNode"
+   ]
+  },
+  {
+   "label": "pbas.PBASNodeApproverHistory",
+   "db_table": "pbas_pbasnodeapproverhistory",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "accounts.User",
+    "pbas.PBASNode"
+   ]
+  },
+  {
+   "label": "pbas.PBASSubmission",
+   "db_table": "pbas_pbassubmission",
+   "college_fk": {
+    "field": "college",
+    "null": true
+   },
+   "pii": [
+    {
+     "name": "file_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User",
+    "college.College",
+    "pbas.PBASNode"
+   ]
+  },
+  {
+   "label": "pbas.PBASVerificationTicket",
+   "db_table": "pbas_pbasverificationticket",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "submission"
+    ]
+   ],
+   "fks": [
+    "academics.StaffProfile",
+    "academics.StudentProfile",
+    "pbas.PBASCustomDepartment",
+    "pbas.PBASSubmission"
+   ]
+  },
+  {
+   "label": "pbas.PBASDuration",
+   "db_table": "pbas_pbasduration",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "staff_attendance.AttendanceRecord",
+   "db_table": "staff_attendance_record",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "user",
+     "date"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "staff_attendance.UploadLog",
+   "db_table": "staff_attendance_upload_log",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "staff_attendance.HalfDayRequest",
+   "db_table": "staff_attendance_halfday_request",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "attendance_date",
+     "type": "DateField",
+     "cats": [
+      "attendance"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "staff_user",
+     "attendance_date"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "staff_attendance.Holiday",
+   "db_table": "staff_attendance_holiday",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "date"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "staff_attendance.AttendanceSettings",
+   "db_table": "staff_attendance_settings",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "attendance_in_time_limit",
+     "type": "TimeField",
+     "cats": [
+      "attendance"
+     ]
+    },
+    {
+     "name": "attendance_out_time_limit",
+     "type": "TimeField",
+     "cats": [
+      "attendance"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "staff_attendance.DepartmentAttendanceSettings",
+   "db_table": "staff_attendance_dept_settings",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "attendance_in_time_limit",
+     "type": "TimeField",
+     "cats": [
+      "attendance"
+     ]
+    },
+    {
+     "name": "attendance_out_time_limit",
+     "type": "TimeField",
+     "cats": [
+      "attendance"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "staff_attendance.StaffAttendanceTimeLimitOverride",
+   "db_table": "staff_attendance_staff_time_limits",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "attendance_in_time_limit",
+     "type": "TimeField",
+     "cats": [
+      "attendance"
+     ]
+    },
+    {
+     "name": "attendance_out_time_limit",
+     "type": "TimeField",
+     "cats": [
+      "attendance"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "user"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "staff_attendance.SpecialDepartmentDateAttendanceLimit",
+   "db_table": "staff_attendance_special_date_limits",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "attendance_in_time_limit",
+     "type": "TimeField",
+     "cats": [
+      "attendance"
+     ]
+    },
+    {
+     "name": "attendance_out_time_limit",
+     "type": "TimeField",
+     "cats": [
+      "attendance"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "staff_attendance.StaffBiometricPunchLog",
+   "db_table": "staff_biometric_punch_log",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "raw_uid",
+     "type": "CharField",
+     "cats": [
+      "aadhaar"
+     ]
+    },
+    {
+     "name": "device_ip",
+     "type": "GenericIPAddressField",
+     "cats": [
+      "ip_device"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "raw_uid",
+     "raw_staff_id",
+     "punch_time",
+     "direction",
+     "source"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "idcsscan.FingerprintEnrollment",
+   "db_table": "idcsscan_fingerprintenrollment",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "finger",
+     "type": "CharField",
+     "cats": [
+      "biometric"
+     ]
+    },
+    {
+     "name": "quality_score",
+     "type": "PositiveSmallIntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "user",
+     "finger"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "idcsscan.BiometricFingerprintData",
+   "db_table": "idcsscan_biometricfingerprintdata",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "finger_name",
+     "type": "CharField",
+     "cats": [
+      "biometric",
+      "name"
+     ]
+    },
+    {
+     "name": "template_b64",
+     "type": "TextField",
+     "cats": [
+      "biometric"
+     ]
+    },
+    {
+     "name": "quality_score",
+     "type": "IntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "device_ip",
+     "type": "CharField",
+     "cats": [
+      "ip_device"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "idcsscan.GatepassOfflineScan",
+   "db_table": "idcsscan_gatepassofflinescan",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "uid",
+     "type": "CharField",
+     "cats": [
+      "aadhaar"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "idcsscan.BioSecureClassGroup",
+   "db_table": "idcsscan_biosecureclassgroup",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "idcsscan.BioSecureBatch",
+   "db_table": "idcsscan_biosecurebatch",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "idcsscan.BioSecureClassGroup"
+   ]
+  },
+  {
+   "label": "idcsscan.BioSecureAttendanceLog",
+   "db_table": "idcsscan_biosecureattendancelog",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "finger_name",
+     "type": "CharField",
+     "cats": [
+      "biometric",
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "student",
+     "batch",
+     "date"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "idcsscan.BioSecureBatch",
+    "idcsscan.BioSecureClassGroup"
+   ]
+  },
+  {
+   "label": "feedback.FeedbackForm",
+   "db_table": "feedback_forms",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "form_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.Department",
+    "academics.Section",
+    "academics.Semester",
+    "accounts.User",
+    "curriculum.Regulation"
+   ]
+  },
+  {
+   "label": "feedback.FeedbackQuestion",
+   "db_table": "feedback_questions",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "feedback_form",
+     "type": "ForeignKey",
+     "cats": [
+      "fees_money"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "feedback.FeedbackForm"
+   ]
+  },
+  {
+   "label": "feedback.FeedbackQuestionOption",
+   "db_table": "feedback_question_options",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "feedback.FeedbackQuestion"
+   ]
+  },
+  {
+   "label": "feedback.FeedbackResponse",
+   "db_table": "feedback_responses",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "feedback_form",
+     "type": "ForeignKey",
+     "cats": [
+      "fees_money"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "feedback_form",
+     "question",
+     "user",
+     "teaching_assignment"
+    ]
+   ],
+   "fks": [
+    "academics.Subject",
+    "academics.TeachingAssignment",
+    "accounts.User",
+    "curriculum.ElectiveSubject",
+    "feedback.FeedbackForm",
+    "feedback.FeedbackQuestion"
+   ]
+  },
+  {
+   "label": "feedback.FeedbackFormSubmission",
+   "db_table": "feedback_form_submissions",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "feedback_form",
+     "type": "ForeignKey",
+     "cats": [
+      "fees_money"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "feedback_form",
+     "user"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "feedback.FeedbackForm"
+   ]
+  },
+  {
+   "label": "academic_calendar.AcademicCalendarEvent",
+   "db_table": "academic_calendar_academiccalendarevent",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "image_url",
+     "type": "TextField",
+     "cats": [
+      "photo"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_calendar.HodColor",
+   "db_table": "academic_calendar_hodcolor",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "hod"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_calendar.EventProposal",
+   "db_table": "academic_calendar_eventproposal",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "department_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "coordinator_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "co_coordinator_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "chief_guest_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "proposal_doc_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "created_by_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "branding_reviewed_by_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "hod_approved_by_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "haa_approved_by_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.Department",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "applications.ApplicationType",
+   "db_table": "applications_applicationtype",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "code"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "applications.ApplicationField",
+   "db_table": "applications_applicationfield",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "application_type",
+     "field_key"
+    ]
+   ],
+   "fks": [
+    "applications.ApplicationType"
+   ]
+  },
+  {
+   "label": "applications.Application",
+   "db_table": "applications_application",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "current_state",
+     "type": "CharField",
+     "cats": [
+      "address"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.StaffProfile",
+    "academics.StudentProfile",
+    "accounts.User",
+    "applications.ApplicationFormVersion",
+    "applications.ApplicationType",
+    "applications.ApprovalStep"
+   ]
+  },
+  {
+   "label": "applications.ApplicationData",
+   "db_table": "applications_applicationdata",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "application",
+     "field"
+    ]
+   ],
+   "fks": [
+    "applications.Application",
+    "applications.ApplicationField"
+   ]
+  },
+  {
+   "label": "applications.ApprovalFlow",
+   "db_table": "applications_approvalflow",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "academics.Department",
+    "applications.ApplicationType"
+   ]
+  },
+  {
+   "label": "applications.ApprovalStep",
+   "db_table": "applications_approvalstep",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "approval_flow",
+     "order"
+    ]
+   ],
+   "fks": [
+    "accounts.Role",
+    "applications.ApplicationRoleHierarchyStage",
+    "applications.ApprovalFlow"
+   ]
+  },
+  {
+   "label": "applications.ApprovalAction",
+   "db_table": "applications_approvalaction",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User",
+    "applications.Application",
+    "applications.ApprovalStep"
+   ]
+  },
+  {
+   "label": "applications.RoleApplicationPermission",
+   "db_table": "applications_roleapplicationpermission",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "role",
+     "application_type"
+    ]
+   ],
+   "fks": [
+    "accounts.Role",
+    "applications.ApplicationType"
+   ]
+  },
+  {
+   "label": "applications.ApplicationRoleHierarchy",
+   "db_table": "applications_applicationrolehierarchy",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "application_type",
+     "role"
+    ]
+   ],
+   "fks": [
+    "accounts.Role",
+    "applications.ApplicationType"
+   ]
+  },
+  {
+   "label": "applications.ApplicationRoleHierarchyStage",
+   "db_table": "applications_applicationrolehierarchystage",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "applications.ApplicationType"
+   ]
+  },
+  {
+   "label": "applications.ApplicationRoleHierarchyStageRole",
+   "db_table": "applications_applicationrolehierarchystagerole",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "stage",
+     "role"
+    ]
+   ],
+   "fks": [
+    "accounts.Role",
+    "applications.ApplicationRoleHierarchyStage"
+   ]
+  },
+  {
+   "label": "applications.ApplicationRoleHierarchyStageUser",
+   "db_table": "applications_applicationrolehierarchystageuser",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "stage",
+     "user"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "applications.ApplicationRoleHierarchyStage"
+   ]
+  },
+  {
+   "label": "applications.ApplicationFormVersion",
+   "db_table": "applications_applicationformversion",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "application_type",
+     "version"
+    ]
+   ],
+   "fks": [
+    "applications.ApplicationType"
+   ]
+  },
+  {
+   "label": "applications.ApplicationAttachment",
+   "db_table": "applications_applicationattachment",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "accounts.User",
+    "applications.Application"
+   ]
+  },
+  {
+   "label": "OBE.CdapRevision",
+   "db_table": "cdap_revisions",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "subject_id"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "OBE.LcaRevision",
+   "db_table": "lca_revisions",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "subject_id"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "OBE.CoTargetRevision",
+   "db_table": "co_target_revisions",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "subject_id"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "OBE.CdapActiveLearningAnalysisMapping",
+   "db_table": "cdap_active_learning_analysis_mapping",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "OBE.CdapTemplate",
+   "db_table": "cdap_templates",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "TextField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "key"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "OBE.ObeAssessmentMasterConfig",
+   "db_table": "obe_assessment_master_config",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "OBE.ObeCqiConfig",
+   "db_table": "obe_cqi_config",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "OBE.ObeCqiDraft",
+   "db_table": "obe_cqi_draft",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "subject",
+     "teaching_assignment"
+    ]
+   ],
+   "fks": [
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.ObeCqiPublished",
+   "db_table": "obe_cqi_published",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "subject",
+     "teaching_assignment"
+    ]
+   ],
+   "fks": [
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.InternalMarkMapping",
+   "db_table": "obe_internal_mark_mapping",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "subject"
+    ]
+   ],
+   "fks": [
+    "academics.Subject"
+   ]
+  },
+  {
+   "label": "OBE.FinalInternalMark",
+   "db_table": "obe_final_internal_mark",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "final_mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "max_mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "subject",
+     "student",
+     "teaching_assignment"
+    ],
+    [
+     "subject",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.Cia1Mark",
+   "db_table": "OBE_cia1mark",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "subject",
+     "student",
+     "teaching_assignment"
+    ],
+    [
+     "subject",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.AssessmentDraft",
+   "db_table": "OBE_assessmentdraft",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "subject",
+     "assessment",
+     "teaching_assignment"
+    ],
+    [
+     "subject",
+     "assessment"
+    ]
+   ],
+   "fks": [
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.Ssa1Mark",
+   "db_table": "OBE_ssa1mark",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "subject",
+     "student",
+     "teaching_assignment"
+    ],
+    [
+     "subject",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.Ssa2Mark",
+   "db_table": "OBE_ssa2mark",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "subject",
+     "student",
+     "teaching_assignment"
+    ],
+    [
+     "subject",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.Review1Mark",
+   "db_table": "OBE_review1mark",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "subject",
+     "student",
+     "teaching_assignment"
+    ],
+    [
+     "subject",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.Review2Mark",
+   "db_table": "OBE_review2mark",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "subject",
+     "student",
+     "teaching_assignment"
+    ],
+    [
+     "subject",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.Formative1Mark",
+   "db_table": "OBE_formative1mark",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "subject",
+     "student",
+     "teaching_assignment"
+    ],
+    [
+     "subject",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.Formative2Mark",
+   "db_table": "OBE_formative2mark",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "subject",
+     "student",
+     "teaching_assignment"
+    ],
+    [
+     "subject",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.Cia2Mark",
+   "db_table": "OBE_cia2mark",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "subject",
+     "student",
+     "teaching_assignment"
+    ],
+    [
+     "subject",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.ModelExamMark",
+   "db_table": "OBE_modelexammark",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "total_mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "subject",
+     "student",
+     "teaching_assignment"
+    ],
+    [
+     "subject",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.ModelExamCOMark",
+   "db_table": "OBE_modelexamcomark",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "model_exam_mark",
+     "type": "ForeignKey",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "model_exam_mark",
+     "co_num"
+    ]
+   ],
+   "fks": [
+    "OBE.ModelExamMark"
+   ]
+  },
+  {
+   "label": "OBE.LabExamMark",
+   "db_table": "OBE_labexammark",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "total_mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "subject",
+     "student",
+     "assessment",
+     "teaching_assignment"
+    ],
+    [
+     "subject",
+     "student",
+     "assessment"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.LabExamCOMark",
+   "db_table": "OBE_labexamcomark",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "lab_exam_mark",
+     "type": "ForeignKey",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "lab_exam_mark",
+     "co_num"
+    ]
+   ],
+   "fks": [
+    "OBE.LabExamMark"
+   ]
+  },
+  {
+   "label": "OBE.Cia1PublishedSheet",
+   "db_table": "OBE_cia1publishedsheet",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "subject",
+     "teaching_assignment"
+    ],
+    [
+     "subject"
+    ]
+   ],
+   "fks": [
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.Cia2PublishedSheet",
+   "db_table": "OBE_cia2publishedsheet",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "subject",
+     "teaching_assignment"
+    ],
+    [
+     "subject"
+    ]
+   ],
+   "fks": [
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.ModelPublishedSheet",
+   "db_table": "OBE_modelpublishedsheet",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "subject",
+     "teaching_assignment"
+    ],
+    [
+     "subject"
+    ]
+   ],
+   "fks": [
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.LabPublishedSheet",
+   "db_table": "OBE_labpublishedsheet",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "subject",
+     "assessment",
+     "teaching_assignment"
+    ],
+    [
+     "subject",
+     "assessment"
+    ]
+   ],
+   "fks": [
+    "academics.Subject",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.ObeDueSchedule",
+   "db_table": "OBE_obedueschedule",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "subject_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "due_at",
+     "type": "DateTimeField",
+     "cats": [
+      "fees_money"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "semester",
+     "subject_code",
+     "assessment"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.Semester",
+    "academics.Subject"
+   ]
+  },
+  {
+   "label": "OBE.ObeAssessmentControl",
+   "db_table": "OBE_obeassessmentcontrol",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "subject_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "semester",
+     "subject_code",
+     "assessment"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.Semester"
+   ]
+  },
+  {
+   "label": "OBE.ObePublishRequest",
+   "db_table": "OBE_obepublishrequest",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "subject_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.AcademicYear",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "OBE.ObeEditRequest",
+   "db_table": "OBE_obeeditrequest",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "subject_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "section_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.TeachingAssignment",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "OBE.ObeEditNotificationLog",
+   "db_table": "OBE_obeeditnotificationlog",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "OBE.ObeEditRequest"
+   ]
+  },
+  {
+   "label": "OBE.ObeGlobalPublishControl",
+   "db_table": "OBE_obeglobalpublishcontrol",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "semester",
+     "assessment"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.Semester"
+   ]
+  },
+  {
+   "label": "OBE.ObeMarkTableLock",
+   "db_table": "OBE_obemarktablelock",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "subject_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "section_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "mark_entry_blocked",
+     "type": "BooleanField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "mark_manager_locked",
+     "type": "BooleanField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "mark_entry_unblocked_until",
+     "type": "DateTimeField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "mark_manager_unlocked_until",
+     "type": "DateTimeField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "teaching_assignment",
+     "assessment"
+    ],
+    [
+     "staff_user",
+     "subject_code",
+     "assessment",
+     "section_name",
+     "academic_year"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.TeachingAssignment",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "OBE.ObeQpPatternConfig",
+   "db_table": "OBE_obeqppatternconfig",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "class_type",
+     "question_paper_type",
+     "exam"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "OBE.SpecialCourseQpPattern",
+   "db_table": "obe_special_course_qp_pattern",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "teaching_assignment",
+     "exam"
+    ]
+   ],
+   "fks": [
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.SpecialCourseCoWeights",
+   "db_table": "obe_special_course_co_weights",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "teaching_assignment"
+    ]
+   ],
+   "fks": [
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "OBE.ObeBatchQpPatternOverride",
+   "db_table": "obe_batch_qp_pattern_override",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "batch",
+     "class_type",
+     "question_paper_type",
+     "exam"
+    ]
+   ],
+   "fks": [
+    "academics.Batch"
+   ]
+  },
+  {
+   "label": "OBE.ClassTypeWeights",
+   "db_table": "obe_class_type_weights",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "internal_mark_weights",
+     "type": "JSONField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "class_type"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "OBE.IqacResetNotification",
+   "db_table": "obe_iqac_reset_notifications",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "academics.TeachingAssignment",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "OBE.CourseQuestionBank",
+   "db_table": "obe_course_question_bank",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "course_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "marks",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "course_code",
+     "s_no"
+    ]
+   ],
+   "fks": [
+    "academics.StaffProfile"
+   ]
+  },
+  {
+   "label": "OBE.CourseQuestionBankLog",
+   "db_table": "obe_course_question_bank_log",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "question_bank",
+     "type": "ForeignKey",
+     "cats": [
+      "bank"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "OBE.CourseQuestionBank",
+    "academics.StaffProfile"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2GoogleSheetsOAuthCredential",
+   "db_table": "acv2_google_sheets_oauth_credential",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "google_user_email",
+     "type": "CharField",
+     "cats": [
+      "email"
+     ]
+    },
+    {
+     "name": "access_token",
+     "type": "TextField",
+     "cats": [
+      "credentials"
+     ]
+    },
+    {
+     "name": "refresh_token",
+     "type": "TextField",
+     "cats": [
+      "credentials"
+     ]
+    },
+    {
+     "name": "token_uri",
+     "type": "CharField",
+     "cats": [
+      "credentials"
+     ]
+    },
+    {
+     "name": "client_secret",
+     "type": "CharField",
+     "cats": [
+      "credentials"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2GoogleSheetLink",
+   "db_table": "acv2_google_sheet_link",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "section"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2Section",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2SemesterConfig",
+   "db_table": "acv2_semester_config",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "due_at",
+     "type": "DateTimeField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "auto_publish_on_due",
+     "type": "BooleanField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "seal_watermark_enabled",
+     "type": "BooleanField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "seal_image",
+     "type": "FileField",
+     "cats": [
+      "photo"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "semester"
+    ]
+   ],
+   "fks": [
+    "academics.Semester",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2SemesterGroup",
+   "db_table": "acv2_semester_group",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "due_at",
+     "type": "DateTimeField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "auto_publish_on_due",
+     "type": "BooleanField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "seal_watermark_enabled",
+     "type": "BooleanField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "seal_image",
+     "type": "FileField",
+     "cats": [
+      "photo"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2SemesterGroupMembership",
+   "db_table": "acv2_semester_group_membership",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "semester"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2SemesterGroup",
+    "academics.Semester"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2Version",
+   "db_table": "acv2_version",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2ClassType",
+   "db_table": "acv2_class_type",
+   "college_fk": {
+    "field": "college",
+    "null": true
+   },
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "display_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "total_internal_marks",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name",
+     "version",
+     "college"
+    ],
+    [
+     "name",
+     "version"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2Version",
+    "accounts.User",
+    "college.College"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2QpPattern",
+   "db_table": "acv2_qp_pattern",
+   "college_fk": {
+    "field": "college",
+    "null": true
+   },
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academic_v2.AcV2ClassType",
+    "academic_v2.AcV2Cycle",
+    "academic_v2.AcV2Version",
+    "academics.Batch",
+    "accounts.User",
+    "college.College"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2Course",
+   "db_table": "acv2_course",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "subject_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "class_type_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "subject",
+     "semester"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2ClassType",
+    "academics.Semester",
+    "academics.Subject"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2Section",
+   "db_table": "acv2_section",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "section_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "course",
+     "teaching_assignment"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2Course",
+    "academics.TeachingAssignment",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2ExamAssignment",
+   "db_table": "acv2_exam_assignment",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "exam_display_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "max_marks",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "section",
+     "exam"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2Section",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2StudentMark",
+   "db_table": "acv2_student_mark",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "student_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "co1_mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "co2_mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "co3_mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "co4_mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "co5_mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "co6_mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "total_mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "weighted_mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "question_marks",
+     "type": "JSONField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "is_absent",
+     "type": "BooleanField",
+     "cats": [
+      "attendance"
+     ]
+    },
+    {
+     "name": "remarks",
+     "type": "CharField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "exam_assignment",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2ExamAssignment",
+    "academics.StudentProfile"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2DraftMark",
+   "db_table": "acv2_draft_mark",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "student_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "total_mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "question_marks",
+     "type": "JSONField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "is_absent",
+     "type": "BooleanField",
+     "cats": [
+      "attendance"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "exam_assignment",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2ExamAssignment",
+    "academics.StudentProfile"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2UserPatternOverride",
+   "db_table": "acv2_user_pattern_override",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "course",
+     "exam_type",
+     "created_by"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2Course",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2EditRequest",
+   "db_table": "acv2_edit_request",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "academic_v2.AcV2ExamAssignment",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2InternalMark",
+   "db_table": "acv2_internal_mark",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "student_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "weighted_marks",
+     "type": "JSONField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "final_mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "max_mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "section",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2Section",
+    "academics.StudentProfile"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2QpType",
+   "db_table": "acv2_qp_type",
+   "college_fk": {
+    "field": "college",
+    "null": true
+   },
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name",
+     "college"
+    ],
+    [
+     "code",
+     "college"
+    ],
+    [
+     "name"
+    ],
+    [
+     "code"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2ClassType",
+    "academic_v2.AcV2Version",
+    "accounts.User",
+    "college.College"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2CourseOutcome",
+   "db_table": "acv2_course_outcome",
+   "college_fk": {
+    "field": "college",
+    "null": true
+   },
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "number",
+     "college"
+    ],
+    [
+     "number"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "college.College"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2Question",
+   "db_table": "acv2_question",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "max_marks",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "qp_pattern",
+     "order"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2QpPattern",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2QpAssignment",
+   "db_table": "acv2_qp_assignment",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "pass_mark",
+     "type": "PositiveSmallIntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "class_type",
+     "qp_type",
+     "exam_assignment"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2ClassType",
+    "academic_v2.AcV2QpPattern",
+    "academic_v2.AcV2QpType",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.Weigthts",
+   "db_table": "Weigthts",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "exam_display_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "mark_manager_enabled",
+     "type": "BooleanField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "class_type",
+     "qp_type",
+     "exam"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2ClassType",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2Cycle",
+   "db_table": "acv2_cycle",
+   "college_fk": {
+    "field": "college",
+    "null": true
+   },
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "code"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2Version",
+    "college.College"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2CqiAssignment",
+   "db_table": "acv2_cqi_assignment",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "teaching_assignment"
+    ]
+   ],
+   "fks": [
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2CqiAttained",
+   "db_table": "acv2_cqi_attained",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "teaching_assignment"
+    ]
+   ],
+   "fks": [
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2CoAttainment",
+   "db_table": "acv2_co_attainment",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "teaching_assignment"
+    ]
+   ],
+   "fks": [
+    "academics.TeachingAssignment",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2CqiEditRequest",
+   "db_table": "acv2_cqi_edit_request",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "cqi_attained",
+     "type": "ForeignKey",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academic_v2.AcV2CqiAttained",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2CqiExam",
+   "db_table": "acv2_cqi_exam",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "exam_display_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "cqi_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "class_type",
+     "qp_type_code",
+     "exam_code"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2ClassType",
+    "academic_v2.AcV2QpAssignment",
+    "academic_v2.AcV2QpType",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2CqiMark",
+   "db_table": "acv2_cqi_mark",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "mark",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "cqi_exam",
+     "section",
+     "student",
+     "co_number"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2CqiExam",
+    "academic_v2.AcV2Section",
+    "academics.StudentProfile"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2CqiToken",
+   "db_table": "acv2_cqi_token",
+   "college_fk": {
+    "field": "college",
+    "null": true
+   },
+   "pii": [],
+   "uniques": [
+    [
+     "code",
+     "college",
+     "class_type"
+    ],
+    [
+     "code",
+     "college"
+    ],
+    [
+     "code"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2ClassType",
+    "college.College"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2CqiOperator",
+   "db_table": "acv2_cqi_operator",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "code"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "academic_v2.AcV2PassMarkSetting",
+   "db_table": "acv2_pass_mark_setting",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "pass_mark",
+     "type": "IntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "academic_v2.AcV2MyMarksSetting",
+   "db_table": "acv2_my_marks_setting",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "require_profile_photo",
+     "type": "BooleanField",
+     "cats": [
+      "photo"
+     ]
+    },
+    {
+     "name": "require_mobile_number",
+     "type": "BooleanField",
+     "cats": [
+      "phone"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "key"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "academic_v2.AcV2AcademicNotificationSetting",
+   "db_table": "acv2_academic_notification_setting",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "key"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "academic_v2.AcV2FacultyRequestSetting",
+   "db_table": "acv2_faculty_request_setting",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "require_mobile_verification",
+     "type": "BooleanField",
+     "cats": [
+      "phone"
+     ]
+    },
+    {
+     "name": "require_profile_photo",
+     "type": "BooleanField",
+     "cats": [
+      "photo"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "key"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "academic_v2.AcV2BypassSession",
+   "db_table": "acv2_bypass_session",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "course_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "section_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "share_token",
+     "type": "CharField",
+     "cats": [
+      "credentials"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2BypassLog",
+   "db_table": "acv2_bypass_log",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "academic_v2.AcV2BypassSession",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.VisualAdminStaffLink",
+   "db_table": "visual_admin_staff_link",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "staff"
+    ]
+   ],
+   "fks": [
+    "academics.StaffProfile",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.VisualAdminCourseLink",
+   "db_table": "visual_admin_course_link",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "staff_link",
+     "teaching_assignment"
+    ]
+   ],
+   "fks": [
+    "academic_v2.VisualAdminStaffLink",
+    "academics.TeachingAssignment"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2PublishSetting",
+   "db_table": "acv2_publish_setting",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "key"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "academic_v2.AcV2SSAAssignment",
+   "db_table": "acv2_ssa_assignment",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "exam_assignment"
+    ],
+    [
+     "exam_assignment"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2ExamAssignment",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "academic_v2.AcV2SSASubmission",
+   "db_table": "acv2_ssa_submission",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "student_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "marks",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "feedback",
+     "type": "TextField",
+     "cats": [
+      "fees_money"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "ssa_assignment",
+     "student"
+    ]
+   ],
+   "fks": [
+    "academic_v2.AcV2SSAAssignment",
+    "academics.StudentProfile",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "COE.CoeExamDummy",
+   "db_table": "COE_coeexamdummy",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "dummy_number"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile"
+   ]
+  },
+  {
+   "label": "COE.CoeArrearStudent",
+   "db_table": "COE_coearrearstudent",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "course_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "student_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "department",
+     "semester",
+     "course_code",
+     "student_register_number"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "COE.CoeAssignmentStore",
+   "db_table": "COE_coeassignmentstore",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "store_key"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "COE.CoeCourseSelectionStore",
+   "db_table": "COE_coecourseselectionstore",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "store_key"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "COE.CoeKeyValueStore",
+   "db_table": "COE_coekeyvaluestore",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "store_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "store_name"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "COE.CoeStudentMarks",
+   "db_table": "COE_coestudentmarks",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "marks",
+     "type": "JSONField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "dummy_number"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "COE.CoeFinalResult",
+   "db_table": "COE_coefinalresult",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "student_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "course_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "total_marks",
+     "type": "IntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "max_marks",
+     "type": "IntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "department",
+     "semester",
+     "reg_no",
+     "course_code"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "question_bank.QuestionBankTitle",
+   "db_table": "question_bank_questionbanktitle",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "question_bank.QuestionBankQuestion",
+   "db_table": "question_bank_questionbankquestion",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "image_urls",
+     "type": "JSONField",
+     "cats": [
+      "photo"
+     ]
+    },
+    {
+     "name": "marks",
+     "type": "IntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "course_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User",
+    "question_bank.QuestionBankTitle"
+   ]
+  },
+  {
+   "label": "template_api.CanvaServiceToken",
+   "db_table": "template_api_canvaservicetoken",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "access_token",
+     "type": "TextField",
+     "cats": [
+      "credentials"
+     ]
+    },
+    {
+     "name": "refresh_token",
+     "type": "TextField",
+     "cats": [
+      "credentials"
+     ]
+    },
+    {
+     "name": "display_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "template_api.CanvaOAuthState",
+   "db_table": "template_api_canvaoauthstate",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "state",
+     "type": "CharField",
+     "cats": [
+      "address"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "state"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "template_api.CanvaTemplate",
+   "db_table": "template_api_canvatemplate",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "template_api.EventPosterAttachment",
+   "db_table": "template_api_eventposterattachment",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "template_api.BrandingEventLog",
+   "db_table": "template_api_brandingeventlog",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "ip_address",
+     "type": "CharField",
+     "cats": [
+      "address",
+      "ip_device"
+     ]
+    },
+    {
+     "name": "user_agent",
+     "type": "CharField",
+     "cats": [
+      "ip_device"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "announcements.Announcement",
+   "db_table": "announcements_announcement",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "academics.Department",
+    "academics.Section",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "announcements.AnnouncementReadStatus",
+   "db_table": "announcements_announcementreadstatus",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "user",
+     "announcement"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "announcements.Announcement"
+   ]
+  },
+  {
+   "label": "lms.StaffStorageQuota",
+   "db_table": "lms_staffstoragequota",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "staff"
+    ]
+   ],
+   "fks": [
+    "academics.StaffProfile",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "lms.StudyMaterial",
+   "db_table": "lms_studymaterial",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "original_file_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.Course",
+    "academics.StaffProfile",
+    "academics.TeachingAssignment",
+    "curriculum.CurriculumDepartment",
+    "curriculum.ElectiveSubject"
+   ]
+  },
+  {
+   "label": "lms.StudyMaterialDownloadLog",
+   "db_table": "lms_studymaterialdownloadlog",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "client_ip",
+     "type": "GenericIPAddressField",
+     "cats": [
+      "ip_device"
+     ]
+    },
+    {
+     "name": "user_agent",
+     "type": "TextField",
+     "cats": [
+      "ip_device"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.StaffProfile",
+    "academics.StudentProfile",
+    "accounts.User",
+    "lms.StudyMaterial"
+   ]
+  },
+  {
+   "label": "coder.CodeCourse",
+   "db_table": "coder_codecourse",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "code"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "coder.CodeCourseIncharge",
+   "db_table": "coder_codecourseincharge",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "course",
+     "user"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "coder.CodeCourse"
+   ]
+  },
+  {
+   "label": "coder.CodeClass",
+   "db_table": "coder_codeclass",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "course",
+     "name"
+    ]
+   ],
+   "fks": [
+    "academics.Section",
+    "coder.CodeCourse"
+   ]
+  },
+  {
+   "label": "coder.CodeSectionIncharge",
+   "db_table": "coder_codesectionincharge",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "code_class",
+     "user"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "coder.CodeClass"
+   ]
+  },
+  {
+   "label": "coder.CodeEnrollment",
+   "db_table": "coder_codeenrollment",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "student",
+     "code_class"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "coder.CodeClass"
+   ]
+  },
+  {
+   "label": "coder.CodeSession",
+   "db_table": "coder_codesession",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "accounts.User",
+    "coder.CodeCourse"
+   ]
+  },
+  {
+   "label": "coder.CodeAssessment",
+   "db_table": "coder_codeassessment",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "total_marks",
+     "type": "PositiveIntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User",
+    "coder.CodeSession"
+   ]
+  },
+  {
+   "label": "coder.MCQQuestion",
+   "db_table": "coder_mcqquestion",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "marks",
+     "type": "PositiveIntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "coder.CodeAssessment"
+   ]
+  },
+  {
+   "label": "coder.CodingProject",
+   "db_table": "coder_codingproject",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "single_file_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "assessment"
+    ]
+   ],
+   "fks": [
+    "coder.CodeAssessment"
+   ]
+  },
+  {
+   "label": "coder.ProjectFolder",
+   "db_table": "coder_projectfolder",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "parent",
+     "type": "ForeignKey",
+     "cats": [
+      "guardian"
+     ]
+    },
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "project",
+     "parent",
+     "name"
+    ]
+   ],
+   "fks": [
+    "coder.CodingProject",
+    "coder.ProjectFolder"
+   ]
+  },
+  {
+   "label": "coder.ProjectFile",
+   "db_table": "coder_projectfile",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "project",
+     "folder",
+     "name"
+    ]
+   ],
+   "fks": [
+    "coder.CodingProject",
+    "coder.ProjectFolder"
+   ]
+  },
+  {
+   "label": "coder.LockedCodeRegion",
+   "db_table": "coder_lockedcoderegion",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "coder.ProjectFile"
+   ]
+  },
+  {
+   "label": "coder.TestCase",
+   "db_table": "coder_testcase",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "marks",
+     "type": "PositiveIntegerField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "coder.CodeAssessment"
+   ]
+  },
+  {
+   "label": "coder.CodeSubmission",
+   "db_table": "coder_codesubmission",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "score",
+     "type": "FloatField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "total_score",
+     "type": "FloatField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "result_details",
+     "type": "JSONField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.StudentProfile",
+    "coder.CodeAssessment"
+   ]
+  },
+  {
+   "label": "coder.MCQSubmission",
+   "db_table": "coder_mcqsubmission",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "score",
+     "type": "FloatField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "total_score",
+     "type": "FloatField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "result_details",
+     "type": "JSONField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.StudentProfile",
+    "coder.CodeAssessment"
+   ]
+  },
+  {
+   "label": "coder.StudentProgress",
+   "db_table": "coder_studentprogress",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "overall_score",
+     "type": "FloatField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "total_possible_score",
+     "type": "FloatField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "student",
+     "course"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "coder.CodeCourse"
+   ]
+  },
+  {
+   "label": "coder.CodeExecution",
+   "db_table": "coder_codeexecution",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "academics.StudentProfile",
+    "coder.CodeAssessment",
+    "coder.CodeSubmission"
+   ]
+  },
+  {
+   "label": "coder.CodeExecutionSession",
+   "db_table": "coder_codeexecutionsession",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "preview_token",
+     "type": "CharField",
+     "cats": [
+      "credentials"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "preview_token"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "coder.CodeAssessment"
+   ]
+  },
+  {
+   "label": "discipline.DisciplineApprovalFlowConfig",
+   "db_table": "discipline_disciplineapprovalflowconfig",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "discipline.DisciplineCategory",
+   "db_table": "discipline_disciplinecategory",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "discipline.DisciplineIncidentLog",
+   "db_table": "discipline_disciplineincidentlog",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "student_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "department_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "section_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "batch_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "reported_by_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "has_fine",
+     "type": "BooleanField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "fine_amount",
+     "type": "DecimalField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "fine_fixed_by",
+     "type": "ForeignKey",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "fine_fixed_at",
+     "type": "DateTimeField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "incident_document",
+     "type": "FileField",
+     "cats": [
+      "discipline"
+     ]
+    },
+    {
+     "name": "incident_document_url",
+     "type": "CharField",
+     "cats": [
+      "discipline"
+     ]
+    },
+    {
+     "name": "receipt_document",
+     "type": "FileField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "receipt_document_url",
+     "type": "CharField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "receipt_notes",
+     "type": "TextField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "receipt_uploaded_at",
+     "type": "DateTimeField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "incident_date",
+     "type": "DateTimeField",
+     "cats": [
+      "discipline"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.StudentProfile",
+    "accounts.User",
+    "discipline.DisciplineCategory"
+   ]
+  },
+  {
+   "label": "discipline.DisciplineIncidentAction",
+   "db_table": "discipline_disciplineincidentaction",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "incident",
+     "type": "ForeignKey",
+     "cats": [
+      "discipline"
+     ]
+    },
+    {
+     "name": "user_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "fine_amount",
+     "type": "DecimalField",
+     "cats": [
+      "fees_money"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User",
+    "discipline.DisciplineIncidentLog"
+   ]
+  },
+  {
+   "label": "audits.AuditCycle",
+   "db_table": "audit_cycle",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "cycle"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "audits.AuditQuestion",
+   "db_table": "audit_question",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "max_marks",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "audits.AuditQuestionSet",
+   "db_table": "audit_question_set",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "audits.AuditRubric",
+   "db_table": "audit_rubric",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "audits.AuditDepartmentAssignment",
+   "db_table": "audit_department_assignment",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "department",
+     "cycle"
+    ]
+   ],
+   "fks": [
+    "academics.Department",
+    "accounts.User",
+    "audits.AuditCycle",
+    "audits.AuditQuestionSet"
+   ]
+  },
+  {
+   "label": "audits.AuditScore",
+   "db_table": "audit_score",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "marks",
+     "type": "DecimalField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "assignment",
+     "question"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "audits.AuditDepartmentAssignment",
+    "audits.AuditQuestion"
+   ]
+  },
+  {
+   "label": "audits.AuditATR",
+   "db_table": "audit_atr",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "assignment",
+     "question"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "audits.AuditDepartmentAssignment",
+    "audits.AuditQuestion"
+   ]
+  },
+  {
+   "label": "hostel.HostelConfiguration",
+   "db_table": "hostel_configuration",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "hostel.FacilitySelectionWindow",
+   "db_table": "hostel_facility_selection_window",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "academic_year"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear"
+   ]
+  },
+  {
+   "label": "hostel.StudentFacilityProfile",
+   "db_table": "hostel_student_facility_profile",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "day_scholar_address",
+     "type": "TextField",
+     "cats": [
+      "address"
+     ]
+    },
+    {
+     "name": "emergency_contact_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "emergency_contact_phone",
+     "type": "CharField",
+     "cats": [
+      "phone"
+     ]
+    },
+    {
+     "name": "review_remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "student"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.StudentProfile",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "hostel.FacilityChangeRequest",
+   "db_table": "hostel_facility_change_request",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "day_scholar_address",
+     "type": "TextField",
+     "cats": [
+      "address"
+     ]
+    },
+    {
+     "name": "review_remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.StudentProfile",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "hostel.FacilityHistory",
+   "db_table": "hostel_facility_history",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.StudentProfile",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "hostel.Building",
+   "db_table": "hostel_building",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "campus_location",
+     "type": "CharField",
+     "cats": [
+      "location"
+     ]
+    },
+    {
+     "name": "address",
+     "type": "TextField",
+     "cats": [
+      "address"
+     ]
+    },
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "code"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "hostel.HostelWardenAssignment",
+   "db_table": "hostel_warden_assignment",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "building",
+     "user",
+     "designation"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "hostel.Building"
+   ]
+  },
+  {
+   "label": "hostel.Floor",
+   "db_table": "hostel_floor",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "is_available_for_allocation",
+     "type": "BooleanField",
+     "cats": [
+      "location"
+     ]
+    },
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "building",
+     "floor_number"
+    ]
+   ],
+   "fks": [
+    "hostel.Building"
+   ]
+  },
+  {
+   "label": "hostel.Room",
+   "db_table": "hostel_room",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "capacity",
+     "type": "PositiveSmallIntegerField",
+     "cats": [
+      "address"
+     ]
+    },
+    {
+     "name": "occupied_count",
+     "type": "PositiveSmallIntegerField",
+     "cats": [
+      "bank"
+     ]
+    },
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "building",
+     "room_number"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "hostel.Building",
+    "hostel.Floor"
+   ]
+  },
+  {
+   "label": "hostel.Bed",
+   "db_table": "hostel_bed",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "remarks",
+     "type": "CharField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "room",
+     "bed_number"
+    ]
+   ],
+   "fks": [
+    "hostel.Room"
+   ]
+  },
+  {
+   "label": "hostel.RoomAllocation",
+   "db_table": "hostel_room_allocation",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "student"
+    ],
+    [
+     "bed"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.StudentProfile",
+    "accounts.User",
+    "hostel.Bed",
+    "hostel.Room"
+   ]
+  },
+  {
+   "label": "hostel.TransportRoute",
+   "db_table": "hostel_transport_route",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "fee_amount",
+     "type": "DecimalField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "code"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "hostel.TransportStop",
+   "db_table": "hostel_transport_stop",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "fee_amount",
+     "type": "DecimalField",
+     "cats": [
+      "fees_money"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "route",
+     "name"
+    ]
+   ],
+   "fks": [
+    "hostel.TransportRoute"
+   ]
+  },
+  {
+   "label": "hostel.CollegeBus",
+   "db_table": "hostel_college_bus",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "capacity",
+     "type": "PositiveSmallIntegerField",
+     "cats": [
+      "address"
+     ]
+    },
+    {
+     "name": "driver_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "bus_number"
+    ]
+   ],
+   "fks": [
+    "hostel.TransportRoute"
+   ]
+  },
+  {
+   "label": "hostel.TransportAssignment",
+   "db_table": "hostel_transport_assignment",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "stop_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "fee_amount",
+     "type": "DecimalField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "student",
+     "academic_year"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.StudentProfile",
+    "accounts.User",
+    "hostel.CollegeBus",
+    "hostel.TransportRoute",
+    "hostel.TransportStop"
+   ]
+  },
+  {
+   "label": "hostel.FeeStructure",
+   "db_table": "hostel_fee_structure",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "fee_type",
+     "type": "CharField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "amount",
+     "type": "DecimalField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "due_date",
+     "type": "DateField",
+     "cats": [
+      "fees_money"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.AcademicYear",
+    "hostel.Building",
+    "hostel.TransportRoute"
+   ]
+  },
+  {
+   "label": "hostel.StudentFee",
+   "db_table": "hostel_student_fee",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "fee_structure",
+     "type": "ForeignKey",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "amount_due",
+     "type": "DecimalField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "amount_paid",
+     "type": "DecimalField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "due_date",
+     "type": "DateField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "student",
+     "fee_structure"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.StudentProfile",
+    "hostel.FeeStructure"
+   ]
+  },
+  {
+   "label": "hostel.FeePayment",
+   "db_table": "hostel_fee_payment",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "student_fee",
+     "type": "ForeignKey",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "amount",
+     "type": "DecimalField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "paid_on",
+     "type": "DateField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "receipt_number",
+     "type": "CharField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "receipt_number"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "hostel.StudentFee"
+   ]
+  },
+  {
+   "label": "hostel.Complaint",
+   "db_table": "hostel_complaint",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "ticket_no"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "accounts.User",
+    "hostel.Building",
+    "hostel.Floor",
+    "hostel.Room"
+   ]
+  },
+  {
+   "label": "hostel.ComplaintStatusHistory",
+   "db_table": "hostel_complaint_status_history",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "accounts.User",
+    "hostel.Complaint"
+   ]
+  },
+  {
+   "label": "hostel.MessMenu",
+   "db_table": "hostel_mess_menu",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "date",
+     "meal_type",
+     "building"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "hostel.Building"
+   ]
+  },
+  {
+   "label": "hostel.MessPreference",
+   "db_table": "hostel_mess_preference",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "student",
+     "academic_year"
+    ]
+   ],
+   "fks": [
+    "academics.AcademicYear",
+    "academics.StudentProfile"
+   ]
+  },
+  {
+   "label": "hostel.MessFeedback",
+   "db_table": "hostel_mess_feedback",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "student",
+     "date",
+     "meal_type"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile"
+   ]
+  },
+  {
+   "label": "hostel.MessRequest",
+   "db_table": "hostel_mess_request",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.StudentProfile",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "hostel.MealBooking",
+   "db_table": "hostel_meal_booking",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "remarks",
+     "type": "CharField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "student",
+     "date",
+     "meal_type"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile"
+   ]
+  },
+  {
+   "label": "hostel.Visitor",
+   "db_table": "hostel_visitor",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "visitor_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "phone_number",
+     "type": "CharField",
+     "cats": [
+      "phone"
+     ]
+    },
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.StudentProfile",
+    "accounts.User",
+    "hostel.Building",
+    "hostel.Room"
+   ]
+  },
+  {
+   "label": "hostel.StudentLeaveRequest",
+   "db_table": "hostel_student_leave_request",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "guardian_contact",
+     "type": "CharField",
+     "cats": [
+      "guardian"
+     ]
+    },
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.StudentProfile",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "hostel.LateEntry",
+   "db_table": "hostel_late_entry",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.StudentProfile",
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "hostel.GatePass",
+   "db_table": "hostel_gate_pass",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "guardian_contact",
+     "type": "CharField",
+     "cats": [
+      "guardian"
+     ]
+    },
+    {
+     "name": "warden_remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    },
+    {
+     "name": "qr_token",
+     "type": "CharField",
+     "cats": [
+      "credentials"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "qr_token"
+    ],
+    [
+     "application"
+    ],
+    [
+     "leave_request"
+    ]
+   ],
+   "fks": [
+    "academics.StudentProfile",
+    "accounts.User",
+    "applications.Application",
+    "hostel.StudentLeaveRequest"
+   ]
+  },
+  {
+   "label": "hostel.Asset",
+   "db_table": "hostel_asset",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "asset_code"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "hostel.Building",
+    "hostel.Floor",
+    "hostel.Room"
+   ]
+  },
+  {
+   "label": "hostel.AssetMaintenanceLog",
+   "db_table": "hostel_asset_maintenance_log",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "accounts.User",
+    "hostel.Asset"
+   ]
+  },
+  {
+   "label": "hostel.HostelNotice",
+   "db_table": "hostel_notice",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "accounts.User",
+    "hostel.Building"
+   ]
+  },
+  {
+   "label": "hostel.HostelNoticeRead",
+   "db_table": "hostel_notice_read",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "notice",
+     "user"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "hostel.HostelNotice"
+   ]
+  },
+  {
+   "label": "hostel.VacatingRequest",
+   "db_table": "hostel_vacating_request",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "allocation",
+     "type": "ForeignKey",
+     "cats": [
+      "location"
+     ]
+    },
+    {
+     "name": "dues_cleared",
+     "type": "BooleanField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "dues_cleared_by",
+     "type": "ForeignKey",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "dues_cleared_at",
+     "type": "DateTimeField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "remarks",
+     "type": "TextField",
+     "cats": [
+      "marks_grades"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "academics.StudentProfile",
+    "accounts.User",
+    "hostel.RoomAllocation"
+   ]
+  },
+  {
+   "label": "hostel.ClearanceRecord",
+   "db_table": "hostel_clearance_record",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "vacating_request",
+     "clearance_type"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "hostel.VacatingRequest"
+   ]
+  },
+  {
+   "label": "hostel.HostelAuditLog",
+   "db_table": "hostel_audit_log",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "model_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "hostel.StudentSyncRun",
+   "db_table": "hostel_student_sync_run",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "source_name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "staff_requests.RequestTemplate",
+   "db_table": "staff_requests_requesttemplate",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    },
+    {
+     "name": "attendance_action",
+     "type": "JSONField",
+     "cats": [
+      "attendance"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "staff_requests.ApprovalStep",
+   "db_table": "staff_requests_approvalstep",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "template",
+     "step_order"
+    ]
+   ],
+   "fks": [
+    "staff_requests.RequestTemplate"
+   ]
+  },
+  {
+   "label": "staff_requests.StaffRequest",
+   "db_table": "staff_requests_staffrequest",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "accounts.User",
+    "staff_requests.RequestTemplate"
+   ]
+  },
+  {
+   "label": "staff_requests.StaffLeaveBalance",
+   "db_table": "staff_requests_staffleavebalance",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "staff",
+     "leave_type"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "staff_requests.StaffFormUsage",
+   "db_table": "staff_requests_staffformusage",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "staff",
+     "template",
+     "reset_period_start"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "staff_requests.RequestTemplate"
+   ]
+  },
+  {
+   "label": "staff_requests.ApprovalLog",
+   "db_table": "staff_requests_approvallog",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": [
+    "accounts.User",
+    "staff_requests.StaffRequest"
+   ]
+  },
+  {
+   "label": "staff_salary.StaffSalaryDeclaration",
+   "db_table": "staff_salary_staffsalarydeclaration",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "basic_salary",
+     "type": "FloatField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "bank",
+     "type": "ForeignKey",
+     "cats": [
+      "bank"
+     ]
+    },
+    {
+     "name": "account_no",
+     "type": "CharField",
+     "cats": [
+      "bank"
+     ]
+    },
+    {
+     "name": "ifsc_code",
+     "type": "CharField",
+     "cats": [
+      "bank"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "staff"
+    ]
+   ],
+   "fks": [
+    "accounts.User",
+    "staff_salary.SalaryBankDeclaration"
+   ]
+  },
+  {
+   "label": "staff_salary.SalaryBankDeclaration",
+   "db_table": "staff_salary_salarybankdeclaration",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "staff_salary.SalaryPFConfig",
+   "db_table": "staff_salary_salarypfconfig",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "threshold_amount",
+     "type": "FloatField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "fixed_pf_amount",
+     "type": "FloatField",
+     "cats": [
+      "fees_money"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "staff_salary.SalaryFormulaConfig",
+   "db_table": "staff_salary_salaryformulaconfig",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [],
+   "fks": []
+  },
+  {
+   "label": "staff_salary.SalaryDeductionType",
+   "db_table": "staff_salary_salarydeductiontype",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "staff_salary.SalaryEarnType",
+   "db_table": "staff_salary_salaryearntype",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "name",
+     "type": "CharField",
+     "cats": [
+      "name"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "name"
+    ]
+   ],
+   "fks": []
+  },
+  {
+   "label": "staff_salary.SalaryEMIPlan",
+   "db_table": "staff_salary_salaryemiplan",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "total_amount",
+     "type": "FloatField",
+     "cats": [
+      "fees_money"
+     ]
+    }
+   ],
+   "uniques": [],
+   "fks": [
+    "accounts.User",
+    "staff_salary.SalaryDeductionType"
+   ]
+  },
+  {
+   "label": "staff_salary.SalaryMonthlyInput",
+   "db_table": "staff_salary_salarymonthlyinput",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "include_in_salary",
+     "type": "BooleanField",
+     "cats": [
+      "fees_money"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "staff",
+     "month"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "staff_salary.SalaryMonthPublish",
+   "db_table": "staff_salary_salarymonthpublish",
+   "college_fk": null,
+   "pii": [],
+   "uniques": [
+    [
+     "month"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  },
+  {
+   "label": "staff_salary.SalaryPublishedReceipt",
+   "db_table": "staff_salary_salarypublishedreceipt",
+   "college_fk": null,
+   "pii": [
+    {
+     "name": "is_salary_included",
+     "type": "BooleanField",
+     "cats": [
+      "fees_money"
+     ]
+    },
+    {
+     "name": "receipt_data",
+     "type": "JSONField",
+     "cats": [
+      "fees_money"
+     ]
+    }
+   ],
+   "uniques": [
+    [
+     "month",
+     "staff"
+    ]
+   ],
+   "fks": [
+    "accounts.User"
+   ]
+  }
+ ]
+}

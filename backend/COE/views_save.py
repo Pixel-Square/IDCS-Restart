@@ -1,13 +1,13 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
 from .models import CoeExamDummy
+from .permissions import IsCoeUser
 from academics.models import StudentProfile
 
 class CoeSaveExamDummies(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsCoeUser]
 
     def post(self, request, *args, **kwargs):
         """
@@ -95,7 +95,7 @@ class CoeSaveExamDummies(APIView):
 
 
 class CoeResetExamDummies(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsCoeUser]
 
     def post(self, request, *args, **kwargs):
         password = str((request.data or {}).get('password') or '').strip()

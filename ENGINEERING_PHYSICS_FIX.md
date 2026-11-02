@@ -1,7 +1,7 @@
 # Engineering Physics Subject Fix
 
 ## Problem
-The Engineering Physics (Theory) subject with code **GEA1101** was missing from the department curriculum page (https://idcs.zynix.us/curriculum/department).
+The Engineering Physics (Theory) subject with code **GEA1101** was missing from the department curriculum page (https://idcs.krgi.co.in/curriculum/department).
 
 The page was showing:
 - **GEA1102** - Engineering Physics Lab (PRACTICAL) ✓

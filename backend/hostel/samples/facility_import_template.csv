@@ -1,0 +1,4 @@
+reg_no,residence_category,uses_college_bus,gender,day_scholar_address,emergency_contact_name,emergency_contact_phone
+21CS001,HOSTELLER,false,MALE,,Parent Name,9876543210
+21CS002,DAY_SCHOLAR,true,FEMALE,"12 Main Street, Coimbatore",Parent Name,9876543211
+21CS003,DAY_SCHOLAR,false,MALE,"45 Gandhi Road, Coimbatore",Parent Name,9876543212

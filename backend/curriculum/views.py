@@ -32,6 +32,10 @@ def custom_exception_handler(exc, context):
     if response is not None:
         response.data['status_code'] = response.status_code
         response.data['detail'] = str(exc)
+        # Machine-readable reason (e.g. 'password_change_required') for clients.
+        codes = exc.get_codes() if hasattr(exc, 'get_codes') else None
+        if isinstance(codes, str):
+            response.data['code'] = codes
 
     return response
 

@@ -15,10 +15,45 @@ export default defineConfig(({ mode }) => {
       // Debug aid: enable sourcemaps only when explicitly requested.
       // Usage: VITE_SOURCEMAP=true npm run build
       sourcemap: env.VITE_SOURCEMAP === 'true',
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('mermaid') || id.includes('react-mermaid2')) {
+                return 'vendor-mermaid';
+              }
+              if (id.includes('tesseract.js')) {
+                return 'vendor-tesseract';
+              }
+              if (id.includes('xlsx') || id.includes('xlsx-js-style')) {
+                return 'vendor-xlsx';
+              }
+              if (id.includes('jspdf') || id.includes('jspdf-autotable') || id.includes('html2canvas')) {
+                return 'vendor-pdf';
+              }
+              if (id.includes('mathlive') || id.includes('react-math-view') || id.includes('katex') || id.includes('react-katex')) {
+                return 'vendor-math';
+              }
+              if (id.includes('cytoscape') || id.includes('cose-bilkent')) {
+                return 'vendor-cytoscape';
+              }
+              if (id.includes('recharts')) {
+                return 'vendor-charts';
+              }
+              if (id.includes('@canva')) {
+                return 'vendor-canva';
+              }
+              if (id.includes('lucide-react')) {
+                return 'vendor-icons';
+              }
+            }
+          },
+        },
+      },
     },
     server: {
       host: true,
-      allowedHosts: ['idcs.krgi.co.in', 'idcs.zynix.us'],
+      allowedHosts: ['idcs.krgi.co.in'],
       port: 80,
       // Dev convenience: when the frontend is served by Vite (often :80) and the
       // Django API is on a different port (often :8000), proxy `/api/...` so

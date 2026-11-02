@@ -55,6 +55,9 @@ urlpatterns = [
     path('api/online-exam/', include('online_exam.urls')),
     # CORS-enabled media serving endpoint for web and mobile clients
     re_path(r'^api/media/(?P<path>.*)$', _serve, {'document_root': settings.MEDIA_ROOT}),
+    # Hostel / Student Facilities module (also exposed under /api/v1/)
+    path('api/hostel/', include('hostel.urls')),
+    path('api/v1/hostel/', include('hostel.urls')),
 ]
 
 # Admin dashboard data endpoint (counts for models) - always available

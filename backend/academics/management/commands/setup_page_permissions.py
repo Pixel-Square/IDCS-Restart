@@ -13,6 +13,7 @@ Permission mapping:
         - students.view_students       → IQAC, HOD, AHOD, ADVISOR, STAFF, HAA, AP
         - students.view_all_students   → IQAC, HAA, AP
         - students.view_department_students → HOD, AHOD, ADVISOR
+        - students.bulk_import         → IQAC, HAA, AP
         - academics.view_my_students   → ADVISOR, STAFF
         - academics.view_mentees       → ADVISOR, STAFF
 
@@ -28,6 +29,7 @@ PERMISSIONS = [
     ('students.view_students',           'Can access the Students page'),
     ('students.view_all_students',       'Can view students from all departments'),
     ('students.view_department_students', 'Can view students in own department'),
+    ('students.bulk_import',             'Can bulk import and update student records'),
     ('academics.view_my_students',       'Can view own advised students'),
     ('academics.view_mentees',           'Can view own mentee students'),
     ('academics.view_staffs_page',       'Can access the Staff Directory page'),
@@ -47,6 +49,9 @@ ROLE_PERMISSION_MAP = {
     'students.view_department_students': [
         'HOD', 'AHOD', 'ADVISOR', 'HAA', 'AP',
         'hod', 'ahod',
+    ],
+    'students.bulk_import': [
+        'IQAC', 'HAA', 'AP',
     ],
     'academics.view_my_students': [
         'ADVISOR', 'STAFF',

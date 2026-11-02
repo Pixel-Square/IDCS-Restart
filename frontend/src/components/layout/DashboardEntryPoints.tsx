@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, BookOpen, GraduationCap, Calendar, Clock, CheckCircle, XCircle, AlertCircle, Bell, ArrowRight, X, RefreshCw, ShieldCheck } from 'lucide-react';
+import { User, BookOpen, GraduationCap, Calendar, Clock, CheckCircle, XCircle, AlertCircle, Bell, ArrowRight, X, RefreshCw, ShieldCheck, BedDouble, Building2 } from 'lucide-react';
 import { apiClient } from '../../services/auth';
 import { getApiBase } from '../../services/apiBase';
 import fetchWithAuth from '../../services/fetchAuth';
@@ -98,6 +98,37 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
   const profileTypeUpper = String(user?.profile_type || '').toUpperCase();
   const isStaff = profileTypeUpper === 'STAFF' || upperRoles.includes('STAFF') || Boolean(user?.is_staff);
   const isStudent = profileTypeUpper === 'STUDENT' || upperRoles.includes('STUDENT') || Boolean(user?.is_student) || (!isStaff && Boolean((user as any)?.student_profile || (user as any)?.profile?.reg_no));
+
+  // Hostel Accommodation State for Students
+  const [hostelOverview, setHostelOverview] = useState<any>(null);
+
+  useEffect(() => {
+    if (!isStudent) return;
+    let cancelled = false;
+    fetchWithAuth('/api/hostel/me/overview/')
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return res.json();
+      })
+      .then((data) => {
+        if (!cancelled && data) {
+          setHostelOverview(data);
+        }
+      })
+      .catch((err) => {
+        console.warn('Hostel overview fetch error:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isStudent]);
+
+  const liveAllocation = hostelOverview?.allocation || user?.profile?.hostel_allocation || user?.hostel_allocation;
+  const isHostellerUser = Boolean(
+    hostelOverview?.access?.is_hosteller ||
+    user?.profile?.hostel_facility?.residence_category === 'HOSTELLER' ||
+    String(user?.profile?.mode_of_transportation || '').toLowerCase().includes('hostel')
+  );
 
   // BioSecure State
   const [biosecureStatus, setBiosecureStatus] = useState<any>(null);
@@ -524,6 +555,78 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
               <div className="hidden sm:flex w-9 h-9 rounded-xl bg-white/10 group-hover:bg-white/20 border border-white/10 items-center justify-center text-slate-300 group-hover:text-white transition transform group-hover:translate-x-0.5">
                 <ArrowRight className="w-4 h-4" />
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── HOSTEL ACCOMMODATION CARD FOR STUDENTS ── */}
+      {isStudent && (liveAllocation || isHostellerUser) && (
+        <div
+          onClick={() => navigate('/student/hostel')}
+          className={`relative overflow-hidden rounded-xl p-5 sm:p-6 text-white shadow-md border transition-all cursor-pointer group ${
+            liveAllocation
+              ? 'bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border-indigo-700/50 hover:border-indigo-400'
+              : 'bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 border-blue-700/50 hover:border-blue-400'
+          }`}
+        >
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="flex items-start gap-4">
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5 border ${
+                liveAllocation
+                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                  : 'bg-blue-500/20 border-blue-500/40 text-blue-300'
+              }`}>
+                <BedDouble className="w-6 h-6" />
+              </div>
+
+              <div>
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <span className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold tracking-wide uppercase border ${
+                    liveAllocation
+                      ? 'bg-emerald-500/20 text-emerald-200 border-emerald-500/30'
+                      : 'bg-blue-500/20 text-blue-200 border-blue-500/30'
+                  }`}>
+                    {liveAllocation ? 'Hostel Room Allocated' : 'Hosteller Facility Approved'}
+                  </span>
+                  <span className="text-xs text-slate-400">
+                    Hostel Portal
+                  </span>
+                </div>
+
+                <div className="mt-2">
+                  {liveAllocation ? (
+                    <div className="space-y-1">
+                      <p className="text-base font-bold text-white flex items-center gap-2">
+                        <span>{liveAllocation.building_name || liveAllocation.building_code || 'Hostel'}</span>
+                        <span className="text-indigo-300">·</span>
+                        <span className="text-emerald-300 font-mono text-lg">Room {liveAllocation.room_number}</span>
+                      </p>
+                      <p className="text-xs text-slate-300 font-medium">
+                        {liveAllocation.floor_number !== undefined && liveAllocation.floor_number !== null ? `Floor ${liveAllocation.floor_number} · ` : ''}
+                        {liveAllocation.bed_number ? `Bed ${liveAllocation.bed_number} · ` : ''}
+                        Status: <span className="text-emerald-400 font-semibold">Active</span>
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="text-sm font-semibold text-slate-200">
+                        Registered as Hosteller — Room Allocation in Progress
+                      </p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Your residence category is verified. The hostel administrator will allocate your room and bed shortly.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 self-start md:self-auto">
+              <span className="text-xs font-semibold text-slate-300 group-hover:text-white transition-colors flex items-center gap-1.5">
+                Manage Hostel & Leaves
+                <ArrowRight className="w-4 h-4 text-indigo-400 group-hover:translate-x-1 transition-transform" />
+              </span>
             </div>
           </div>
         </div>

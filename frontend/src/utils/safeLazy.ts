@@ -4,10 +4,10 @@ import React from 'react';
  * Wraps React.lazy() with enhanced error logging
  * Helps identify which lazy-loaded component is failing
  */
-export function safeLazy(
-  importFn: () => Promise<{ default: React.ComponentType<any> }>,
+export function safeLazy<T extends React.ComponentType<any> = React.ComponentType<any>>(
+  importFn: () => Promise<any>,
   componentName: string
-) {
+): React.LazyExoticComponent<T> {
   return React.lazy(async () => {
     try {
       console.log(`[SafeLazy] Loading component: ${componentName}`);

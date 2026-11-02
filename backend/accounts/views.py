@@ -1,10 +1,10 @@
-from rest_framework import generics, permissions, status
+from rest_framework import permissions, status
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from django.contrib.auth import get_user_model
 from .serializers import (
     UserSerializer,
-    RegisterSerializer,
     MeSerializer,
     IdentifierTokenObtainPairSerializer,
     NotificationTemplateSerializer,
@@ -44,11 +44,8 @@ User = get_user_model()
 class CustomTokenObtainPairView(TokenObtainPairView):
     # Uses identifier-based serializer (identifier may be email, student reg_no, or staff staff_id)
     serializer_class = IdentifierTokenObtainPairSerializer
-
-
-class RegisterView(generics.CreateAPIView):
-    serializer_class = RegisterSerializer
-    permission_classes = (permissions.AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'auth'
 
 
 class MeView(APIView):
@@ -180,6 +177,8 @@ class MobileOtpRequestView(APIView):
     # Bypass authentication completely to avoid 401 errors from expired tokens
     authentication_classes = []
     permission_classes = (permissions.AllowAny,)
+    throttle_classes = (ScopedRateThrottle,)
+    throttle_scope = 'otp'
 
     def post(self, request):
         """Proxy OTP request to Node.js WhatsApp service."""
@@ -525,9 +524,14 @@ class ChangePasswordView(APIView):
         if current_password == new_password:
             return Response({'detail': 'New password must be different from current password.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Validate password strength (minimum 6 characters)
-        if len(new_password) < 6:
-            return Response({'detail': 'New password must be at least 6 characters long.'}, status=status.HTTP_400_BAD_REQUEST)
+        # Validate password complexity and strength
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        try:
+            validate_password(new_password, user=request.user)
+        except DjangoValidationError as e:
+            msg = e.messages[0] if getattr(e, 'messages', None) else 'Password does not meet complexity requirements.'
+            return Response({'detail': msg}, status=status.HTTP_400_BAD_REQUEST)
 
         # Set new password
         request.user.set_password(new_password)
@@ -736,11 +740,32 @@ class ProfileUpdateView(APIView):
             if 'address_line3' in request.data:
                 student_profile.address_line3 = str(request.data.get('address_line3') or '').strip()
                 student_profile_changed = True
+            if 'address_line4' in request.data:
+                student_profile.address_line4 = str(request.data.get('address_line4') or '').strip()
+                student_profile_changed = True
             if 'district' in request.data:
                 student_profile.district = str(request.data.get('district') or '').strip()
                 student_profile_changed = True
             if 'pincode' in request.data:
                 student_profile.pincode = str(request.data.get('pincode') or '').strip()
+                student_profile_changed = True
+            if 'dept_roll_no' in request.data:
+                student_profile.dept_roll_no = str(request.data.get('dept_roll_no') or '').strip()
+                student_profile_changed = True
+            if 'section_roll_no' in request.data:
+                student_profile.section_roll_no = str(request.data.get('section_roll_no') or '').strip()
+                student_profile_changed = True
+            if 'degree' in request.data:
+                student_profile.degree = str(request.data.get('degree') or '').strip()
+                student_profile_changed = True
+            if 'gender' in request.data:
+                raw_g = str(request.data.get('gender') or '').strip().upper()
+                if raw_g in ('M', 'MALE'):
+                    student_profile.gender = 'MALE'
+                elif raw_g in ('F', 'FEMALE'):
+                    student_profile.gender = 'FEMALE'
+                elif raw_g:
+                    student_profile.gender = raw_g
                 student_profile_changed = True
             if 'father_name' in request.data:
                 student_profile.father_name = str(request.data.get('father_name') or '').strip()

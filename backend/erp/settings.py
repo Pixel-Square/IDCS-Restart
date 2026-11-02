@@ -88,6 +88,7 @@ INSTALLED_APPS = [
     'discipline.apps.DisciplineConfig',
     'audits.apps.AuditsConfig',
     'online_exam',
+    'hostel.apps.HostelConfig',
 ]
 # Staff requests dynamic forms & workflow engine
 INSTALLED_APPS.append('staff_requests')
@@ -195,7 +196,21 @@ CACHES = {
 SESSION_ENGINE = os.getenv('SESSION_ENGINE', 'django.contrib.sessions.backends.cached_db')
 SESSION_CACHE_ALIAS = 'default'
 
-AUTH_PASSWORD_VALIDATORS = []
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        'OPTIONS': {'min_length': 10},
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+    },
+]
 
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'Asia/Kolkata'
@@ -238,10 +253,35 @@ AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
 ]
 
+# Argon2id for new and re-hashed passwords; PBKDF2 kept so existing hashes still
+# verify and are upgraded on the user's next login.
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.Argon2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+]
+
 REST_FRAMEWORK = {
+    # Nginx overwrites X-Forwarded-For with the real client IP (CF-Connecting-IP via
+    # real_ip), so exactly one trusted entry is present. Never trust the whole header.
+    'NUM_PROXIES': int(os.getenv('DRF_NUM_PROXIES', '1')),
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': os.getenv('THROTTLE_ANON_RATE', '120/min'),
+        'user': os.getenv('THROTTLE_USER_RATE', '1200/min'),
+        'auth': os.getenv('THROTTLE_AUTH_RATE', '10/min'),
+        'otp': os.getenv('THROTTLE_OTP_RATE', '5/min'),
+        'student_import': os.getenv('THROTTLE_STUDENT_IMPORT_RATE', '20/hour'),
+    },
     'EXCEPTION_HANDLER': 'curriculum.views.custom_exception_handler',
 }
 
@@ -377,7 +417,7 @@ CORS_ALLOWED_ORIGINS = list(dict.fromkeys(CORS_ALLOWED_ORIGINS))
 CORS_ALLOW_CREDENTIALS = True
 
 # Allow configuring CSRF trusted origins via environment variable
-# Provide comma-separated origins including scheme, e.g. 'https://db.zynix.us'
+# Provide comma-separated origins including scheme, e.g. 'https://db.krgi.co.in'
 CSRF_TRUSTED_ORIGINS = _split_env_csv('CSRF_TRUSTED_ORIGINS') or list(_PROD_CSRF_ORIGINS)
 # In DEBUG add localhost aliases for convenience
 if DEBUG:

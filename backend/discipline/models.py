@@ -70,7 +70,7 @@ class DisciplineIncidentLog(models.Model):
 
     student = models.ForeignKey(
         'academics.StudentProfile',
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='discipline_incidents',
         null=True, blank=True
     )

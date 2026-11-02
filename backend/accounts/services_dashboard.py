@@ -39,6 +39,8 @@ def resolve_dashboard_capabilities(user) -> Dict:
         flags_inactive = {
             'is_student': False,
             'is_staff': False,
+            'is_hosteller': False,
+            'hostel_page_access': False,
             'can_view_curriculum_master': False,
             'can_edit_curriculum_master': False,
             'can_approve_department_curriculum': False,
@@ -145,9 +147,31 @@ def resolve_dashboard_capabilities(user) -> Dict:
                 return True
         return False
 
+    # --- Hostel / student facilities --------------------------------------
+    # The hostel portal is only available to students who selected "Hosteller"
+    # as their residence category. Staff roles get their own admin entry point.
+    hostel_access = {'is_hosteller': False, 'page_access': False, 'uses_college_bus': False}
+    hostel_staff = False
+    hostel_admin = False
+    try:
+        from hostel.services import hostel_access_for_user
+        from hostel.permissions import is_hostel_admin as _is_hostel_admin
+        from hostel.permissions import is_hostel_staff as _is_hostel_staff
+
+        hostel_access = hostel_access_for_user(user)
+        hostel_staff = _is_hostel_staff(user)
+        hostel_admin = _is_hostel_admin(user)
+    except Exception:
+        pass
+
     flags = {
         'is_student': profile_type == 'STUDENT',
         'is_staff': profile_type == 'STAFF',
+        'is_hosteller': bool(hostel_access.get('is_hosteller')),
+        'hostel_page_access': bool(hostel_access.get('page_access')),
+        'uses_college_bus': bool(hostel_access.get('uses_college_bus')),
+        'can_manage_hostel': bool(hostel_staff),
+        'can_admin_hostel': bool(hostel_admin),
         'can_view_curriculum_master': has_master_view(),
         'can_edit_curriculum_master': has_master_edit(),
         'can_approve_department_curriculum': has_department_approve(),
@@ -184,6 +208,8 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'obe_master_requests': ('obe.master_obe_requests' in lower_perms),
         'feedback_page': bool(flags.get('can_view_feedback_page')),
         'coe_portal': bool(flags.get('can_access_coe_portal')),
+        'hostel_portal': bool(hostel_access.get('page_access')),
+        'hostel_admin_portal': bool(hostel_staff),
     }
 
     return {

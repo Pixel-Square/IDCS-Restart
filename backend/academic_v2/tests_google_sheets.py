@@ -41,7 +41,8 @@ class MockResponse:
 class GoogleSheetsLinksEndpointTests(TestCase):
     def setUp(self):
         self.client = APIClient()
-        self.user = get_user_model().objects.create_user(username='admin1', email='admin1@example.com', password='secret123')
+        # Google Sheets management endpoints are Academic 2.1 admin-only.
+        self.user = get_user_model().objects.create_user(username='admin1', email='admin1@example.com', password='secret123', is_superuser=True)
         self.client.force_authenticate(self.user)
 
         self.department = Department.objects.create(code='CSE', name='Computer Science', short_name='CSE')

@@ -89,8 +89,8 @@ All filters are optional.
 - `exam_weighted_mark`
  - `student_profile_path` — Relative media path to the student's profile image (e.g. `profile_images/abc123.jpg`). Combine with your `BaseUrl`/`RootUrl` to form a full image URL for Power BI.
  - `faculty_profile_path` — Relative media path to the faculty's profile image (e.g. `profile_images/xyz789.jpg`). Combine with your `BaseUrl`/`RootUrl` to form a full image URL for Power BI.
- - `student_photo_url` — Full HTTPS URL to the student's profile image (e.g. `https://idcs.zynix.us/media/profile_images/5de21a4010fa4065b281e929be89b977.jpg`). Returned by the API when possible.
- - `faculty_photo_url` — Full HTTPS URL to the faculty's profile image (e.g. `https://idcs.zynix.us/media/profile_images/xyz789.jpg`). Returned by the API when possible.
+ - `student_photo_url` — Full HTTPS URL to the student's profile image (e.g. `https://idcs.krgi.co.in/media/profile_images/5de21a4010fa4065b281e929be89b977.jpg`). Returned by the API when possible.
+ - `faculty_photo_url` — Full HTTPS URL to the faculty's profile image (e.g. `https://idcs.krgi.co.in/media/profile_images/xyz789.jpg`). Returned by the API when possible.
 - `exam_co1_mark`
 - `exam_co2_mark`
 - `exam_co3_mark`
@@ -114,7 +114,7 @@ Leave filter values as `null` to fetch all courses and all sections. Set them on
 
 ```powerquery
 let
-    BaseUrl   = "https://idcs.zynix.us",
+    BaseUrl   = "https://idcs.krgi.co.in",
     ApiKey    = "RPT_2026_61HAja_DpYo-9eGxaEEEDguVQYDiMdg7eFp9uL4eLl34We9-GGFKjg",
     PageSize  = 500,
 
@@ -216,8 +216,8 @@ If you want all courses and all sections, keep these exactly as `null`:
 
 Also make sure `BaseUrl` can be either:
 
-- `https://idcs.zynix.us`
-- `https://idcs.zynix.us/`
+- `https://idcs.krgi.co.in`
+- `https://idcs.krgi.co.in/`
 
 The template now trims the trailing slash automatically.
 

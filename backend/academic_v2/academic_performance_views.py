@@ -5,6 +5,7 @@ from django.db.models import Avg, Sum, Min, Max, Count, Q
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
+from rest_framework.exceptions import APIException
 from rest_framework.exceptions import PermissionDenied
 
 from academics.models import (
@@ -412,7 +413,7 @@ def resolve_exam_models(exam_type):
 
 
 class PublishedDashboardsListView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         auth_ctx = resolve_user_auth_context(request.user)
@@ -424,7 +425,7 @@ class PublishedDashboardsListView(APIView):
 
 
 class AcademicPerformanceAnalyticsView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         try:
@@ -1046,9 +1047,11 @@ class AcademicPerformanceAnalyticsView(APIView):
                 "class_students_perf": class_students_perf,
                 "distinct_subjects": distinct_subjects
             }, status=status.HTTP_200_OK)
+        except APIException:
+            raise
         except Exception as e:
             logger.exception("Error in AcademicPerformanceAnalyticsView: %s", e)
-            return Response({"error": str(e)}, status=status.HTTP_200_OK)
+            return Response({"error": "Unable to load analytics. Please try again."}, status=status.HTTP_200_OK)
 
     def _semester_exam_analytics(self, params, auth_ctx, effective_dept, scope=None):
         """
@@ -1214,7 +1217,7 @@ class AcademicPerformanceAnalyticsView(APIView):
 
 
 class StudentSearchView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         auth_ctx = resolve_user_auth_context(request.user)
         scope = get_performance_scope(request.user)
@@ -1247,7 +1250,7 @@ class StudentSearchView(APIView):
 
 
 class StudentCompareView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
     def post(self, request):
         return Response({"comparison": []}, status=status.HTTP_200_OK)
 
@@ -1261,7 +1264,7 @@ class FacultyWiseAnalyticsView(APIView):
     normalized against each assessment's observed maximum; attendance comes from
     DailyAttendanceRecord and is None when no records exist.
     """
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         try:
@@ -1314,6 +1317,9 @@ class FacultyWiseAnalyticsView(APIView):
                     | Q(staff__department__code__iexact=dept_code)
                     | Q(staff__department__short_name__iexact=dept_code)
                 )
+            elif not scope["is_college_wide"]:
+                # No department in scope: never fall through to the whole college.
+                ta_qs = ta_qs.filter(staff__user_id=getattr(request.user, "id", None))
             if req_batch:
                 _ay_ids = list(AcademicYear.objects.filter(name__startswith=req_batch).values_list("id", flat=True))
                 if not _ay_ids:
@@ -1463,7 +1469,7 @@ class FacultyWiseAnalyticsView(APIView):
             if not scope["is_college_wide"]:
                 allowed = (
                     staff.user_id == request.user.id
-                    or (staff.department_id and staff.department_id in scope.get("_allowed_dept_id_set", set()))
+                    or (staff.department_id and str(staff.department_id) in scope.get("_allowed_dept_id_set", set()))
                 )
                 if not allowed:
                     return Response({"error": "You are not authorized to view this faculty's data."}, status=status.HTTP_403_FORBIDDEN)
@@ -1586,13 +1592,15 @@ class FacultyWiseAnalyticsView(APIView):
                 "assessment": req_exam,
                 "user_context": auth_ctx,
             }, status=status.HTTP_200_OK)
+        except APIException:
+            raise
         except Exception as e:
             logger.exception("Error in FacultyWiseAnalyticsView: %s", e)
-            return Response({"error": str(e)}, status=status.HTTP_200_OK)
+            return Response({"error": "Unable to load analytics. Please try again."}, status=status.HTTP_200_OK)
 
 
 class ClassAdvisorDeepDiveView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
     def get(self, request, section_id):
         """Class Advisor deep-dive: aggregates AcV2 published marks + OBE marks for
         every student in the section, calculates real attendance from
@@ -1758,7 +1766,7 @@ class ClassAdvisorDeepDiveView(APIView):
 
 
 class RangeAnalysisView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
     def post(self, request):
         try:
             auth_ctx = resolve_user_auth_context(request.user)
@@ -1886,8 +1894,11 @@ class RangeAnalysisView(APIView):
                 "chart_data": chart_data,
                 "subjects": list(set(subject_info.values()))
             }, status=status.HTTP_200_OK)
+        except APIException:
+            raise
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logging.getLogger(__name__).exception("Analytics request failed: %s", e)
+            return Response({"error": "Unable to load analytics. Please try again."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 def parse_multi_param(param_val):
@@ -1897,7 +1908,7 @@ def parse_multi_param(param_val):
 
 
 class ComparisonPerformanceAnalyticsView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         try:
@@ -2239,13 +2250,15 @@ class ComparisonPerformanceAnalyticsView(APIView):
             }, status=status.HTTP_200_OK)
         except PermissionDenied:
             raise
+        except APIException:
+            raise
         except Exception as e:
             logging.getLogger(__name__).exception("Error in ComparisonPerformanceAnalyticsView: %s", e)
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": "Unable to load analytics. Please try again."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class StudentCurriculumMarksView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         auth_ctx = resolve_user_auth_context(request.user)

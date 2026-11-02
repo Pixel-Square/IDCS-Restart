@@ -1839,20 +1839,99 @@ export default function TimetableGenerator({ templates, initialView = 'generator
     if (secGen && snapshot) {
       const placedCells = Object.values(secGen.cells);
 
+      // Compute which group allocations and special periods match this section
+      // (mirrors the same logic in buildGeneratedSection so we honour exception-course lists)
+      const sectionMatchesDept = (selectedDepts: string[], dept: string | null | undefined): boolean => {
+        if (!dept || !selectedDepts || selectedDepts.length === 0) return false;
+        const dUpper = dept.toUpperCase().trim();
+        return selectedDepts.some((sel) => {
+          const selUpper = sel.toUpperCase().trim();
+          if (selUpper === 'S&H') return dUpper.includes('SCIENCE') || dUpper.includes('S&H') || dUpper.includes('SH') || dUpper.includes('HUMANIT');
+          if (selUpper === 'AI&DS') return (dUpper.includes('AI') || dUpper.includes('ARTIFICIAL')) && (dUpper.includes('DS') || dUpper.includes('DATA'));
+          if (selUpper === 'AIML') return (dUpper.includes('AI') || dUpper.includes('ARTIFICIAL')) && (dUpper.includes('ML') || dUpper.includes('MACHINE'));
+          if (selUpper === 'CIVIL') return dUpper === 'CIVIL' || dUpper === 'CE' || dUpper === 'CIV' || dUpper.includes('CIVIL');
+          if (selUpper === 'MECH') return dUpper === 'MECH' || dUpper === 'ME' || dUpper === 'MEC' || dUpper.includes('MECH') || dUpper.includes('MECHANICAL');
+          if (selUpper === 'CSE') return dUpper === 'CSE' || dUpper === 'CS' || dUpper.includes('COMPUTER SCIENCE');
+          if (selUpper === 'IT') return dUpper === 'IT' || dUpper.includes('INFORMATION TECH');
+          if (selUpper === 'ECE') return dUpper === 'ECE' || dUpper === 'EC' || dUpper.includes('ELECTRONICS');
+          if (selUpper === 'EEE') return dUpper === 'EEE' || dUpper === 'EE' || dUpper.includes('ELECTRICAL');
+          return dUpper === selUpper || dUpper.includes(selUpper) || selUpper.includes(dUpper);
+        });
+      };
+
+      const sectionMatchesKey = (selectedKeys: string[]): boolean => {
+        if (!selectedKeys || selectedKeys.length === 0) return false;
+        const secIdStr = String(snapshot.sectionId);
+        return selectedKeys.some((k) => {
+          if (k === sectionKey) return true;
+          if (k.endsWith(`-${secIdStr}`) || k.startsWith(`sec-${secIdStr}-`) || k.startsWith(`mixed-${secIdStr}-`)) return true;
+          const parts = k.split('-');
+          if (parts[parts.length - 1] === secIdStr || parts[1] === secIdStr) return true;
+          return false;
+        });
+      };
+
+      // Get exception courses from groups matching this section
+      const sectionGroupExceptionCourses: Array<{ course_code?: string; course_name?: string }> = [];
+      groupAllocations.forEach((g) => {
+        const hasExplicitSections = (g.selectedSectionKeys && g.selectedSectionKeys.length > 0) ||
+                                   (g.selectedMixedSectionKeys && g.selectedMixedSectionKeys.length > 0);
+        let matches = false;
+        if (hasExplicitSections) {
+          matches = sectionMatchesKey(g.selectedSectionKeys || []) || sectionMatchesKey(g.selectedMixedSectionKeys || []);
+        } else {
+          const yearMatch = snapshot.year !== null && snapshot.year !== undefined && g.selectedYears && g.selectedYears.includes(snapshot.year);
+          const deptMatch = g.selectedDepartments && g.selectedDepartments.length > 0 &&
+                            sectionMatchesDept(g.selectedDepartments, snapshot.department);
+          matches = yearMatch && deptMatch;
+        }
+        if (matches) {
+          (g.exceptionCourses || []).forEach((ec) => sectionGroupExceptionCourses.push(ec));
+        }
+      });
+
+      // Get exception courses from special periods matching this section
+      specialPeriodAllocations.forEach((sp) => {
+        const hasExplicitSections = (sp.selectedSectionKeys && sp.selectedSectionKeys.length > 0) ||
+                                   (sp.selectedMixedSectionKeys && sp.selectedMixedSectionKeys.length > 0);
+        let matches = false;
+        if (hasExplicitSections) {
+          matches = sectionMatchesKey(sp.selectedSectionKeys || []) || sectionMatchesKey(sp.selectedMixedSectionKeys || []);
+        } else {
+          if (sp.selectedDepartments && sp.selectedDepartments.length > 0) {
+            if (!sectionMatchesDept(sp.selectedDepartments, snapshot.department)) return;
+          }
+          const semestersOrYears = sp.selectedSemesters || sp.selectedYears || [];
+          if (semestersOrYears.length > 0) {
+            const semMatch = snapshot.semester !== undefined && snapshot.semester !== null
+              ? semestersOrYears.includes(Number(snapshot.semester))
+              : (snapshot.year !== undefined && snapshot.year !== null && (
+                  semestersOrYears.includes(Number(snapshot.year) * 2) ||
+                  semestersOrYears.includes(Number(snapshot.year) * 2 - 1)
+                ));
+            if (!semMatch) return;
+          }
+          matches = true;
+        }
+        if (matches) {
+          (sp.exceptionCourses || []).forEach((ec) => sectionGroupExceptionCourses.push(ec));
+        }
+      });
+
       (snapshot.subjectStaff || []).forEach((subj: any) => {
         const sLabel = getSubjectLabel(subj);
         if (!sLabel) return;
         const sCode = (getSubjectCode(subj) || '').toUpperCase().trim();
         const sName = (getSubjectName(subj) || '').toUpperCase().trim();
 
-        const matchingCells = placedCells.filter((c) => {
-          const cSub = (c.subject || '').toUpperCase();
-          return (sCode && cSub.includes(sCode)) || (sName && cSub.includes(sName));
+        // Skip subjects that are exception courses for this section's group/special-period
+        // allocations — they are intentionally excluded from normal scheduling and should
+        // NOT appear in the unfilled periods tray (mirrors buildGeneratedSection filtering).
+        const isGroupExceptionCourse = sectionGroupExceptionCourses.length > 0 && sectionGroupExceptionCourses.some((e) => {
+          const eCode = (e.course_code || '').toUpperCase();
+          const eName = (e.course_name || '').toUpperCase();
+          return (eCode && sCode.includes(eCode)) || (eName && sName.includes(eName));
         });
-
-        const placedPairs = matchingCells.filter((c) => c.colSpan === 2).length;
-        const placedSingles = matchingCells.filter((c) => !c.colSpan || c.colSpan === 1).length;
-        const totalPlaced = placedPairs * 2 + placedSingles;
 
         const courseRule = courseExceptions.find((r) => {
           const rCode = (r.course_code || '').toUpperCase();
@@ -1864,6 +1943,19 @@ export default function TimetableGenerator({ templates, initialView = 'generator
         const classTypeRule = !courseRule
           ? classTypeExceptions.find((r) => (r.classType || '').toUpperCase() === sClassType)
           : undefined;
+
+        // If this subject is a group exception course and has no overriding exception rule,
+        // skip it — it is scheduled during the group allocation period, not as a normal slot.
+        if (isGroupExceptionCourse && !courseRule && !classTypeRule) return;
+
+        const matchingCells = placedCells.filter((c) => {
+          const cSub = (c.subject || '').toUpperCase();
+          return (sCode && cSub.includes(sCode)) || (sName && cSub.includes(sName));
+        });
+
+        const placedPairs = matchingCells.filter((c) => c.colSpan === 2).length;
+        const placedSingles = matchingCells.filter((c) => !c.colSpan || c.colSpan === 1).length;
+        const totalPlaced = placedPairs * 2 + placedSingles;
 
         let reqPairs = 0;
         let reqSingles = 0;

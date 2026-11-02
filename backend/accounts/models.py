@@ -64,6 +64,9 @@ class User(AbstractUser):
     profile_image = models.CharField(max_length=500, blank=True, default='')
     profile_image_updated = models.BooleanField(default=False)
     name_email_edited = models.BooleanField(default=False)
+    # Set when the office issues or resets a password. The API then refuses everything
+    # except changing the password (accounts.authentication.IDCSJWTAuthentication).
+    must_change_password = models.BooleanField(default=False)
 
     def __str__(self):
         full_name = f"{self.first_name} {self.last_name}".strip()
@@ -189,6 +192,16 @@ def validate_roles_for_user(user, roles):
         'DISCIPLINE_COMMITTEE_ADMIN',
         'DISCIPLINE COMMITTEE',
         'DISCIPLINECOMMITTEEADMIN',
+        # Hostel / student facilities module
+        'COLLEGE_ADMIN',
+        'HOSTEL_ADMIN',
+        'WARDEN',
+        'DEPUTY_WARDEN',
+        'MATRON',
+        'MAINTENANCE_STAFF',
+        'MESS_COORDINATOR',
+        'TRANSPORT_COORDINATOR',
+        'SECURITY_STAFF',
     }
 
     # External staff can only have EXT_STAFF role

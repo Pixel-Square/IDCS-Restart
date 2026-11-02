@@ -36,7 +36,7 @@ from django.db.models import Q
 from django.utils.dateparse import parse_date
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -134,6 +134,41 @@ def _has_card_management_permission(user: Any) -> bool:
         roles = set()
 
     return bool(roles.intersection({"SECURITY", "LIBRARY", "IQAC", "ADMIN"}))
+
+
+_BIOSECURE_ADMIN_ROLES = {"IQAC", "ADMIN", "SECURITY", "HOD", "BIOSECURE_ADMIN"}
+
+
+def _has_biosecure_admin_permission(user: Any) -> bool:
+    """Roles allowed on the BioSecure admin pages (groups, sections, attendance logs)."""
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if getattr(user, "is_superuser", False):
+        return True
+    try:
+        roles = {str(r.name or "").upper() for r in user.roles.all()}
+    except Exception:
+        roles = set()
+    return bool(roles & _BIOSECURE_ADMIN_ROLES)
+
+
+class CanManageBiometrics(BasePermission):
+    """Fingerprint enrolment / identification operators (same roles as the enrol page)."""
+
+    message = "Biometric operator access is required."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        return _has_card_management_permission(user) or _has_scan_permission(user)
+
+
+class IsBioSecureAdmin(BasePermission):
+    message = "BioSecure administrator access is required."
+
+    def has_permission(self, request, view):
+        return _has_biosecure_admin_permission(request.user)
 
 
 def _has_gate_management_permission(user: Any) -> bool:
@@ -3024,7 +3059,7 @@ class FingerprintAllocateSlotView(APIView):
     If the user already has this specific finger enrolled, reuses their existing slot.
     Otherwise allocates the next free slot on the sensor.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [CanManageBiometrics]
 
     def get(self, request):
         from idcsscan.models import BiometricFingerprintData
@@ -3086,8 +3121,7 @@ class FingerprintEnrollView(APIView):
     Requires SECURITY / IQAC / ADMIN role.
     """
 
-    from rest_framework.permissions import AllowAny, IsAuthenticated
-    permission_classes = [AllowAny]
+    permission_classes = [CanManageBiometrics]
 
     def post(self, request):
         data = request.data or {}
@@ -3287,6 +3321,8 @@ class FingerprintStatusView(APIView):
 
         if not user:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        if user.pk != request.user.pk and not CanManageBiometrics().has_permission(request, self):
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
         from idcsscan.models import BiometricFingerprintData
 
@@ -3416,8 +3452,7 @@ class FingerprintIdentifyView(APIView):
     Identifies the enrolled student or staff, matches hardware slot & hash,
     and automatically records active BioSecure Batch attendance logs.
     """
-    from rest_framework.permissions import AllowAny
-    permission_classes = [AllowAny]
+    permission_classes = [CanManageBiometrics]
 
     @staticmethod
     def _build_user_payload(user, enrollment=None):
@@ -3799,7 +3834,7 @@ class BioSecureGroupListView(APIView):
     GET /api/idscan/biosecure/groups/
     POST /api/idscan/biosecure/groups/
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsBioSecureAdmin]
 
     def get(self, request):
         from idcsscan.models import BioSecureClassGroup
@@ -3885,7 +3920,7 @@ class BioSecureGroupDetailView(APIView):
     """
     GET, PUT, PATCH, DELETE /api/idscan/biosecure/groups/<id>/
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsBioSecureAdmin]
 
     def put(self, request, pk):
         return self.patch(request, pk)
@@ -3946,7 +3981,7 @@ class BioSecureSectionsListView(APIView):
     GET /api/idscan/biosecure/sections/
     Returns list of all active sections across departments with Name - Batch - Semester details.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsBioSecureAdmin]
 
     def get(self, request):
         from academics.models import Section
@@ -4173,8 +4208,7 @@ class BioSecureDeviceModeView(APIView):
     3. ESP32 on boot checks this endpoint. If enrollment is requested, it executes enrollment immediately,
        then automatically releases back to ATTENDANCE mode.
     """
-    from rest_framework.permissions import AllowAny
-    permission_classes = [AllowAny]
+    permission_classes = [CanManageBiometrics]
 
     # In-memory device session queue
     DEVICE_STATE = {
@@ -4218,7 +4252,7 @@ class BioSecureAdminLogsView(APIView):
     GET /api/idscan/biosecure/admin/logs/?date=YYYY-MM-DD&page=1&page_size=25&search=...&user_type=...&status=...&group_id=...&department=...
     Comprehensive administrative audit view for all student and staff biosecure attendance logs.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsBioSecureAdmin]
 
     def get(self, request):
         from datetime import datetime, date

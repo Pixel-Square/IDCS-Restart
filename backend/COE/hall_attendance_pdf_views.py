@@ -2,6 +2,7 @@ import io
 import json
 import html
 from rest_framework.views import APIView
+from .permissions import IsCoeUser
 from rest_framework.response import Response
 from rest_framework import status
 from django.http import HttpResponse
@@ -145,6 +146,7 @@ class HallAttendancePdfView(APIView):
     - Each group gets its own table with: S.No, Seat, Register Number, Student Name, Signature
     - Footer with Hall Invigilator & Controller of Examinations signature blocks
     """
+    permission_classes = [IsCoeUser]
 
     def post(self, request, *args, **kwargs):
         try:
